@@ -6,3 +6,4 @@ import LeanAgent.Loop
 import LeanAgent.OpenAI
 import LeanAgent.Prompt
 import LeanAgent.Project
+import LeanAgent.Session

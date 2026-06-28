@@ -9,6 +9,10 @@ A small terminal coding agent implemented in Lean 4, using the architecture of
 - `LeanAgent.OpenAI` adapts OpenAI-compatible Chat Completions tool calling.
 - `Main` provides one-shot and line-REPL CLI execution.
 
+The long-term architecture tracks Pi through the `vendor/pi` submodule. See
+[`docs/PRD.md`](docs/PRD.md) and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+for the Pi-compatible Lean roadmap, including `packages/orchestrator`.
+
 ## Current Scope
 
 The agent is currently a terminal coding agent. It can run in one-shot mode or
@@ -89,6 +93,9 @@ Useful options:
 lake exe lean-agent --help
 lake exe lean-agent --cwd /path/to/project -p "add a regression test"
 lake exe lean-agent --repl --cwd /path/to/project
+lake exe lean-agent --repl --session ./session.jsonl
+lake exe lean-agent --resume ./session.jsonl -p "continue from prior context"
+lake exe lean-agent --json-events -p "print machine-readable events"
 lake exe lean-agent --repl -p "first task, then keep chatting"
 lake exe lean-agent --model deepseek-v4-pro -p "use the pro model for this request"
 lake exe lean-agent --base-url http://localhost:11434/v1 --model local-model -p "summarize files"

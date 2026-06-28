@@ -10,6 +10,10 @@ structure CliOptions where
   apiKeyEnv : Option String := none
   maxTurns : Nat := 8
   repl : Bool := false
+  session : Option System.FilePath := none
+  resume : Option System.FilePath := none
+  noSession : Bool := false
+  jsonEvents : Bool := false
   help : Bool := false
 
 def deepSeekApiKeyEnv : String := "DEEPSEEK_API_KEY"
@@ -36,6 +40,10 @@ def usage : String :=
     , "Options:"
     , "  -p, --prompt TEXT        One-shot prompt, or first REPL turn with --repl. If omitted, read one line from stdin."
     , "  --repl                  Start an interactive line REPL that keeps conversation context."
+    , "  --session PATH          Persist this run to a JSONL session file."
+    , "  --resume PATH           Resume messages from a JSONL session file and append new entries."
+    , "  --no-session            Do not persist or resume a session."
+    , "  --json-events           Emit AgentEvent values as JSONL."
     , "  --cwd PATH              Working directory for tools."
     , "  --model MODEL           Model name. Defaults to DEEPSEEK_MODEL/deepseek-v4-flash when DeepSeek is configured."
     , "  --base-url URL          OpenAI-compatible base URL. Defaults to DeepSeek first, then OpenAI."
@@ -52,6 +60,10 @@ def parseArgs (args : List String) (opts : CliOptions := {}) : Except String Cli
   | "-p" :: value :: rest => parseArgs rest { opts with prompt := some value }
   | "--prompt" :: value :: rest => parseArgs rest { opts with prompt := some value }
   | "--repl" :: rest => parseArgs rest { opts with repl := true }
+  | "--session" :: value :: rest => parseArgs rest { opts with session := some (System.FilePath.mk value) }
+  | "--resume" :: value :: rest => parseArgs rest { opts with resume := some (System.FilePath.mk value) }
+  | "--no-session" :: rest => parseArgs rest { opts with noSession := true }
+  | "--json-events" :: rest => parseArgs rest { opts with jsonEvents := true }
   | "--cwd" :: value :: rest => parseArgs rest { opts with cwd := some (System.FilePath.mk value) }
   | "--model" :: value :: rest => parseArgs rest { opts with model := some value }
   | "--base-url" :: value :: rest => parseArgs rest { opts with baseUrl := some value }
@@ -139,6 +151,8 @@ structure Runtime where
   model : String
   extensions : LeanAgent.Project.ProjectExtensions
   agent : AgentLoopConfig
+  session : LeanAgent.Session.AgentSession
+  jsonEvents : Bool
 
 def apiKeyValue (apiKeyEnv : String) : IO String := do
   match ← IO.getEnv apiKeyEnv with
@@ -147,6 +161,10 @@ def apiKeyValue (apiKeyEnv : String) : IO String := do
   | none => pure ""
 
 def runtimeFromOptions (opts : CliOptions) : IO (Except String Runtime) := do
+  if opts.noSession && (opts.session.isSome || opts.resume.isSome) then
+    return .error "--no-session cannot be combined with --session or --resume"
+  if opts.session.isSome && opts.resume.isSome then
+    return .error "--session and --resume are mutually exclusive"
   let cwd ← resolveWorkingDir opts
   let apiKeyEnv ← resolveApiKeyEnv opts
   let baseUrl := resolveBaseUrl opts apiKeyEnv
@@ -164,18 +182,36 @@ def runtimeFromOptions (opts : CliOptions) : IO (Except String Runtime) := do
       }
     let tools := LeanAgent.CodingTools.defaultTools cwd
     let system := LeanAgent.Project.applySystemAppendix defaultSystemPrompt extensions
+    let agentConfig : AgentLoopConfig :=
+      { provider := provider
+        model := model
+        system := system
+        tools := tools
+        maxTurns := opts.maxTurns
+      }
+    let (messages, store) ←
+      match opts.resume with
+      | some path =>
+          if !(← path.pathExists) then
+            throw (IO.userError s!"session file not found: {path}")
+          let (messages, lastId) ← LeanAgent.Session.loadMessagesWithLastId path
+          pure (messages, some { path := path, lastEntryId := lastId })
+      | none =>
+          match opts.session with
+          | some path =>
+              LeanAgent.Session.ensureSessionFile path cwd model
+              let (messages, lastId) ← LeanAgent.Session.loadMessagesWithLastId path
+              pure (messages, some { path := path, lastEntryId := lastId })
+          | none =>
+              pure (#[], none)
     pure
       (.ok
         { cwd := cwd
           model := model
           extensions := extensions
-          agent :=
-            { provider := provider
-              model := model
-              system := system
-              tools := tools
-              maxTurns := opts.maxTurns
-            }
+          agent := agentConfig
+          session := { config := agentConfig, messages := messages, store := store }
+          jsonEvents := opts.jsonEvents
         })
 
 def renderToolCall (call : ToolCall) : String :=
@@ -249,12 +285,20 @@ def printReplContext (runtime : Runtime) (messages : Array AgentMessage) : IO Un
   IO.println s!"commands: {runtime.extensions.commands.size}"
   IO.println s!"skills: {runtime.extensions.skills.size}"
 
-def runReplTurn (runtime : Runtime) (messages : Array AgentMessage) (input : String) :
-    IO (Array AgentMessage) := do
-  let expanded := LeanAgent.Project.expandPrompt runtime.extensions input
-  runAgentLoop runtime.agent (messages.push (.user expanded)) renderReplEvent
+def sinkForRuntime (runtime : Runtime) (repl : Bool) : EventSink :=
+  if runtime.jsonEvents then
+    LeanAgent.Session.jsonEventSink
+  else if repl then
+    renderReplEvent
+  else
+    renderEvent
 
-partial def replLoop (runtime : Runtime) (messages : Array AgentMessage) : IO UInt32 := do
+def runReplTurn (runtime : Runtime) (session : LeanAgent.Session.AgentSession) (input : String) :
+    IO LeanAgent.Session.AgentSession := do
+  let expanded := LeanAgent.Project.expandPrompt runtime.extensions input
+  LeanAgent.Session.prompt session expanded (sinkForRuntime runtime true)
+
+partial def replLoop (runtime : Runtime) (session : LeanAgent.Session.AgentSession) : IO UInt32 := do
   let stdout ← IO.getStdout
   stdout.putStr "lean-agent> "
   stdout.flush
@@ -266,40 +310,40 @@ partial def replLoop (runtime : Runtime) (messages : Array AgentMessage) : IO UI
   else
     let input := line.trimAscii.toString
     if input.isEmpty then
-      replLoop runtime messages
+      replLoop runtime session
     else if isExitCommand input then
       pure 0
     else if input == "/help" then
       IO.println replHelp
-      replLoop runtime messages
+      replLoop runtime session
     else if input == "/context" then
-      printReplContext runtime messages
-      replLoop runtime messages
+      printReplContext runtime session.messages
+      replLoop runtime session
     else if input == "/commands" then
       IO.println (LeanAgent.Project.renderCommandList runtime.extensions)
-      replLoop runtime messages
+      replLoop runtime session
     else if input == "/skills" then
       IO.println (LeanAgent.Project.renderSkillList runtime.extensions)
-      replLoop runtime messages
+      replLoop runtime session
     else if input == "/clear" then
       IO.println "context cleared"
-      replLoop runtime #[]
+      replLoop runtime (LeanAgent.Session.clear session)
     else
-      let updated ← runReplTurn runtime messages input
+      let updated ← runReplTurn runtime session input
       replLoop runtime updated
 
 def runRepl (runtime : Runtime) (initialPrompt? : Option String) : IO UInt32 := do
   IO.println "lean-agent REPL. Type /help for commands, /exit to quit."
-  let messages ←
+  let session ←
     match initialPrompt? with
-    | none => pure #[]
+    | none => pure runtime.session
     | some prompt =>
         let input := prompt.trimAscii.toString
         if input.isEmpty then
-          pure #[]
+          pure runtime.session
         else
-          runReplTurn runtime #[] input
-  replLoop runtime messages
+          runReplTurn runtime runtime.session input
+  replLoop runtime session
 
 def runOneShot (opts : CliOptions) (runtime : Runtime) : IO UInt32 := do
   let prompt ← promptFromOptions opts
@@ -307,7 +351,7 @@ def runOneShot (opts : CliOptions) (runtime : Runtime) : IO UInt32 := do
     IO.eprintln "prompt must not be empty"
     return 2
   let expanded := LeanAgent.Project.expandPrompt runtime.extensions prompt
-  let _ ← runAgentLoop runtime.agent #[.user expanded] renderEvent
+  let _ ← LeanAgent.Session.prompt runtime.session expanded (sinkForRuntime runtime false)
   pure 0
 
 def run (opts : CliOptions) : IO UInt32 := do

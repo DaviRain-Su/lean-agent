@@ -39,11 +39,14 @@ def messageToJson : AgentMessage → Lean.Json
   | .user content =>
       LeanAgent.Json.obj [("role", LeanAgent.Json.str "user"), ("content", LeanAgent.Json.str content)]
   | .assistant content calls =>
-      LeanAgent.Json.obj
+      let fields :=
         [ ("role", LeanAgent.Json.str "assistant")
         , ("content", if content.isEmpty then LeanAgent.Json.null else LeanAgent.Json.str content)
-        , ("tool_calls", LeanAgent.Json.arr (calls.map toolCallToJson))
         ]
+      if calls.isEmpty then
+        LeanAgent.Json.obj fields
+      else
+        LeanAgent.Json.obj (fields ++ [("tool_calls", LeanAgent.Json.arr (calls.map toolCallToJson))])
   | .toolResult toolCallId _name content _ok =>
       LeanAgent.Json.obj
         [ ("role", LeanAgent.Json.str "tool")

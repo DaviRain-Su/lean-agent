@@ -183,6 +183,31 @@ def testProjectSkillExpansion : IO Unit :=
     assertTrue (expanded.contains "Remove filler.") "expected skill body"
     assertTrue (expanded.contains "summarize this document") "expected skill task"
 
+def testSessionJsonlRoundTrip : IO Unit :=
+  IO.FS.withTempDir fun root => do
+    let path := root / "session.jsonl"
+    LeanAgent.Session.ensureSessionFile path root "fake-model"
+    let userMessage := AgentMessage.user "hello"
+    let assistantMessage := AgentMessage.assistant "world" #[]
+    let store ← LeanAgent.Session.persistMessages
+      (some { path := path, lastEntryId := none })
+      #[userMessage, assistantMessage]
+    let (messages, lastId) ← LeanAgent.Session.loadMessagesWithLastId path
+    assertTrue (messages.size == 2) "expected persisted messages"
+    assertTrue lastId.isSome "expected last entry id"
+    assertTrue store.isSome "expected updated store"
+    match messages[0]?, messages[1]? with
+    | some (AgentMessage.user "hello"), some (AgentMessage.assistant "world" calls) =>
+        assertTrue calls.isEmpty "expected assistant calls to round-trip"
+    | _, _ => fail "expected user and assistant messages"
+    let content ← IO.FS.readFile path
+    assertTrue (content.contains "\"type\":\"session\"") "expected session header"
+    assertTrue (content.contains "\"type\":\"message\"") "expected message entries"
+
+def testOpenAIAssistantOmitsEmptyToolCalls : IO Unit := do
+  let json := LeanAgent.OpenAI.messageToJson (AgentMessage.assistant "done" #[])
+  assertTrue (LeanAgent.Json.optVal? json "tool_calls" == none) "empty tool_calls should be omitted"
+
 def httpServerScript : String :=
   String.intercalate "\n"
     [ "import json"
@@ -315,6 +340,8 @@ def main : IO UInt32 := do
     testBashToolTimeout
     testProjectCommandExpansion
     testProjectSkillExpansion
+    testSessionJsonlRoundTrip
+    testOpenAIAssistantOmitsEmptyToolCalls
     testHttpClientLocalPost
     testHttpClientResponseLimit
     IO.println "lean-agent tests passed"
