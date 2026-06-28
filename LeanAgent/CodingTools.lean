@@ -8,13 +8,93 @@ open LeanAgent
 
 def maxReadLines : Nat := 2000
 def maxToolOutputChars : Nat := 50000
+def defaultBashTimeoutSeconds : Nat := 120
+def maxListEntries : Nat := 500
 
-def resolvePath (root : System.FilePath) (raw : String) : System.FilePath :=
+def candidatePath (root : System.FilePath) (raw : String) : System.FilePath :=
   let path := System.FilePath.mk raw
   if path.isAbsolute then path.normalize else (root / path).normalize
 
+def pathWithin? (root path : System.FilePath) : Bool :=
+  let rootStr := root.normalize.toString
+  let pathStr := path.normalize.toString
+  let rootPrefix := if rootStr.endsWith "/" then rootStr else rootStr ++ "/"
+  pathStr == rootStr || pathStr.startsWith rootPrefix
+
+def ensureWithinRoot (root path : System.FilePath) : IO System.FilePath := do
+  let rootReal ← IO.FS.realPath root
+  let path := path.normalize
+  if pathWithin? rootReal path then
+    pure path
+  else
+    throw (IO.userError s!"path escapes working directory: {path}")
+
+def resolveExistingPath (root : System.FilePath) (raw : String) : IO System.FilePath := do
+  let candidate := candidatePath root raw
+  let pathExists ← candidate.pathExists
+  if !pathExists then
+    throw (IO.userError s!"path not found: {candidate}")
+  let actual ← IO.FS.realPath candidate
+  ensureWithinRoot root actual
+
+def resolveExistingFile (root : System.FilePath) (raw : String) : IO System.FilePath := do
+  let path ← resolveExistingPath root raw
+  let isDir ← path.isDir
+  if isDir then
+    throw (IO.userError s!"path is a directory: {path}")
+  pure path
+
+def resolveExistingDir (root : System.FilePath) (raw : String) : IO System.FilePath := do
+  let path ← resolveExistingPath root raw
+  let isDir ← path.isDir
+  if !isDir then
+    throw (IO.userError s!"path is not a directory: {path}")
+  pure path
+
+def resolveWritablePath (root : System.FilePath) (raw : String) : IO System.FilePath := do
+  let candidate := candidatePath root raw
+  let pathExists ← candidate.pathExists
+  if pathExists then
+    resolveExistingFile root raw
+  else
+    let rootReal ← IO.FS.realPath root
+    let normalized := candidate.normalize
+    if !pathWithin? rootReal normalized then
+      throw (IO.userError s!"path escapes working directory: {normalized}")
+    match normalized.parent with
+    | none => throw (IO.userError s!"path has no parent directory: {normalized}")
+    | some parent =>
+        let parentExists ← parent.pathExists
+        if parentExists then
+          let parentReal ← IO.FS.realPath parent
+          let _ ← ensureWithinRoot root parentReal
+          pure normalized
+        else
+          let _ ← ensureWithinRoot root parent.normalize
+          pure normalized
+
+def shellQuote (value : String) : String :=
+  "'" ++ String.intercalate "'\\''" (value.splitOn "'") ++ "'"
+
+def readFileIfExists (path : System.FilePath) : IO String := do
+  if ← path.pathExists then
+    IO.FS.readFile path
+  else
+    pure ""
+
+def safeRemoveDirAll (path : System.FilePath) : IO Unit := do
+  try
+    IO.FS.removeDirAll path
+  catch _ =>
+    pure ()
+
 def requireArgString (args : Lean.Json) (key : String) : IO String :=
   match LeanAgent.Json.requiredString args key with
+  | .ok value => pure value
+  | .error err => throw (IO.userError s!"invalid `{key}` argument: {err}")
+
+def optionalArgString (args : Lean.Json) (key : String) : IO (Option String) :=
+  match LeanAgent.Json.optionalString args key with
   | .ok value => pure value
   | .error err => throw (IO.userError s!"invalid `{key}` argument: {err}")
 
@@ -67,13 +147,7 @@ def makeReadTool (root : System.FilePath) : AgentTool :=
       let rawPath ← requireArgString call.arguments "path"
       let offset? ← optionalArgNat call.arguments "offset"
       let limit? ← optionalArgNat call.arguments "limit"
-      let path := resolvePath root rawPath
-      let pathExists ← path.pathExists
-      if !pathExists then
-        throw (IO.userError s!"file not found: {path}")
-      let isDir ← path.isDir
-      if isDir then
-        throw (IO.userError s!"path is a directory: {path}")
+      let path ← resolveExistingFile root rawPath
       let text ← IO.FS.readFile path
       let (byLines, _) := selectLines text offset? limit?
       let (content, truncated) := truncateChars byLines maxToolOutputChars
@@ -103,7 +177,7 @@ def makeWriteTool (root : System.FilePath) : AgentTool :=
     execute := fun call => do
       let rawPath ← requireArgString call.arguments "path"
       let content ← requireArgString call.arguments "content"
-      let path := resolvePath root rawPath
+      let path ← resolveWritablePath root rawPath
       match path.parent with
       | some parent => IO.FS.createDirAll parent
       | none => pure ()
@@ -117,6 +191,55 @@ def makeWriteTool (root : System.FilePath) : AgentTool :=
         }
   }
 
+def fileTypeSuffix : IO.FS.FileType → String
+  | .dir => "/"
+  | .symlink => "@"
+  | .file => ""
+  | .other => "*"
+
+def renderDirEntry (entry : IO.FS.DirEntry) : IO String := do
+  let metadata ← entry.path.symlinkMetadata
+  pure (entry.fileName ++ fileTypeSuffix metadata.type)
+
+def makeListTool (root : System.FilePath) : AgentTool :=
+  let schema :=
+    LeanAgent.Json.obj
+      [ ("type", LeanAgent.Json.str "object")
+      , ("properties",
+          LeanAgent.Json.obj
+            [ ("path", LeanAgent.Json.obj [("type", LeanAgent.Json.str "string"), ("description", LeanAgent.Json.str "Directory path to list")])
+            , ("limit", LeanAgent.Json.obj [("type", LeanAgent.Json.str "integer"), ("description", LeanAgent.Json.str "Maximum number of entries")])
+            ])
+      ]
+  { name := "list"
+    description := "List immediate directory entries relative to the working directory."
+    inputSchema := schema
+    execute := fun call => do
+      let rawPath := (← optionalArgString call.arguments "path").getD "."
+      let limit := (← optionalArgNat call.arguments "limit").getD maxListEntries
+      let path ← resolveExistingDir root rawPath
+      let entries ← path.readDir
+      let rendered ← (entries.take limit).mapM renderDirEntry
+      let truncated := entries.size > limit
+      let suffix :=
+        if truncated then
+          s!"\n\n[truncated to {limit} entries]"
+        else
+          ""
+      pure
+        { toolCallId := call.id
+          name := "list"
+          ok := true
+          content := String.intercalate "\n" rendered.toList ++ suffix
+          data := some
+            (LeanAgent.Json.obj
+              [ ("path", LeanAgent.Json.str path.toString)
+              , ("entries", LeanAgent.Json.nat rendered.size)
+              , ("truncated", LeanAgent.Json.bool truncated)
+              ])
+        }
+  }
+
 def replaceAll (text old replacement : String) : String :=
   String.intercalate replacement (text.splitOn old)
 
@@ -125,6 +248,14 @@ def replaceFirst? (text old replacement : String) : Option String :=
   | [] => some text
   | [_] => none
   | first :: rest => some (first ++ replacement ++ String.intercalate old rest)
+
+def occurrenceCount (text needle : String) : Nat :=
+  if needle.isEmpty then
+    0
+  else
+    match text.splitOn needle with
+    | [] => 0
+    | parts => parts.length - 1
 
 def makeEditTool (root : System.FilePath) : AgentTool :=
   let schema :=
@@ -149,25 +280,105 @@ def makeEditTool (root : System.FilePath) : AgentTool :=
       let replaceAll? := (← optionalArgBool call.arguments "replace_all").getD false
       if old.isEmpty then
         throw (IO.userError "`old` must not be empty")
-      let path := resolvePath root rawPath
+      let path ← resolveExistingFile root rawPath
       let text ← IO.FS.readFile path
+      let matchCount := occurrenceCount text old
+      if matchCount == 0 then
+        throw (IO.userError "text to replace was not found")
+      if !replaceAll? && matchCount > 1 then
+        throw (IO.userError s!"text to replace is not unique ({matchCount} matches); set replace_all=true or provide more context")
       let updated? :=
         if replaceAll? then
-          if text.contains old then some (replaceAll text old newText) else none
+          some (replaceAll text old newText)
         else
           replaceFirst? text old newText
       match updated? with
       | none => throw (IO.userError "text to replace was not found")
       | some updated =>
-          IO.FS.writeFile path updated
+          let changed := updated != text
+          if changed then
+            IO.FS.writeFile path updated
           pure
             { toolCallId := call.id
               name := "edit"
               ok := true
-              content := s!"edited {path}"
-              data := some (LeanAgent.Json.obj [("path", LeanAgent.Json.str path.toString), ("replace_all", LeanAgent.Json.bool replaceAll?)])
+              content :=
+                if changed then
+                  s!"edited {path} ({matchCount} match(es))"
+                else
+                  s!"unchanged {path} ({matchCount} match(es))"
+              data := some
+                (LeanAgent.Json.obj
+                  [ ("path", LeanAgent.Json.str path.toString)
+                  , ("replace_all", LeanAgent.Json.bool replaceAll?)
+                  , ("matches", LeanAgent.Json.nat matchCount)
+                  , ("changed", LeanAgent.Json.bool changed)
+                  ])
             }
   }
+
+def bashScript (command stdoutPath stderrPath : String) : String :=
+  String.intercalate "\n"
+    [ "exec > " ++ shellQuote stdoutPath ++ " 2> " ++ shellQuote stderrPath
+    , command
+    ]
+
+def timeoutTicks (timeoutSeconds : Nat) : Nat :=
+  timeoutSeconds * 10
+
+def runBashWithTimeout
+    (root : System.FilePath)
+    (command : String)
+    (timeoutSeconds : Nat) : IO (UInt32 × String × String × Bool) := do
+  if timeoutSeconds == 0 then
+    throw (IO.userError "timeout_seconds must be greater than zero")
+  let tempDir ← IO.FS.createTempDir
+  try
+    let scriptPath := tempDir / "run.sh"
+    let stdoutPath := tempDir / "stdout.txt"
+    let stderrPath := tempDir / "stderr.txt"
+    IO.FS.writeFile scriptPath (bashScript command stdoutPath.toString stderrPath.toString)
+    let child ← IO.Process.spawn
+      { cmd := "/bin/sh"
+        args := #[scriptPath.toString]
+        cwd := some root
+        stdin := .null
+        stdout := .null
+        stderr := .null
+        setsid := true
+      }
+    let rec waitLoop : Nat → IO (Option UInt32)
+      | 0 => child.tryWait
+      | remaining + 1 => do
+          match ← child.tryWait with
+          | some code => pure (some code)
+          | none =>
+              IO.sleep 100
+              waitLoop remaining
+    let result? ← waitLoop (timeoutTicks timeoutSeconds)
+    let (exitCode, timedOut) ←
+      match result? with
+      | some code => pure (code, false)
+      | none =>
+          try
+            child.kill
+          catch _ =>
+            pure ()
+          let code ← child.wait
+          pure (code, true)
+    let stdout ← readFileIfExists stdoutPath
+    let stderr ← readFileIfExists stderrPath
+    let stderr :=
+      if timedOut then
+        let timeoutMessage := s!"[timed out after {timeoutSeconds}s]"
+        if stderr.trimAscii.isEmpty then timeoutMessage else stderr ++ "\n" ++ timeoutMessage
+      else
+        stderr
+    safeRemoveDirAll tempDir
+    pure (exitCode, stdout, stderr, timedOut)
+  catch err =>
+    safeRemoveDirAll tempDir
+    throw err
 
 def makeBashTool (root : System.FilePath) : AgentTool :=
   let schema :=
@@ -176,28 +387,26 @@ def makeBashTool (root : System.FilePath) : AgentTool :=
       , ("properties",
           LeanAgent.Json.obj
             [ ("command", LeanAgent.Json.obj [("type", LeanAgent.Json.str "string"), ("description", LeanAgent.Json.str "Shell command to run")])
+            , ("timeout_seconds", LeanAgent.Json.obj [("type", LeanAgent.Json.str "integer"), ("description", LeanAgent.Json.str "Timeout in seconds")])
             ])
       , ("required", LeanAgent.Json.arr #[LeanAgent.Json.str "command"])
       ]
   { name := "bash"
-    description := "Run a shell command in the working directory and return stdout/stderr."
+    description := "Run a shell command in the working directory with a timeout and return stdout/stderr."
     inputSchema := schema
     execute := fun call => do
       let command ← requireArgString call.arguments "command"
-      let output ← IO.Process.output
-        { cmd := "/bin/sh"
-          args := #["-lc", command]
-          cwd := some root
-        }
+      let timeoutSeconds := (← optionalArgNat call.arguments "timeout_seconds").getD defaultBashTimeoutSeconds
+      let (exitCode, stdout, stderr, timedOut) ← runBashWithTimeout root command timeoutSeconds
       let combined :=
-        if output.stderr.trimAscii.isEmpty then
-          output.stdout
-        else if output.stdout.trimAscii.isEmpty then
-          output.stderr
+        if stderr.trimAscii.isEmpty then
+          stdout
+        else if stdout.trimAscii.isEmpty then
+          stderr
         else
-          output.stdout ++ "\n[stderr]\n" ++ output.stderr
+          stdout ++ "\n[stderr]\n" ++ stderr
       let (content, truncated) := truncateChars combined maxToolOutputChars
-      let ok := output.exitCode == 0
+      let ok := exitCode == 0 && !timedOut
       pure
         { toolCallId := call.id
           name := "bash"
@@ -205,14 +414,22 @@ def makeBashTool (root : System.FilePath) : AgentTool :=
           content := content
           data := some
             (LeanAgent.Json.obj
-              [ ("exit_code", LeanAgent.Json.nat output.exitCode.toNat)
+              [ ("exit_code", LeanAgent.Json.nat exitCode.toNat)
+              , ("timeout_seconds", LeanAgent.Json.nat timeoutSeconds)
+              , ("timed_out", LeanAgent.Json.bool timedOut)
               , ("truncated", LeanAgent.Json.bool truncated)
               ])
-          error := if ok then none else some s!"command exited with {output.exitCode}"
+          error :=
+            if ok then
+              none
+            else if timedOut then
+              some s!"command timed out after {timeoutSeconds}s"
+            else
+              some s!"command exited with {exitCode}"
         }
   }
 
 def defaultTools (root : System.FilePath) : Array AgentTool :=
-  #[makeReadTool root, makeWriteTool root, makeEditTool root, makeBashTool root]
+  #[makeReadTool root, makeListTool root, makeWriteTool root, makeEditTool root, makeBashTool root]
 
 end LeanAgent.CodingTools

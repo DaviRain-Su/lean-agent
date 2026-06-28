@@ -52,7 +52,7 @@ def testEditTool : IO Unit := do
   let cwd ← IO.currentDir
   let root := cwd / ".lake" / "lean-agent-test-edit"
   IO.FS.createDirAll root
-  IO.FS.writeFile (root / "sample.txt") "alpha beta alpha"
+  IO.FS.writeFile (root / "sample.txt") "alpha beta gamma"
   let tool := LeanAgent.CodingTools.makeEditTool root
   let result ← tool.execute
     { id := "edit-1"
@@ -66,7 +66,82 @@ def testEditTool : IO Unit := do
     }
   let updated ← IO.FS.readFile (root / "sample.txt")
   assertTrue result.ok "edit tool should succeed"
-  assertTrue (updated == "omega beta alpha") "edit tool should replace the first occurrence"
+  assertTrue (updated == "omega beta gamma") "edit tool should replace the unique occurrence"
+
+def testEditToolRejectsAmbiguousMatch : IO Unit := do
+  let cwd ← IO.currentDir
+  let root := cwd / ".lake" / "lean-agent-test-edit-ambiguous"
+  IO.FS.createDirAll root
+  IO.FS.writeFile (root / "sample.txt") "alpha beta alpha"
+  let tool := LeanAgent.CodingTools.makeEditTool root
+  let failed ←
+    try
+      let _ ← tool.execute
+        { id := "edit-ambiguous"
+          name := "edit"
+          arguments :=
+            LeanAgent.Json.obj
+              [ ("path", LeanAgent.Json.str "sample.txt")
+              , ("old", LeanAgent.Json.str "alpha")
+              , ("new", LeanAgent.Json.str "omega")
+              ]
+        }
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains "not unique") "expected ambiguous edit error"
+      pure true
+  assertTrue failed "ambiguous edit should fail"
+
+def testReadToolRejectsPathEscape : IO Unit :=
+  IO.FS.withTempDir fun base => do
+    let root := base / "root"
+    IO.FS.createDirAll root
+    IO.FS.writeFile (base / "outside.txt") "outside"
+    let tool := LeanAgent.CodingTools.makeReadTool root
+    let failed ←
+      try
+        let _ ← tool.execute
+          { id := "read-escape"
+            name := "read"
+            arguments := LeanAgent.Json.obj [("path", LeanAgent.Json.str "../outside.txt")]
+          }
+        pure false
+      catch err =>
+        assertTrue (err.toString.contains "escapes working directory") "expected path escape error"
+        pure true
+    assertTrue failed "path escape should fail"
+
+def testListTool : IO Unit :=
+  IO.FS.withTempDir fun root => do
+    IO.FS.writeFile (root / "file.txt") "content"
+    IO.FS.createDirAll (root / "child")
+    let tool := LeanAgent.CodingTools.makeListTool root
+    let result ← tool.execute
+      { id := "list-1"
+        name := "list"
+        arguments := LeanAgent.Json.obj [("path", LeanAgent.Json.str ".")]
+      }
+    assertTrue result.ok "list tool should succeed"
+    assertTrue (result.content.contains "file.txt") "list should include files"
+    assertTrue (result.content.contains "child/") "list should include directories with suffix"
+
+def testBashToolTimeout : IO Unit :=
+  IO.FS.withTempDir fun root => do
+    let tool := LeanAgent.CodingTools.makeBashTool root
+    let result ← tool.execute
+      { id := "bash-timeout"
+        name := "bash"
+        arguments :=
+          LeanAgent.Json.obj
+            [ ("command", LeanAgent.Json.str "sleep 2")
+            , ("timeout_seconds", LeanAgent.Json.nat 1)
+            ]
+      }
+    assertTrue (!result.ok) "timed out bash command should fail"
+    assertTrue (result.content.contains "timed out") "timeout result should mention timeout"
+    match result.error with
+    | some err => assertTrue (err.contains "timed out") "timeout error should mention timeout"
+    | none => fail "timeout should set error"
 
 def httpServerScript : String :=
   String.intercalate "\n"
@@ -194,6 +269,10 @@ def main : IO UInt32 := do
   try
     testAgentLoopReadsFile
     testEditTool
+    testEditToolRejectsAmbiguousMatch
+    testReadToolRejectsPathEscape
+    testListTool
+    testBashToolTimeout
     testHttpClientLocalPost
     testHttpClientResponseLimit
     IO.println "lean-agent tests passed"

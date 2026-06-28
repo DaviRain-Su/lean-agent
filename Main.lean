@@ -116,6 +116,20 @@ def resolveNoProxy (baseUrl : String) : IO (Option String) := do
       else
         pure none
 
+def resolveWorkingDir (opts : CliOptions) : IO System.FilePath := do
+  let raw ←
+    (match opts.cwd with
+    | some cwd => pure cwd
+    | none => IO.currentDir)
+  let dirExists ← raw.pathExists
+  if !dirExists then
+    throw (IO.userError s!"working directory not found: {raw}")
+  let path ← IO.FS.realPath raw
+  let isDir ← path.isDir
+  if !isDir then
+    throw (IO.userError s!"working directory is not a directory: {path}")
+  pure path
+
 def renderToolCall (call : ToolCall) : String :=
   "-> " ++ call.name ++ " " ++ call.arguments.compress
 
@@ -148,10 +162,7 @@ def run (opts : CliOptions) : IO UInt32 := do
     IO.eprintln "prompt must not be empty"
     return 2
 
-  let cwd ←
-    match opts.cwd with
-    | some cwd => pure cwd
-    | none => IO.currentDir
+  let cwd ← resolveWorkingDir opts
   let apiKeyEnv ← resolveApiKeyEnv opts
   let baseUrl := resolveBaseUrl opts apiKeyEnv
   let model ← resolveModel opts apiKeyEnv

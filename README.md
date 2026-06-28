@@ -5,9 +5,15 @@ A small terminal coding agent implemented in Lean 4, using the architecture of
 
 - `LeanAgent.Core` owns provider-neutral messages, tools, results, and events.
 - `LeanAgent.Loop` owns the model/tool loop.
-- `LeanAgent.CodingTools` provides `read`, `write`, `edit`, and `bash`.
+- `LeanAgent.CodingTools` provides `list`, `read`, `write`, `edit`, and `bash`.
 - `LeanAgent.OpenAI` adapts OpenAI-compatible Chat Completions tool calling.
 - `Main` provides one-shot print-mode CLI execution.
+
+## Current Scope
+
+The agent is currently a one-shot terminal coding agent. It can inspect and edit
+files, run bounded shell commands, and loop through OpenAI-compatible tool calls,
+but it does not yet provide a persistent REPL or TUI.
 
 ## Build
 
@@ -82,3 +88,24 @@ lake exe lean-agent --model deepseek-v4-pro -p "use the pro model for this reque
 lake exe lean-agent --base-url http://localhost:11434/v1 --model local-model -p "summarize files"
 lake exe lean-agent --api-key-env OPENAI_API_KEY --base-url https://api.openai.com/v1 --model gpt-4.1-mini -p "summarize files"
 ```
+
+## Tools
+
+Tool access is scoped to the configured working directory. Paths that resolve
+outside that directory are rejected, including common `..` and symlink escapes.
+
+- `list`: list immediate directory entries.
+- `read`: read a UTF-8 text file with optional line offset and limit.
+- `write`: write a full file under the working directory.
+- `edit`: replace text only when the default match is unique; use `replace_all`
+  when every occurrence should be replaced.
+- `bash`: run a shell command with `timeout_seconds`, defaulting to 120 seconds.
+
+## Roadmap
+
+Near-term work should focus on making the agent more interactive:
+
+- Add a plain REPL mode that keeps conversation state across turns.
+- Add transcript persistence so runs can be inspected and resumed.
+- Add structured JSON event output for external UIs.
+- Add a TUI after the REPL/event model is stable.
