@@ -1,5 +1,6 @@
 import Lean
 import LeanAgent.Core
+import LeanAgent.Http
 import LeanAgent.Json
 
 namespace LeanAgent.OpenAI
@@ -9,6 +10,11 @@ open LeanAgent
 structure OpenAICompatibleConfig where
   apiKey : String
   baseUrl : String := "https://api.openai.com/v1"
+  timeoutSeconds : UInt32 := 120
+  connectTimeoutSeconds : UInt32 := 30
+  maxResponseBytes : UInt64 := 33554432
+  noProxy : Option String := none
+  userAgent : String := "lean-agent/0.1.0"
 
 def chatCompletionsUrl (baseUrl : String) : String :=
   if baseUrl.endsWith "/chat/completions" then
@@ -67,22 +73,17 @@ def requestToJson (request : ProviderRequest) : Lean.Json :=
     , ("tool_choice", LeanAgent.Json.str "auto")
     ]
 
-def runCurlJson (config : OpenAICompatibleConfig) (payload : Lean.Json) : IO String := do
-  let output ← IO.Process.output
-    { cmd := "curl"
-      args :=
-        #[ "-sS"
-         , "--tlsv1.2"
-         , "-X", "POST"
-         , chatCompletionsUrl config.baseUrl
-         , "-H", "Content-Type: application/json"
-         , "-H", "Authorization: Bearer " ++ config.apiKey
-         , "-d", payload.compress
-         ]
+def runHttpJson (config : OpenAICompatibleConfig) (payload : Lean.Json) : IO String :=
+  LeanAgent.Http.postJson
+    { url := chatCompletionsUrl config.baseUrl
+      apiKey := config.apiKey
+      timeoutSeconds := config.timeoutSeconds
+      connectTimeoutSeconds := config.connectTimeoutSeconds
+      maxResponseBytes := config.maxResponseBytes
+      noProxy := config.noProxy
+      userAgent := config.userAgent
     }
-  if output.exitCode != 0 then
-    throw (IO.userError s!"curl failed with exit {output.exitCode}: {output.stderr}")
-  pure output.stdout
+    payload.compress
 
 def parseMaybeContent (message : Lean.Json) : String :=
   match LeanAgent.Json.optVal? message "content" with
@@ -142,7 +143,7 @@ def parseChatCompletion (raw : String) : Except String ProviderResponse := do
 def provider (config : OpenAICompatibleConfig) : ModelProvider :=
   { complete := fun request => do
       let payload := requestToJson request
-      let raw ← runCurlJson config payload
+      let raw ← runHttpJson config payload
       match parseChatCompletion raw with
       | .ok response => pure response
       | .error err => throw (IO.userError s!"failed to parse provider response: {err}\n{raw}")

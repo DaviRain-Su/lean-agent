@@ -11,6 +11,24 @@ A small terminal coding agent implemented in Lean 4, using the architecture of
 
 ## Build
 
+This project uses a small Lean FFI adapter backed by the native `libcurl` C API
+for HTTPS requests. It does not execute the `curl` command-line program.
+Transport defaults are intentionally conservative:
+
+- total request timeout: 120 seconds
+- connection timeout: 30 seconds
+- maximum response body: 32 MiB
+- user agent: `lean-agent/0.1.0`
+
+On macOS, install Homebrew curl if the library is not already available:
+
+```bash
+brew install curl
+```
+
+On Linux, install the distro package that provides `libcurl` headers and
+`libcurl` itself, for example `libcurl4-openssl-dev` on Debian/Ubuntu.
+
 ```bash
 lake build
 lake test
@@ -27,6 +45,12 @@ When `DEEPSEEK_API_KEY` is set, `lean-agent` defaults to:
 
 - base URL: `https://api.deepseek.com`
 - model: `DEEPSEEK_MODEL`, then `deepseek-v4-flash`
+- no-proxy host: `api.deepseek.com`
+
+The DeepSeek default bypasses local HTTPS proxies because some local proxy/TLS
+combinations fail the Chat Completions handshake. Override this with
+`LEAN_AGENT_NO_PROXY`; set it to an empty value to rely entirely on libcurl's
+normal proxy environment handling.
 
 DeepSeek model defaults follow the official model/pricing page:
 
@@ -54,5 +78,3 @@ lake exe lean-agent --model deepseek-v4-pro -p "use the pro model for this reque
 lake exe lean-agent --base-url http://localhost:11434/v1 --model local-model -p "summarize files"
 lake exe lean-agent --api-key-env OPENAI_API_KEY --base-url https://api.openai.com/v1 --model gpt-4.1-mini -p "summarize files"
 ```
-
-The HTTP adapter shells out to `curl` so the project stays dependency-light.

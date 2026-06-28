@@ -21,6 +21,7 @@ def openAIKeyEnv : String := "OPENAI_API_KEY"
 def openAIModelEnv : String := "OPENAI_MODEL"
 def openAIDefaultModel : String := "gpt-4.1-mini"
 def openAIBaseUrl : String := "https://api.openai.com/v1"
+def leanAgentNoProxyEnv : String := "LEAN_AGENT_NO_PROXY"
 
 def usage : String :=
   String.intercalate "\n"
@@ -104,6 +105,17 @@ def resolveModel (opts : CliOptions) (apiKeyEnv : String) : IO String := do
       else
         envOrDefault openAIModelEnv openAIDefaultModel
 
+def resolveNoProxy (baseUrl : String) : IO (Option String) := do
+  match ← IO.getEnv leanAgentNoProxyEnv with
+  | some value =>
+      let trimmed := value.trimAscii.toString
+      pure (if trimmed.isEmpty then none else some trimmed)
+  | none =>
+      if baseUrl.startsWith deepSeekBaseUrl then
+        pure (some "api.deepseek.com")
+      else
+        pure none
+
 def renderToolCall (call : ToolCall) : String :=
   "-> " ++ call.name ++ " " ++ call.arguments.compress
 
@@ -143,6 +155,7 @@ def run (opts : CliOptions) : IO UInt32 := do
   let apiKeyEnv ← resolveApiKeyEnv opts
   let baseUrl := resolveBaseUrl opts apiKeyEnv
   let model ← resolveModel opts apiKeyEnv
+  let noProxy ← resolveNoProxy baseUrl
   let apiKey? ← IO.getEnv apiKeyEnv
   let apiKey :=
     match apiKey? with
@@ -156,6 +169,7 @@ def run (opts : CliOptions) : IO UInt32 := do
   let provider := LeanAgent.OpenAI.provider
     { apiKey := apiKey
       baseUrl := baseUrl
+      noProxy := noProxy
     }
   let tools := LeanAgent.CodingTools.defaultTools cwd
   let _ ← runAgentLoop
