@@ -7,13 +7,13 @@ A small terminal coding agent implemented in Lean 4, using the architecture of
 - `LeanAgent.Loop` owns the model/tool loop.
 - `LeanAgent.CodingTools` provides `list`, `read`, `write`, `edit`, and `bash`.
 - `LeanAgent.OpenAI` adapts OpenAI-compatible Chat Completions tool calling.
-- `Main` provides one-shot print-mode CLI execution.
+- `Main` provides one-shot and line-REPL CLI execution.
 
 ## Current Scope
 
-The agent is currently a one-shot terminal coding agent. It can inspect and edit
-files, run bounded shell commands, and loop through OpenAI-compatible tool calls,
-but it does not yet provide a persistent REPL or TUI.
+The agent is currently a terminal coding agent. It can run in one-shot mode or
+line REPL mode, inspect and edit files, run bounded shell commands, and loop
+through OpenAI-compatible tool calls. It does not yet provide a full-screen TUI.
 
 ## Build
 
@@ -84,10 +84,19 @@ Useful options:
 ```bash
 lake exe lean-agent --help
 lake exe lean-agent --cwd /path/to/project -p "add a regression test"
+lake exe lean-agent --repl --cwd /path/to/project
+lake exe lean-agent --repl -p "first task, then keep chatting"
 lake exe lean-agent --model deepseek-v4-pro -p "use the pro model for this request"
 lake exe lean-agent --base-url http://localhost:11434/v1 --model local-model -p "summarize files"
 lake exe lean-agent --api-key-env OPENAI_API_KEY --base-url https://api.openai.com/v1 --model gpt-4.1-mini -p "summarize files"
 ```
+
+REPL commands:
+
+- `/help`: show REPL commands.
+- `/context`: show the current model, working directory, and message count.
+- `/clear`: clear conversation context.
+- `/exit` or `/quit`: exit the REPL.
 
 ## Tools
 
@@ -105,7 +114,6 @@ outside that directory are rejected, including common `..` and symlink escapes.
 
 Near-term work should focus on making the agent more interactive:
 
-- Add a plain REPL mode that keeps conversation state across turns.
 - Add transcript persistence so runs can be inspected and resumed.
 - Add structured JSON event output for external UIs.
 - Add a TUI after the REPL/event model is stable.
