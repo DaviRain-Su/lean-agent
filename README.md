@@ -20,6 +20,10 @@ Transport defaults are intentionally conservative:
 - maximum response body: 32 MiB
 - user agent: `lean-agent/0.1.0`
 
+The native adapter preserves the HTTP status code internally. The OpenAI-compatible
+provider treats non-2xx responses as provider errors and includes the response
+body in the error message for debugging.
+
 On macOS, install Homebrew curl if the library is not already available:
 
 ```bash

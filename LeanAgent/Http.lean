@@ -23,8 +23,24 @@ structure JsonPostConfig where
   noProxy : Option String := none
   userAgent : String := "lean-agent/0.1.0"
 
-def postJson (config : JsonPostConfig) (payload : String) : IO String :=
-  postJsonRaw
+structure JsonPostResponse where
+  status : Nat
+  body : String
+
+def parseStatusEnvelope (raw : String) : Except String JsonPostResponse :=
+  match raw.splitOn "\n" with
+  | [] => throw "HTTP response envelope was empty"
+  | statusLine :: bodyParts =>
+      match statusLine.toNat? with
+      | none => throw s!"invalid HTTP status in response envelope: {statusLine}"
+      | some status =>
+          pure
+            { status := status
+              body := String.intercalate "\n" bodyParts
+            }
+
+def postJsonResponse (config : JsonPostConfig) (payload : String) : IO JsonPostResponse := do
+  let raw ← postJsonRaw
     config.url
     config.apiKey
     payload
@@ -33,5 +49,11 @@ def postJson (config : JsonPostConfig) (payload : String) : IO String :=
     config.timeoutSeconds
     config.connectTimeoutSeconds
     config.maxResponseBytes
+  match parseStatusEnvelope raw with
+  | .ok response => pure response
+  | .error err => throw (IO.userError err)
+
+def postJson (config : JsonPostConfig) (payload : String) : IO String := do
+  pure (← postJsonResponse config payload).body
 
 end LeanAgent.Http

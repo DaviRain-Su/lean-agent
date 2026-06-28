@@ -73,8 +73,8 @@ def requestToJson (request : ProviderRequest) : Lean.Json :=
     , ("tool_choice", LeanAgent.Json.str "auto")
     ]
 
-def runHttpJson (config : OpenAICompatibleConfig) (payload : Lean.Json) : IO String :=
-  LeanAgent.Http.postJson
+def runHttpJson (config : OpenAICompatibleConfig) (payload : Lean.Json) : IO String := do
+  let response ← LeanAgent.Http.postJsonResponse
     { url := chatCompletionsUrl config.baseUrl
       apiKey := config.apiKey
       timeoutSeconds := config.timeoutSeconds
@@ -84,6 +84,9 @@ def runHttpJson (config : OpenAICompatibleConfig) (payload : Lean.Json) : IO Str
       userAgent := config.userAgent
     }
     payload.compress
+  if response.status < 200 || response.status >= 300 then
+    throw (IO.userError s!"provider HTTP {response.status}: {response.body}")
+  pure response.body
 
 def parseMaybeContent (message : Lean.Json) : String :=
   match LeanAgent.Json.optVal? message "content" with

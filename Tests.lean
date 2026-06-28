@@ -68,10 +68,134 @@ def testEditTool : IO Unit := do
   assertTrue result.ok "edit tool should succeed"
   assertTrue (updated == "omega beta alpha") "edit tool should replace the first occurrence"
 
+def httpServerScript : String :=
+  String.intercalate "\n"
+    [ "import json"
+    , "import sys"
+    , "from http.server import BaseHTTPRequestHandler, HTTPServer"
+    , "class Handler(BaseHTTPRequestHandler):"
+    , "    def do_POST(self):"
+    , "        length = int(self.headers.get('Content-Length', '0'))"
+    , "        body = self.rfile.read(length).decode('utf-8')"
+    , "        if self.path == '/large':"
+    , "            payload = b'x' * 1024"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'text/plain')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
+    , "        payload = json.dumps({"
+    , "            'path': self.path,"
+    , "            'body': body,"
+    , "            'auth': self.headers.get('Authorization'),"
+    , "            'ua': self.headers.get('User-Agent'),"
+    , "        }).encode('utf-8')"
+    , "        self.send_response(201)"
+    , "        self.send_header('Content-Type', 'application/json')"
+    , "        self.send_header('Content-Length', str(len(payload)))"
+    , "        self.end_headers()"
+    , "        self.wfile.write(payload)"
+    , "    def log_message(self, *args):"
+    , "        pass"
+    , "HTTPServer(('127.0.0.1', int(sys.argv[1])), Handler).serve_forever()"
+    ]
+
+def waitForPortScript : String :=
+  String.intercalate "\n"
+    [ "import socket"
+    , "import sys"
+    , "sock = socket.socket()"
+    , "sock.settimeout(0.2)"
+    , "sock.connect(('127.0.0.1', int(sys.argv[1])))"
+    , "sock.close()"
+    ]
+
+partial def waitForPort (port tries : Nat) : IO Unit := do
+  if tries == 0 then
+    throw (IO.userError s!"server did not start on port {port}")
+  let output ← IO.Process.output
+    { cmd := "python3"
+      args := #["-c", waitForPortScript, toString port]
+      stdin := .null
+      stdout := .null
+      stderr := .null
+    }
+  if output.exitCode == 0 then
+    pure ()
+  else
+    IO.sleep 100
+    waitForPort port (tries - 1)
+
+def withHttpServer (port : Nat) (action : IO α) : IO α := do
+  let child ← IO.Process.spawn
+    { cmd := "python3"
+      args := #["-c", httpServerScript, toString port]
+      stdin := .null
+      stdout := .null
+      stderr := .inherit
+      setsid := true
+    }
+  try
+    waitForPort port 50
+    let result ← action
+    child.kill
+    discard child.wait
+    pure result
+  catch err =>
+    try
+      child.kill
+    catch _ =>
+      pure ()
+    try
+      discard child.wait
+    catch _ =>
+      pure ()
+    throw err
+
+def localHttpConfig (port : Nat) (path : String) (maxResponseBytes : UInt64 := 4096) :
+    LeanAgent.Http.JsonPostConfig :=
+  { url := s!"http://127.0.0.1:{port}{path}"
+    apiKey := "test-key"
+    timeoutSeconds := 5
+    connectTimeoutSeconds := 5
+    maxResponseBytes := maxResponseBytes
+    noProxy := some "*"
+    userAgent := "lean-agent-test/0.1.0"
+  }
+
+def testHttpClientLocalPost : IO Unit := do
+  let port := 18080
+  withHttpServer port do
+    let response ← LeanAgent.Http.postJsonResponse
+      (localHttpConfig port "/ok")
+      "{\"ping\":true}"
+    assertTrue (response.status == 201) "expected HTTP status 201"
+    assertTrue (response.body.contains "\"path\": \"/ok\"") "expected response body to include request path"
+    assertTrue (response.body.contains "\"body\": \"{\\\"ping\\\":true}\"") "expected response body to include request payload"
+    assertTrue (response.body.contains "\"auth\": \"Bearer test-key\"") "expected authorization header"
+    assertTrue (response.body.contains "\"ua\": \"lean-agent-test/0.1.0\"") "expected user agent header"
+
+def testHttpClientResponseLimit : IO Unit := do
+  let port := 18081
+  withHttpServer port do
+    let failed ←
+      try
+        let _ ← LeanAgent.Http.postJsonResponse
+          (localHttpConfig port "/large" 16)
+          "{}"
+        pure false
+      catch err =>
+        assertTrue (err.toString.contains "maxResponseBytes") "expected maxResponseBytes error"
+        pure true
+    assertTrue failed "expected large response to fail"
+
 def main : IO UInt32 := do
   try
     testAgentLoopReadsFile
     testEditTool
+    testHttpClientLocalPost
+    testHttpClientResponseLimit
     IO.println "lean-agent tests passed"
     pure 0
   catch err =>

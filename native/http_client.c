@@ -205,7 +205,36 @@ lean_obj_res lean_agent_http_post_json(
         goto cleanup;
     }
 
-    lean_object *lean_response = lean_mk_string(response.data);
+    long status_code = 0;
+    CURLcode info_code = curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status_code);
+    if (info_code != CURLE_OK) {
+        result = io_errorf("curl_easy_getinfo CURLINFO_RESPONSE_CODE failed", curl_easy_strerror(info_code));
+        goto cleanup;
+    }
+
+    char status_prefix[32];
+    int prefix_len = snprintf(status_prefix, sizeof(status_prefix), "%ld\n", status_code);
+    if (prefix_len < 0 || (size_t)prefix_len >= sizeof(status_prefix)) {
+        result = io_error("failed to format HTTP status");
+        goto cleanup;
+    }
+    if (response.size > SIZE_MAX - (size_t)prefix_len - 1) {
+        result = io_error("HTTP response envelope is too large");
+        goto cleanup;
+    }
+
+    size_t envelope_size = (size_t)prefix_len + response.size;
+    char *envelope = malloc(envelope_size + 1);
+    if (envelope == NULL) {
+        result = io_error("failed to allocate HTTP response envelope");
+        goto cleanup;
+    }
+    memcpy(envelope, status_prefix, (size_t)prefix_len);
+    memcpy(envelope + prefix_len, response.data, response.size);
+    envelope[envelope_size] = 0;
+
+    lean_object *lean_response = lean_mk_string(envelope);
+    free(envelope);
     result = lean_io_result_mk_ok(lean_response);
 
 cleanup:
