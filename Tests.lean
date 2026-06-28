@@ -208,6 +208,56 @@ def testOpenAIAssistantOmitsEmptyToolCalls : IO Unit := do
   let json := LeanAgent.OpenAI.messageToJson (AgentMessage.assistant "done" #[])
   assertTrue (LeanAgent.Json.optVal? json "tool_calls" == none) "empty tool_calls should be omitted"
 
+def continueProvider : ModelProvider :=
+  { complete := fun _ => pure { content := "continued", toolCalls := #[] } }
+
+def testAgentSessionCreateAndContinue : IO Unit :=
+  IO.FS.withTempDir fun root => do
+    let path := root / "session.jsonl"
+    let config : AgentLoopConfig :=
+      { provider := continueProvider
+        model := "fake"
+        system := defaultSystemPrompt
+        tools := #[]
+        maxTurns := 1
+      }
+    let session ← LeanAgent.Session.create config root "fake" (.create path)
+    let session := { session with messages := #[AgentMessage.user "continue"] }
+    let session ← LeanAgent.Session.continueSession session silentSink
+    assertTrue (session.messages.size == 2) "continue should append assistant message"
+    let (messages, _) ← LeanAgent.Session.loadMessagesWithLastId path
+    assertTrue (messages.size == 1) "continue should persist only new messages"
+    match messages[0]? with
+    | some (AgentMessage.assistant "continued" _) => pure ()
+    | _ => fail "expected persisted assistant continuation"
+
+def testAgentSessionRejectsAssistantContinue : IO Unit := do
+  let config : AgentLoopConfig :=
+    { provider := continueProvider
+      model := "fake"
+      system := defaultSystemPrompt
+      tools := #[]
+      maxTurns := 1
+    }
+  let session : LeanAgent.Session.AgentSession :=
+    { config := config
+      messages := #[AgentMessage.assistant "done" #[]]
+    }
+  let failed ←
+    try
+      let _ ← LeanAgent.Session.continueSession session silentSink
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains "cannot continue after an assistant message") "expected assistant-final continue error"
+      pure true
+  assertTrue failed "assistant-final session should not continue"
+
+def testJsonEventShape : IO Unit := do
+  let json ← LeanAgent.Session.jsonEvent (.turnStart 3)
+  match LeanAgent.Json.optVal? json "type", LeanAgent.Json.optVal? json "turn", LeanAgent.Json.optVal? json "timestamp" with
+  | some (Lean.Json.str "turn_start"), some _, some _ => pure ()
+  | _, _, _ => fail "expected JSON event fields"
+
 def httpServerScript : String :=
   String.intercalate "\n"
     [ "import json"
@@ -342,6 +392,9 @@ def main : IO UInt32 := do
     testProjectSkillExpansion
     testSessionJsonlRoundTrip
     testOpenAIAssistantOmitsEmptyToolCalls
+    testAgentSessionCreateAndContinue
+    testAgentSessionRejectsAssistantContinue
+    testJsonEventShape
     testHttpClientLocalPost
     testHttpClientResponseLimit
     IO.println "lean-agent tests passed"

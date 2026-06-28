@@ -14,6 +14,7 @@ structure CliOptions where
   resume : Option System.FilePath := none
   noSession : Bool := false
   jsonEvents : Bool := false
+  continueRun : Bool := false
   help : Bool := false
 
 def deepSeekApiKeyEnv : String := "DEEPSEEK_API_KEY"
@@ -44,6 +45,7 @@ def usage : String :=
     , "  --resume PATH           Resume messages from a JSONL session file and append new entries."
     , "  --no-session            Do not persist or resume a session."
     , "  --json-events           Emit AgentEvent values as JSONL."
+    , "  --continue              Continue from the loaded session without adding a prompt."
     , "  --cwd PATH              Working directory for tools."
     , "  --model MODEL           Model name. Defaults to DEEPSEEK_MODEL/deepseek-v4-flash when DeepSeek is configured."
     , "  --base-url URL          OpenAI-compatible base URL. Defaults to DeepSeek first, then OpenAI."
@@ -64,6 +66,7 @@ def parseArgs (args : List String) (opts : CliOptions := {}) : Except String Cli
   | "--resume" :: value :: rest => parseArgs rest { opts with resume := some (System.FilePath.mk value) }
   | "--no-session" :: rest => parseArgs rest { opts with noSession := true }
   | "--json-events" :: rest => parseArgs rest { opts with jsonEvents := true }
+  | "--continue" :: rest => parseArgs rest { opts with continueRun := true }
   | "--cwd" :: value :: rest => parseArgs rest { opts with cwd := some (System.FilePath.mk value) }
   | "--model" :: value :: rest => parseArgs rest { opts with model := some value }
   | "--base-url" :: value :: rest => parseArgs rest { opts with baseUrl := some value }
@@ -150,7 +153,6 @@ structure Runtime where
   cwd : System.FilePath
   model : String
   extensions : LeanAgent.Project.ProjectExtensions
-  agent : AgentLoopConfig
   session : LeanAgent.Session.AgentSession
   jsonEvents : Bool
 
@@ -165,6 +167,12 @@ def runtimeFromOptions (opts : CliOptions) : IO (Except String Runtime) := do
     return .error "--no-session cannot be combined with --session or --resume"
   if opts.session.isSome && opts.resume.isSome then
     return .error "--session and --resume are mutually exclusive"
+  if opts.continueRun && opts.repl then
+    return .error "--continue cannot be combined with --repl"
+  if opts.continueRun && opts.prompt.isSome then
+    return .error "--continue cannot be combined with --prompt"
+  if opts.continueRun && opts.session.isNone && opts.resume.isNone then
+    return .error "--continue requires --resume or --session"
   let cwd ← resolveWorkingDir opts
   let apiKeyEnv ← resolveApiKeyEnv opts
   let baseUrl := resolveBaseUrl opts apiKeyEnv
@@ -189,28 +197,20 @@ def runtimeFromOptions (opts : CliOptions) : IO (Except String Runtime) := do
         tools := tools
         maxTurns := opts.maxTurns
       }
-    let (messages, store) ←
+    let persistence :=
       match opts.resume with
-      | some path =>
-          if !(← path.pathExists) then
-            throw (IO.userError s!"session file not found: {path}")
-          let (messages, lastId) ← LeanAgent.Session.loadMessagesWithLastId path
-          pure (messages, some { path := path, lastEntryId := lastId })
+      | some path => LeanAgent.Session.Persistence.resume path
       | none =>
           match opts.session with
-          | some path =>
-              LeanAgent.Session.ensureSessionFile path cwd model
-              let (messages, lastId) ← LeanAgent.Session.loadMessagesWithLastId path
-              pure (messages, some { path := path, lastEntryId := lastId })
-          | none =>
-              pure (#[], none)
+          | some path => LeanAgent.Session.Persistence.create path
+          | none => LeanAgent.Session.Persistence.ephemeral
+    let session ← LeanAgent.Session.create agentConfig cwd model persistence
     pure
       (.ok
         { cwd := cwd
           model := model
           extensions := extensions
-          agent := agentConfig
-          session := { config := agentConfig, messages := messages, store := store }
+          session := session
           jsonEvents := opts.jsonEvents
         })
 
@@ -268,6 +268,7 @@ def replHelp : String :=
     [ "REPL commands:"
     , "  /help      Show this help."
     , "  /context   Show current model, cwd, and message count."
+    , "  /session   Show current session details."
     , "  /commands  List discovered .omp slash commands."
     , "  /skills    List discovered .omp skills."
     , "  /clear     Clear conversation context."
@@ -284,6 +285,14 @@ def printReplContext (runtime : Runtime) (messages : Array AgentMessage) : IO Un
   IO.println s!"messages: {messages.size}"
   IO.println s!"commands: {runtime.extensions.commands.size}"
   IO.println s!"skills: {runtime.extensions.skills.size}"
+
+def printSessionInfo (runtime : Runtime) (session : LeanAgent.Session.AgentSession) : IO Unit := do
+  IO.println s!"model: {runtime.model}"
+  IO.println s!"cwd: {runtime.cwd}"
+  IO.println s!"messages: {session.messages.size}"
+  match session.sessionPath? with
+  | some path => IO.println s!"session: {path}"
+  | none => IO.println "session: ephemeral"
 
 def sinkForRuntime (runtime : Runtime) (repl : Bool) : EventSink :=
   if runtime.jsonEvents then
@@ -319,6 +328,9 @@ partial def replLoop (runtime : Runtime) (session : LeanAgent.Session.AgentSessi
     else if input == "/context" then
       printReplContext runtime session.messages
       replLoop runtime session
+    else if input == "/session" then
+      printSessionInfo runtime session
+      replLoop runtime session
     else if input == "/commands" then
       IO.println (LeanAgent.Project.renderCommandList runtime.extensions)
       replLoop runtime session
@@ -346,6 +358,12 @@ def runRepl (runtime : Runtime) (initialPrompt? : Option String) : IO UInt32 := 
   replLoop runtime session
 
 def runOneShot (opts : CliOptions) (runtime : Runtime) : IO UInt32 := do
+  if opts.continueRun then
+    if runtime.session.messages.isEmpty then
+      IO.eprintln "--continue requires a non-empty --resume or --session file"
+      return 2
+    let _ ← LeanAgent.Session.continueSession runtime.session (sinkForRuntime runtime false)
+    return 0
   let prompt ← promptFromOptions opts
   if prompt.trimAscii.isEmpty then
     IO.eprintln "prompt must not be empty"

@@ -154,6 +154,11 @@ structure SessionStore where
   path : System.FilePath
   lastEntryId : Option String := none
 
+inductive Persistence where
+  | ephemeral
+  | create (path : System.FilePath)
+  | resume (path : System.FilePath)
+
 structure AgentSession where
   config : AgentLoopConfig
   messages : Array AgentMessage := #[]
@@ -161,6 +166,27 @@ structure AgentSession where
 
 def AgentSession.withMessages (session : AgentSession) (messages : Array AgentMessage) : AgentSession :=
   { session with messages := messages }
+
+def AgentSession.sessionPath? (session : AgentSession) : Option System.FilePath :=
+  session.store.map (fun store => store.path)
+
+def create
+    (config : AgentLoopConfig)
+    (cwd : System.FilePath)
+    (model : String)
+    (persistence : Persistence := .ephemeral) : IO AgentSession := do
+  match persistence with
+  | .ephemeral =>
+      pure { config := config }
+  | .create path =>
+      ensureSessionFile path cwd model
+      let (messages, lastId) ← loadMessagesWithLastId path
+      pure { config := config, messages := messages, store := some { path := path, lastEntryId := lastId } }
+  | .resume path =>
+      if !(← path.pathExists) then
+        throw (IO.userError s!"session file not found: {path}")
+      let (messages, lastId) ← loadMessagesWithLastId path
+      pure { config := config, messages := messages, store := some { path := path, lastEntryId := lastId } }
 
 def persistMessages (store : Option SessionStore) (messages : Array AgentMessage) : IO (Option SessionStore) := do
   match store with
@@ -178,6 +204,25 @@ def prompt (session : AgentSession) (content : String) (sink : EventSink) : IO A
   let before := session.messages.size
   let initial := session.messages.push (.user content)
   let updated ← runAgentLoop session.config initial sink
+  let newMessages := updated.extract before updated.size
+  let store ← persistMessages session.store newMessages
+  pure { session with messages := updated, store := store }
+
+def canContinueFrom? : AgentMessage → Bool
+  | .user _ => true
+  | .toolResult _ _ _ _ => true
+  | .assistant _ _ => false
+
+def continueSession (session : AgentSession) (sink : EventSink) : IO AgentSession := do
+  match session.messages.back? with
+  | none => throw (IO.userError "cannot continue an empty session")
+  | some message =>
+      if canContinueFrom? message then
+        pure ()
+      else
+        throw (IO.userError "cannot continue after an assistant message; add a new prompt or resume a session ending in user/tool output")
+  let before := session.messages.size
+  let updated ← runAgentLoop session.config session.messages sink
   let newMessages := updated.extract before updated.size
   let store ← persistMessages session.store newMessages
   pure { session with messages := updated, store := store }

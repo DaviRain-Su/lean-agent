@@ -67,6 +67,41 @@ session model:
 Future work can add branch summaries, compaction, labels, model changes, and
 tree navigation after the v1 append-only session is stable.
 
+## AgentSession Runtime API
+
+`LeanAgent.Session` is the public Agent Core boundary for CLI, future TUI, and
+future Orchestrator code:
+
+- `Persistence.ephemeral`: in-memory run only.
+- `Persistence.create path`: create or append to a JSONL session file.
+- `Persistence.resume path`: load an existing JSONL session file and append.
+- `create config cwd model persistence`: build an `AgentSession`.
+- `prompt session text sink`: append a user message, run the loop, persist new messages.
+- `continueSession session sink`: run the loop from existing context without adding a user message. The last message must be a user message or tool result; assistant-final sessions require a new prompt instead.
+- `clear session`: clear in-memory context.
+
+CLI modes must call this API instead of managing `messages` directly.
+
+## JSON Event Schema
+
+`--json-events` emits one JSON object per line. Every object includes:
+
+- `timestamp`: UTC ISO-like timestamp string.
+- `type`: event discriminator.
+
+Current event types:
+
+- `agent_start`
+- `agent_end`
+- `turn_start` with `turn`
+- `turn_end` with `turn`
+- `message_start` with `role`
+- `message_delta` with `delta`
+- `message_end` with serialized `message`
+- `tool_execution_start` with `tool_call`
+- `tool_execution_end` with `tool_call_id`, `name`, `ok`, `content`, `error`
+- `error` with `message`
+
 ## Orchestrator Placement
 
 The orchestrator layer maps to Pi's `packages/orchestrator`. It should be added

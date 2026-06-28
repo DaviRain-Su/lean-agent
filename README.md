@@ -95,6 +95,7 @@ lake exe lean-agent --cwd /path/to/project -p "add a regression test"
 lake exe lean-agent --repl --cwd /path/to/project
 lake exe lean-agent --repl --session ./session.jsonl
 lake exe lean-agent --resume ./session.jsonl -p "continue from prior context"
+lake exe lean-agent --resume ./session.jsonl --continue
 lake exe lean-agent --json-events -p "print machine-readable events"
 lake exe lean-agent --repl -p "first task, then keep chatting"
 lake exe lean-agent --model deepseek-v4-pro -p "use the pro model for this request"
@@ -106,6 +107,7 @@ REPL commands:
 
 - `/help`: show REPL commands.
 - `/context`: show the current model, working directory, and message count.
+- `/session`: show the current session file and message count.
 - `/commands`: list discovered `.omp` slash commands.
 - `/skills`: list discovered `.omp` skills.
 - `/clear`: clear conversation context.
