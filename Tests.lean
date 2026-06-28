@@ -143,6 +143,46 @@ def testBashToolTimeout : IO Unit :=
     | some err => assertTrue (err.contains "timed out") "timeout error should mention timeout"
     | none => fail "timeout should set error"
 
+def testProjectCommandExpansion : IO Unit :=
+  IO.FS.withTempDir fun root => do
+    let commandsDir := root / ".omp" / "commands"
+    IO.FS.createDirAll commandsDir
+    IO.FS.writeFile (commandsDir / "ship.md")
+      (String.intercalate "\n"
+        [ "---"
+        , "description: Ship a version"
+        , "---"
+        , "Version: $1"
+        , "Tail: $@[2]"
+        , "All: $ARGUMENTS"
+        ])
+    let extensions ← LeanAgent.Project.loadExtensions root
+    assertTrue (extensions.commands.any (fun command => command.name == "ship")) "expected project command"
+    let expanded := LeanAgent.Project.expandPrompt extensions "/ship \"v 1\" alpha beta"
+    assertTrue (expanded.contains "Version: v 1") "expected positional argument expansion"
+    assertTrue (expanded.contains "Tail: alpha beta") "expected slice argument expansion"
+    assertTrue (expanded.contains "All: \"v 1\" alpha beta") "expected aggregate argument expansion"
+
+def testProjectSkillExpansion : IO Unit :=
+  IO.FS.withTempDir fun root => do
+    let skillDir := root / ".omp" / "skills" / "compress"
+    IO.FS.createDirAll skillDir
+    IO.FS.writeFile (skillDir / "SKILL.md")
+      (String.intercalate "\n"
+        [ "---"
+        , "name: compress"
+        , "description: Compress prompts"
+        , "---"
+        , "# Compress"
+        , "Remove filler."
+        ])
+    let extensions ← LeanAgent.Project.loadExtensions root
+    assertTrue (extensions.skills.any (fun skill => skill.name == "compress")) "expected project skill"
+    let expanded := LeanAgent.Project.expandPrompt extensions "/skill:compress summarize this document"
+    assertTrue (expanded.contains "# Skill: compress") "expected skill header"
+    assertTrue (expanded.contains "Remove filler.") "expected skill body"
+    assertTrue (expanded.contains "summarize this document") "expected skill task"
+
 def httpServerScript : String :=
   String.intercalate "\n"
     [ "import json"
@@ -273,6 +313,8 @@ def main : IO UInt32 := do
     testReadToolRejectsPathEscape
     testListTool
     testBashToolTimeout
+    testProjectCommandExpansion
+    testProjectSkillExpansion
     testHttpClientLocalPost
     testHttpClientResponseLimit
     IO.println "lean-agent tests passed"

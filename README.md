@@ -15,6 +15,10 @@ The agent is currently a terminal coding agent. It can run in one-shot mode or
 line REPL mode, inspect and edit files, run bounded shell commands, and loop
 through OpenAI-compatible tool calls. It does not yet provide a full-screen TUI.
 
+It also implements the first layer of OMP-style project customization:
+file-backed slash commands from `.omp/commands/*.md` and skills from
+`.omp/skills/<name>/SKILL.md`.
+
 ## Build
 
 This project uses a small Lean FFI adapter backed by the native `libcurl` C API
@@ -95,8 +99,50 @@ REPL commands:
 
 - `/help`: show REPL commands.
 - `/context`: show the current model, working directory, and message count.
+- `/commands`: list discovered `.omp` slash commands.
+- `/skills`: list discovered `.omp` skills.
 - `/clear`: clear conversation context.
 - `/exit` or `/quit`: exit the REPL.
+
+## OMP Project Extensions
+
+LeanAgent discovers OMP-style project files from the working directory:
+
+- `.omp/commands/*.md`: file-backed slash commands.
+- `.omp/skills/<name>/SKILL.md`: reusable skill instructions.
+
+It also checks user-level directories:
+
+- `~/.omp/agent/commands/*.md`
+- `~/.omp/agent/skills/<name>/SKILL.md`
+
+Project entries win over user entries when names collide. Command frontmatter may
+define `name` and `description`; otherwise the filename is used. Command bodies
+support `$ARGUMENTS`, `$@`, `$1`, `$2`, and `$@[start]` / `$@[start:length]`
+argument placeholders.
+
+Example:
+
+```markdown
+---
+description: Prepare a release
+---
+
+Review commits since the last tag and release `$ARGUMENTS`.
+```
+
+Run it with:
+
+```bash
+lake exe lean-agent --repl
+/release 1.2.3
+```
+
+Skills can be invoked explicitly:
+
+```bash
+/skill:system-prompts rewrite this tool prompt
+```
 
 ## Tools
 

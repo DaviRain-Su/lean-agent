@@ -137,6 +137,7 @@ def resolveWorkingDir (opts : CliOptions) : IO System.FilePath := do
 structure Runtime where
   cwd : System.FilePath
   model : String
+  extensions : LeanAgent.Project.ProjectExtensions
   agent : AgentLoopConfig
 
 def apiKeyValue (apiKeyEnv : String) : IO String := do
@@ -155,20 +156,23 @@ def runtimeFromOptions (opts : CliOptions) : IO (Except String Runtime) := do
   if apiKey.isEmpty then
     pure (.error s!"missing API key: set {apiKeyEnv} or pass --api-key-env")
   else
+    let extensions ← LeanAgent.Project.loadExtensions cwd
     let provider := LeanAgent.OpenAI.provider
       { apiKey := apiKey
         baseUrl := baseUrl
         noProxy := noProxy
       }
     let tools := LeanAgent.CodingTools.defaultTools cwd
+    let system := LeanAgent.Project.applySystemAppendix defaultSystemPrompt extensions
     pure
       (.ok
         { cwd := cwd
           model := model
+          extensions := extensions
           agent :=
             { provider := provider
               model := model
-              system := defaultSystemPrompt
+              system := system
               tools := tools
               maxTurns := opts.maxTurns
             }
@@ -228,6 +232,8 @@ def replHelp : String :=
     [ "REPL commands:"
     , "  /help      Show this help."
     , "  /context   Show current model, cwd, and message count."
+    , "  /commands  List discovered .omp slash commands."
+    , "  /skills    List discovered .omp skills."
     , "  /clear     Clear conversation context."
     , "  /exit      Exit the REPL."
     , "  /quit      Exit the REPL."
@@ -240,10 +246,13 @@ def printReplContext (runtime : Runtime) (messages : Array AgentMessage) : IO Un
   IO.println s!"model: {runtime.model}"
   IO.println s!"cwd: {runtime.cwd}"
   IO.println s!"messages: {messages.size}"
+  IO.println s!"commands: {runtime.extensions.commands.size}"
+  IO.println s!"skills: {runtime.extensions.skills.size}"
 
 def runReplTurn (runtime : Runtime) (messages : Array AgentMessage) (input : String) :
     IO (Array AgentMessage) := do
-  runAgentLoop runtime.agent (messages.push (.user input)) renderReplEvent
+  let expanded := LeanAgent.Project.expandPrompt runtime.extensions input
+  runAgentLoop runtime.agent (messages.push (.user expanded)) renderReplEvent
 
 partial def replLoop (runtime : Runtime) (messages : Array AgentMessage) : IO UInt32 := do
   let stdout ← IO.getStdout
@@ -265,6 +274,12 @@ partial def replLoop (runtime : Runtime) (messages : Array AgentMessage) : IO UI
       replLoop runtime messages
     else if input == "/context" then
       printReplContext runtime messages
+      replLoop runtime messages
+    else if input == "/commands" then
+      IO.println (LeanAgent.Project.renderCommandList runtime.extensions)
+      replLoop runtime messages
+    else if input == "/skills" then
+      IO.println (LeanAgent.Project.renderSkillList runtime.extensions)
       replLoop runtime messages
     else if input == "/clear" then
       IO.println "context cleared"
@@ -291,7 +306,8 @@ def runOneShot (opts : CliOptions) (runtime : Runtime) : IO UInt32 := do
   if prompt.trimAscii.isEmpty then
     IO.eprintln "prompt must not be empty"
     return 2
-  let _ ← runAgentLoop runtime.agent #[.user prompt] renderEvent
+  let expanded := LeanAgent.Project.expandPrompt runtime.extensions prompt
+  let _ ← runAgentLoop runtime.agent #[.user expanded] renderEvent
   pure 0
 
 def run (opts : CliOptions) : IO UInt32 := do
