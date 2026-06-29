@@ -119,7 +119,7 @@ before expanding provider behavior.
 | `auth/context.ts` | `LeanAgent.AI.Auth` | partial | Default env/file-existence context exists with `~` expansion. Browser-specific behavior is not relevant yet. |
 | `auth/credential-store.ts` | `LeanAgent.AI.Auth` | partial | In-memory and JSON file-backed API-key/OAuth credential stores exist, including OAuth extra-field persistence. Per-provider promise chains and cross-process file locks are missing. |
 | `auth/helpers.ts` | `LeanAgent.AI.Auth`, `LeanAgent.AI.Providers.CloudflareAuth` | partial | Env API-key auth helper, lazy OAuth wrapper with load-once caching, model-aware base URL auth resolution, and Cloudflare Workers AI / AI Gateway auth helpers exist. Most ambient provider helpers are missing. |
-| `auth/resolve.ts` | `LeanAgent.AI.Auth` | partial | API-key provider auth resolution with request overrides and optional model base URL context exists. Stored OAuth credentials now own the provider, refresh under credential-store `modify` when expired, persist refreshed credentials, and derive request auth through `toAuth`. Typed `ModelsError` auth/oauth codes are missing. |
+| `auth/resolve.ts` | `LeanAgent.AI.Auth` | partial | API-key provider auth resolution with request overrides and optional model base URL context exists. Stored OAuth credentials now own the provider, refresh under credential-store `modify` when expired, persist refreshed credentials, derive request auth through `toAuth`, and emit typed `ModelsError(oauth)` failures for unknown-provider and refresh-error paths. Broader typed auth surface is still incomplete. |
 
 ## API Protocol Implementations
 

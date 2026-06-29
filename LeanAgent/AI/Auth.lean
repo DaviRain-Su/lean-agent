@@ -247,6 +247,9 @@ def resolveApiKey
     (modelBaseUrl : Option String := none) : IO (Option AuthResult) :=
   apiKeyAuth.resolve ctx credential modelBaseUrl
 
+def oauthModelsError (message : String) : IO.Error :=
+  IO.userError s!"ModelsError(oauth): {message}"
+
 def oauthCredentialIsExpired (ctx : AuthContext) (credential : OAuthCredential) : IO Bool := do
   let now ← ctx.nowMs
   pure (now >= credential.expires)
@@ -259,14 +262,18 @@ def resolveStoredOAuth
     (stored : OAuthCredential) : IO (Option AuthResult) := do
   let mut credential := stored
   if ← oauthCredentialIsExpired ctx credential then
-    let post ← credentials.modify providerId fun current => do
-      match current with
-      | some (.oauth currentOAuth) =>
-          if ← oauthCredentialIsExpired ctx currentOAuth then
-            pure (some (.oauth (← oauth.refresh currentOAuth)))
-          else
-            pure none
-      | _ => pure none
+    let post ←
+      try
+        credentials.modify providerId fun current => do
+          match current with
+          | some (.oauth currentOAuth) =>
+              if ← oauthCredentialIsExpired ctx currentOAuth then
+                pure (some (.oauth (← oauth.refresh currentOAuth)))
+              else
+                pure none
+          | _ => pure none
+      catch _ =>
+        throw (oauthModelsError s!"Failed to refresh OAuth token for {providerId}")
     match post with
     | some (.oauth refreshed) => credential := refreshed
     | _ => return none

@@ -200,12 +200,15 @@ def getOAuthProviderInfoList : IO (Array OAuthProviderInfo) := do
   pure (providers.map fun provider =>
     { id := provider.id, name := provider.name, available := true })
 
+def oauthModelsError (message : String) : IO.Error :=
+  IO.userError s!"ModelsError(oauth): {message}"
+
 def refreshOAuthToken
     (providerId : OAuthProviderId)
     (credentials : OAuthCredentials) : IO OAuthCredentials := do
   match ← getOAuthProvider? providerId with
   | some provider => provider.refreshToken credentials
-  | none => throw (IO.userError s!"Unknown OAuth provider: {providerId}")
+  | none => throw (oauthModelsError s!"Unknown OAuth provider: {providerId}")
 
 def credentialForProvider?
     (providerId : OAuthProviderId)
@@ -220,7 +223,7 @@ def getOAuthApiKey
     (nowMs : IO Nat := LeanAgent.AI.Auth.epochMsNow) :
     IO (Option OAuthApiKeyResult) := do
   match ← getOAuthProvider? providerId with
-  | none => throw (IO.userError s!"Unknown OAuth provider: {providerId}")
+  | none => throw (oauthModelsError s!"Unknown OAuth provider: {providerId}")
   | some provider =>
       match credentialForProvider? providerId credentials with
       | none => pure none
@@ -231,7 +234,7 @@ def getOAuthApiKey
               try
                 provider.refreshToken credential
               catch _ =>
-                throw (IO.userError s!"Failed to refresh OAuth token for {providerId}")
+                throw (oauthModelsError s!"Failed to refresh OAuth token for {providerId}")
             else
               pure credential
           pure (some { newCredentials := credential, apiKey := provider.getApiKey credential })

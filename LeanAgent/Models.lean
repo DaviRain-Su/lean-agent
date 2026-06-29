@@ -1931,6 +1931,7 @@ inductive ModelsErrorCode where
   | provider
   | stream
   | auth
+  | oauth
 deriving BEq
 
 def ModelsErrorCode.toString : ModelsErrorCode → String
@@ -1939,6 +1940,7 @@ def ModelsErrorCode.toString : ModelsErrorCode → String
   | .provider => "provider"
   | .stream => "stream"
   | .auth => "auth"
+  | .oauth => "oauth"
 
 def modelsError (code : ModelsErrorCode) (message : String) : IO.Error :=
   IO.userError s!"ModelsError({code.toString}): {message}"
@@ -2288,7 +2290,7 @@ def openAICodexResponsesStreams : ProviderStreams :=
   { streamSimple := fun model context options => do
       let options := clampSimpleOptionsToContext model context options
       match options.apiKey with
-      | none => throw (modelsError .auth s!"missing OAuth access token for provider {model.provider}")
+      | none => throw (modelsError .oauth s!"missing OAuth access token for provider {model.provider}")
       | some apiKey =>
           let config : LeanAgent.AI.Api.OpenAICodexResponses.OpenAICodexResponsesConfig :=
             { apiKey := apiKey

@@ -4503,6 +4503,41 @@ def testModelsAuthOAuthExpiredCredentialRefreshes : IO Unit := do
       assertTrue (credential.expires == 2000) "expected refreshed expiry to be persisted"
   | _ => fail "expected persisted OAuth credential"
 
+def testModelsAuthOAuthRefreshFailureUsesModelsErrorOauth : IO Unit := do
+  let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+  let _ ← store.modify "fake" fun _ =>
+    pure
+      (some
+        (.oauth
+          { access := "expired-token"
+            refresh := "refresh-1"
+            expires := 999
+          }))
+  let refreshCalls ← IO.mkRef 0
+  let failingOAuth : LeanAgent.AI.Auth.OAuthAuth :=
+    { name := "Failing OAuth"
+      refresh := fun _ => do
+        refreshCalls.modify (· + 1)
+        throw (IO.userError "refresh failed")
+      toAuth := fun credential => pure { apiKey := some credential.access }
+    }
+  let failed ←
+    try
+      let _ ← LeanAgent.AI.Auth.resolveProviderAuth
+        "fake"
+        { fakeProviderAuth with oauth := some failingOAuth }
+        store
+        (fakeAuthContextWithNow 1000)
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains "ModelsError(oauth)")
+        "expected typed oauth models error"
+      assertTrue (err.toString.contains "Failed to refresh OAuth token for fake")
+        "expected refresh failure details"
+      pure true
+  assertTrue failed "expected OAuth refresh failure to throw"
+  assertTrue ((← refreshCalls.get) == 1) "expected one failing OAuth refresh attempt"
+
 def testModelsAuthOAuthCredentialOwnsProvider : IO Unit := do
   let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
   let _ ← store.modify "fake" fun _ =>
@@ -4613,8 +4648,8 @@ def testOAuthGetOAuthApiKeyErrors : IO Unit := do
         (pure 1000)
       pure false
     catch err =>
-      assertTrue (err.toString.contains "Unknown OAuth provider: unknown-oauth")
-        "expected unknown OAuth provider error"
+      assertTrue (err.toString.contains "ModelsError(oauth)")
+        "expected typed unknown OAuth provider error"
       pure true
   assertTrue unknownFailed "unknown OAuth provider should fail"
   let refreshCalls ← IO.mkRef 0
@@ -4628,8 +4663,8 @@ def testOAuthGetOAuthApiKeyErrors : IO Unit := do
         (pure 1000)
       pure false
     catch err =>
-      assertTrue (err.toString.contains "Failed to refresh OAuth token for failing-oauth")
-        "expected refresh wrapper error"
+      assertTrue (err.toString.contains "ModelsError(oauth)")
+        "expected typed refresh wrapper error"
       pure true
   assertTrue refreshFailed "failing OAuth refresh should fail"
   assertTrue ((← refreshCalls.get) == 1) "expected failed refresh to be attempted once"
@@ -7596,6 +7631,28 @@ def testCompatOpenAICodexResponsesBuiltinDispatch : IO Unit := do
     assertTrue (stream.result.api == LeanAgent.AI.Api.OpenAICodexResponses.api)
       "expected compat Codex runtime api"
 
+def testCompatOpenAICodexResponsesMissingTokenUsesOauthCode : IO Unit := do
+  let model :=
+    LeanAgent.Models.openAICodexModel "gpt-5.5" "GPT-5.5" 5.0 30.0 0.5 0.0 272000 128000
+  let context : LeanAgent.AI.Context :=
+    { systemPrompt := some "codex system"
+      messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+    }
+  let failed ←
+    try
+      let _ ← LeanAgent.AI.Compat.Aliases.streamSimpleOpenAICodexResponses
+        model
+        context
+        {}
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains "ModelsError(oauth)")
+        "expected typed oauth error for missing Codex token"
+      assertTrue (err.toString.contains "missing OAuth access token")
+        "expected missing token details"
+      pure true
+  assertTrue failed "expected missing Codex OAuth token to fail"
+
 def testCompatOpenAICodexResponsesTypedLegacyAliasLocal : IO Unit := do
   let port := 18104
   withHttpServer port do
@@ -8333,6 +8390,7 @@ def main : IO UInt32 := do
     testModelsAuthFileCredentialStore
     testModelsAuthOAuthValidCredential
     testModelsAuthOAuthExpiredCredentialRefreshes
+    testModelsAuthOAuthRefreshFailureUsesModelsErrorOauth
     testModelsAuthOAuthCredentialOwnsProvider
     testLazyOAuthLoadsOnceAndDelegates
     testOAuthProviderRegistryCrud
@@ -8440,6 +8498,7 @@ def main : IO UInt32 := do
     testCompatAzureOpenAIResponsesBuiltinDispatch
     testCompatOpenAICodexResponsesBuiltinDispatch
     testCompatOpenAICodexResponsesTypedLegacyAliasLocal
+    testCompatOpenAICodexResponsesMissingTokenUsesOauthCode
     testOpenAICompletionsProviderErrorDiagnostics
     IO.println "lean-agent tests passed"
     pure 0

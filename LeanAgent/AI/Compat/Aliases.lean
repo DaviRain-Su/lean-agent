@@ -170,7 +170,7 @@ def streamOpenAICodexResponsesWithOptions : OpenAICodexResponsesStream :=
       model
     let options ← withEnvApiKeyForOpenAICodexResponses model options
     match options.apiKey with
-    | none => throw (LeanAgent.Models.modelsError .auth s!"missing OAuth access token for provider {model.provider}")
+    | none => throw (LeanAgent.Models.modelsError .oauth s!"missing OAuth access token for provider {model.provider}")
     | some apiKey =>
         let config : LeanAgent.AI.Api.OpenAICodexResponses.OpenAICodexResponsesConfig :=
           { apiKey := apiKey
