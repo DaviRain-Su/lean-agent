@@ -5,6 +5,7 @@ import LeanAgent.AI.EventStream
 import LeanAgent.AI.Types
 import LeanAgent.AI.Util.Diagnostics
 import LeanAgent.AI.Util.Retry
+import LeanAgent.AI.Util.SSE
 import LeanAgent.CodingTools
 import LeanAgent.Core
 import LeanAgent.Http

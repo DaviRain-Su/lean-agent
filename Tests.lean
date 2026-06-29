@@ -344,6 +344,114 @@ def testOpenAICompletionsPromptCacheEnvLongRetention : IO Unit := do
     (LeanAgent.Json.optVal? json "prompt_cache_retention" == some (LeanAgent.Json.str "24h"))
     "expected env 24h prompt cache retention"
 
+def testSSEParsesDataEvents : IO Unit := do
+  let raw := ": keepalive\n" ++
+    "data: {\"a\":1}\n" ++
+    "data: {\"b\":2}\n\n" ++
+    "event: ignored\n" ++
+    "data: [DONE]\n\n"
+  let events := LeanAgent.AI.Util.SSE.parse raw
+  assertTrue (events.size == 2) "expected two SSE data events"
+  match events[0]?, events[1]? with
+  | some first, some second =>
+      assertTrue (first.data == "{\"a\":1}\n{\"b\":2}") "expected multiline data join"
+      assertTrue (second.data == "[DONE]") "expected DONE data"
+  | _, _ => fail "expected SSE events"
+
+def testOpenAICompletionsStreamingPayload : IO Unit := do
+  let json := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithOptions
+    (basicProviderRequest)
+    {}
+    LeanAgent.Models.openAIBaseUrl
+  assertTrue (LeanAgent.Json.optVal? json "stream" == some (LeanAgent.Json.bool true)) "expected stream flag"
+  match LeanAgent.Json.optVal? json "stream_options" with
+  | some options =>
+      assertTrue
+        (LeanAgent.Json.optVal? options "include_usage" == some (LeanAgent.Json.bool true))
+        "expected streaming usage option"
+  | none => fail "expected stream_options"
+
+def testOpenAICompletionsParsesStreamingText : IO Unit := do
+  let raw := String.intercalate "\n"
+    [ "data: {\"id\":\"chatcmpl-1\",\"model\":\"deepseek-v4-flash\",\"choices\":[{\"delta\":{\"content\":\"hel\"},\"finish_reason\":null}]}"
+    , ""
+    , "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}"
+    , ""
+    , "data: [DONE]"
+    , ""
+    ]
+  match LeanAgent.AI.Api.OpenAICompletions.parseStreamingEventStream
+    "openai-completions" "deepseek" "deepseek-v4-flash" 10 raw with
+  | .ok stream =>
+      assertTrue stream.isComplete "expected complete stream"
+      assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "hello") "expected streamed text"
+      assertTrue (stream.result.usage.totalTokens == 5) "expected streamed usage"
+      assertTrue
+        (stream.events.any fun
+          | .textDelta _ "hel" _ => true
+          | _ => false)
+        "expected first text delta"
+      assertTrue
+        (stream.events.any fun
+          | .textDelta _ "lo" _ => true
+          | _ => false)
+        "expected second text delta"
+  | .error err => fail s!"streaming text parse failed: {err}"
+
+def testOpenAICompletionsParsesStreamingToolCall : IO Unit := do
+  let raw := String.intercalate "\n"
+    [ "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"path\\\":\"}}]},\"finish_reason\":null}]}"
+    , ""
+    , "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"README.md\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}"
+    , ""
+    , "data: [DONE]"
+    , ""
+    ]
+  match LeanAgent.AI.Api.OpenAICompletions.parseStreamingEventStream
+    "openai-completions" "deepseek" "deepseek-v4-flash" 10 raw with
+  | .ok stream =>
+      assertTrue (stream.result.stopReason == .toolUse) "expected tool-use stop reason"
+      let calls := LeanAgent.AI.contentToolCalls stream.result.content
+      assertTrue (calls.size == 1) "expected one streamed tool call"
+      match calls[0]? with
+      | some call =>
+          assertTrue (call.id == "call-1") "expected streamed tool id"
+          assertTrue (call.name == "read") "expected streamed tool name"
+          assertTrue
+            (LeanAgent.Json.optVal? call.arguments "path" == some (LeanAgent.Json.str "README.md"))
+            "expected streamed tool args"
+      | none => fail "expected tool call"
+      assertTrue
+        (stream.events.any fun
+          | .toolCallDelta _ _ _ => true
+          | _ => false)
+        "expected tool-call delta"
+  | .error err => fail s!"streaming tool parse failed: {err}"
+
+def testOpenAICompletionsParsesStreamingThinking : IO Unit := do
+  let raw := String.intercalate "\n"
+    [ "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"think\"},\"finish_reason\":null}]}"
+    , ""
+    , "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}"
+    , ""
+    , "data: [DONE]"
+    , ""
+    ]
+  match LeanAgent.AI.Api.OpenAICompletions.parseStreamingEventStream
+    "openai-completions" "deepseek" "deepseek-v4-flash" 10 raw with
+  | .ok stream =>
+      assertTrue
+        (stream.events.any fun
+          | .thinkingDelta _ "think" _ => true
+          | _ => false)
+        "expected thinking delta"
+      assertTrue
+        (stream.result.content.any fun
+          | .thinking content => content.thinking == "think" && content.thinkingSignature == some "reasoning_content"
+          | _ => false)
+        "expected thinking block"
+  | .error err => fail s!"streaming thinking parse failed: {err}"
+
 def testDiagnosticsExtractsProviderError : IO Unit := do
   let body := "{\"error\":{\"message\":\"rate limit exceeded\",\"type\":\"rate_limit_error\",\"code\":\"rate_limit\"}}"
   let info := LeanAgent.AI.Util.Diagnostics.providerErrorInfoFromBody body
@@ -1035,6 +1143,11 @@ def main : IO UInt32 := do
     testOpenAICompletionsPromptCacheClampsKey
     testOpenAICompletionsPromptCacheNoneOmitsFields
     testOpenAICompletionsPromptCacheEnvLongRetention
+    testSSEParsesDataEvents
+    testOpenAICompletionsStreamingPayload
+    testOpenAICompletionsParsesStreamingText
+    testOpenAICompletionsParsesStreamingToolCall
+    testOpenAICompletionsParsesStreamingThinking
     testDiagnosticsExtractsProviderError
     testOpenAICompletionsParsesUsage
     testRetryClassifiesAssistantErrors

@@ -1,8 +1,10 @@
 import Lean
 import LeanAgent.AI.Api.OpenAIPromptCache
+import LeanAgent.AI.EventStream
 import LeanAgent.AI.Types
 import LeanAgent.AI.Util.Diagnostics
 import LeanAgent.AI.Util.Retry
+import LeanAgent.AI.Util.SSE
 import LeanAgent.Core
 import LeanAgent.Http
 import LeanAgent.Json
@@ -200,6 +202,22 @@ def requestToJsonWithOptions
 def requestToJson (request : ProviderRequest) : Lean.Json :=
   requestToJsonWithOptions request
 
+def requestToStreamingJsonWithOptions
+    (request : ProviderRequest)
+    (options : OpenAICompletionsOptions := {})
+    (baseUrl : String := "") : Lean.Json :=
+  let messages :=
+    #[LeanAgent.Json.obj [("role", LeanAgent.Json.str "system"), ("content", LeanAgent.Json.str request.system)]]
+      ++ request.messages.map messageToJson
+  LeanAgent.Json.obj
+    ([ ("model", LeanAgent.Json.str request.model)
+     , ("messages", LeanAgent.Json.arr messages)
+     , ("stream", LeanAgent.Json.bool true)
+     , ("stream_options", LeanAgent.Json.obj [("include_usage", LeanAgent.Json.bool true)])
+     ] ++ requestOptionFields options
+       ++ promptCacheFields baseUrl options
+       ++ requestToolFields request options)
+
 def headerNameEq (a b : String) : Bool :=
   a.toLower == b.toLower
 
@@ -309,6 +327,338 @@ def parseUsage? (json : Lean.Json) : Option LeanAgent.ProviderUsage :=
   match LeanAgent.Json.optVal? json "usage" with
   | some value => some (parseUsage value)
   | none => none
+
+inductive StreamBlockKey where
+  | text
+  | thinking
+  | tool (streamIndex : Nat)
+deriving BEq
+
+structure StreamingToolState where
+  streamIndex : Nat
+  id : String := ""
+  name : String := ""
+  partialArguments : String := ""
+deriving BEq
+
+structure StreamingState where
+  text : String := ""
+  thinking : String := ""
+  thinkingSignature : Option String := none
+  toolStates : Array StreamingToolState := #[]
+  order : Array StreamBlockKey := #[]
+  responseId : Option String := none
+  responseModel : Option String := none
+  usage : Option LeanAgent.ProviderUsage := none
+  finishReason : Option String := none
+deriving BEq
+
+inductive ParsedStreamEvent where
+  | textStart (contentIndex : Nat)
+  | textDelta (contentIndex : Nat) (delta : String)
+  | textEnd (contentIndex : Nat) (content : String)
+  | thinkingStart (contentIndex : Nat)
+  | thinkingDelta (contentIndex : Nat) (delta : String)
+  | thinkingEnd (contentIndex : Nat) (content : String)
+  | toolCallStart (contentIndex : Nat)
+  | toolCallDelta (contentIndex : Nat) (delta : String)
+  | toolCallEnd (contentIndex : Nat) (call : LeanAgent.AI.ToolCall)
+deriving BEq
+
+def indexOfBlock? (order : Array StreamBlockKey) (key : StreamBlockKey) : Option Nat :=
+  let rec loop (items : List StreamBlockKey) (index : Nat) :=
+    match items with
+    | [] => none
+    | item :: rest => if item == key then some index else loop rest (index + 1)
+  loop order.toList 0
+
+def ensureBlock (state : StreamingState) (key : StreamBlockKey) : StreamingState × Nat × Bool :=
+  match indexOfBlock? state.order key with
+  | some index => (state, index, false)
+  | none =>
+      let nextIndex := state.order.size
+      ({ state with order := state.order.push key }, nextIndex, true)
+
+def findToolState? (states : Array StreamingToolState) (streamIndex : Nat) : Option StreamingToolState :=
+  states.find? fun state => state.streamIndex == streamIndex
+
+def upsertToolState (states : Array StreamingToolState) (next : StreamingToolState) :
+    Array StreamingToolState :=
+  if states.any fun state => state.streamIndex == next.streamIndex then
+    states.map fun state => if state.streamIndex == next.streamIndex then next else state
+  else
+    states.push next
+
+def partialArgumentsJson (raw : String) : Lean.Json :=
+  if raw.trimAscii.isEmpty then
+    LeanAgent.Json.obj []
+  else
+    match Lean.Json.parse raw with
+    | .ok json => json
+    | .error _ => LeanAgent.Json.obj []
+
+def toolCallFromStatePartial (state : StreamingToolState) : LeanAgent.AI.ToolCall :=
+  { id := state.id
+    name := state.name
+    arguments := partialArgumentsJson state.partialArguments
+  }
+
+def toolCallFromState (state : StreamingToolState) : Except String LeanAgent.AI.ToolCall := do
+  let arguments ← parseToolArguments state.partialArguments
+  pure { id := state.id, name := state.name, arguments := arguments }
+
+def contentFromState (state : StreamingState) : Array LeanAgent.AI.ContentBlock :=
+  state.order.filterMap fun key =>
+    match key with
+    | .text =>
+        some (LeanAgent.AI.ContentBlock.text { text := state.text })
+    | .thinking =>
+        some (LeanAgent.AI.ContentBlock.thinking
+          { thinking := state.thinking
+            thinkingSignature := state.thinkingSignature
+          })
+    | .tool streamIndex =>
+        (findToolState? state.toolStates streamIndex).map fun toolState =>
+          LeanAgent.AI.ContentBlock.toolCall (toolCallFromStatePartial toolState)
+
+def messageFromStreamingState
+    (api provider model : String)
+    (timestamp : Nat)
+    (state : StreamingState) : LeanAgent.AI.AssistantMessage :=
+  { content := contentFromState state
+    api := api
+    provider := provider
+    model := model
+    responseId := state.responseId
+    responseModel := state.responseModel
+    usage := (state.usage.map LeanAgent.AI.usageFromLegacyProviderUsage).getD LeanAgent.AI.Usage.empty
+    stopReason := LeanAgent.AI.stopReasonFromLegacyFinish state.finishReason (!state.toolStates.isEmpty)
+    timestamp := timestamp
+  }
+
+def parsedEventToAssistantEvent
+    (message : LeanAgent.AI.AssistantMessage) : ParsedStreamEvent → LeanAgent.AI.AssistantMessageEvent
+  | .textStart index => .textStart index message
+  | .textDelta index delta => .textDelta index delta message
+  | .textEnd index content => .textEnd index content message
+  | .thinkingStart index => .thinkingStart index message
+  | .thinkingDelta index delta => .thinkingDelta index delta message
+  | .thinkingEnd index content => .thinkingEnd index content message
+  | .toolCallStart index => .toolCallStart index message
+  | .toolCallDelta index delta => .toolCallDelta index delta message
+  | .toolCallEnd index call => .toolCallEnd index call message
+
+def optionalStringField (json : Lean.Json) (key : String) : Option String :=
+  match LeanAgent.Json.optVal? json key with
+  | some (Lean.Json.str value) => some value
+  | _ => none
+
+def optionalObjectField (json : Lean.Json) (key : String) : Option Lean.Json :=
+  match LeanAgent.Json.optVal? json key with
+  | some value =>
+      match value.getObj? with
+      | .ok _ => some value
+      | .error _ => none
+  | none => none
+
+def optionalArrayField (json : Lean.Json) (key : String) : Option (Array Lean.Json) :=
+  match LeanAgent.Json.optVal? json key with
+  | some value =>
+      match value.getArr? with
+      | .ok arr => some arr
+      | .error _ => none
+  | none => none
+
+def firstChoice? (chunk : Lean.Json) : Option Lean.Json :=
+  match optionalArrayField chunk "choices" with
+  | some choices => choices[0]?
+  | none => none
+
+def usageFromChoice? (choice : Lean.Json) : Option LeanAgent.ProviderUsage :=
+  match LeanAgent.Json.optVal? choice "usage" with
+  | some value => some (parseUsage value)
+  | none => none
+
+def optionPrefer (first second : Option α) : Option α :=
+  match first with
+  | some value => some value
+  | none => second
+
+def reasoningDelta? (delta : Lean.Json) : Option (String × String) :=
+  match optionalStringField delta "reasoning_content" with
+  | some value => if value.isEmpty then none else some ("reasoning_content", value)
+  | none =>
+      match optionalStringField delta "reasoning" with
+      | some value => if value.isEmpty then none else some ("reasoning", value)
+      | none =>
+          match optionalStringField delta "reasoning_text" with
+          | some value => if value.isEmpty then none else some ("reasoning_text", value)
+          | none => none
+
+def applyTextDelta
+    (state : StreamingState)
+    (events : Array ParsedStreamEvent)
+    (delta : String) : StreamingState × Array ParsedStreamEvent :=
+  if delta.isEmpty then
+    (state, events)
+  else
+    let (state, index, created) := ensureBlock state .text
+    let events := if created then events.push (.textStart index) else events
+    ({ state with text := state.text ++ delta }, events.push (.textDelta index delta))
+
+def applyThinkingDelta
+    (state : StreamingState)
+    (events : Array ParsedStreamEvent)
+    (signature delta : String) : StreamingState × Array ParsedStreamEvent :=
+  if delta.isEmpty then
+    (state, events)
+  else
+    let (state, index, created) := ensureBlock state .thinking
+    let events := if created then events.push (.thinkingStart index) else events
+    let signature := state.thinkingSignature.getD signature
+    ({ state with thinking := state.thinking ++ delta, thinkingSignature := some signature },
+      events.push (.thinkingDelta index delta))
+
+def toolDeltaStreamIndex (toolDelta : Lean.Json) (fallback : Nat) : Nat :=
+  natFieldD toolDelta "index" fallback
+
+def applyToolDelta
+    (state : StreamingState)
+    (events : Array ParsedStreamEvent)
+    (toolDelta : Lean.Json) : StreamingState × Array ParsedStreamEvent :=
+  let streamIndex := toolDeltaStreamIndex toolDelta state.toolStates.size
+  let key := StreamBlockKey.tool streamIndex
+  let (state, contentIndex, created) := ensureBlock state key
+  let current := (findToolState? state.toolStates streamIndex).getD { streamIndex := streamIndex }
+  let fn := optionalObjectField toolDelta "function"
+  let name :=
+    match fn.bind (fun value => optionalStringField value "name") with
+    | some value => if current.name.isEmpty then value else current.name
+    | none => current.name
+  let id :=
+    match optionalStringField toolDelta "id" with
+    | some value => if current.id.isEmpty then value else current.id
+    | none => current.id
+  let argumentDelta :=
+    match fn.bind (fun value => optionalStringField value "arguments") with
+    | some value => value
+    | none => ""
+  let next :=
+    { current with
+      id := id
+      name := name
+      partialArguments := current.partialArguments ++ argumentDelta
+    }
+  let state := { state with toolStates := upsertToolState state.toolStates next }
+  let events := if created then events.push (.toolCallStart contentIndex) else events
+  let events :=
+    if argumentDelta.isEmpty then
+      events
+    else
+      events.push (.toolCallDelta contentIndex argumentDelta)
+  (state, events)
+
+def applyToolDeltas
+    (state : StreamingState)
+    (events : Array ParsedStreamEvent)
+    (toolDeltas : Array Lean.Json) : StreamingState × Array ParsedStreamEvent :=
+  Id.run do
+    let mut state := state
+    let mut events := events
+    for toolDelta in toolDeltas do
+      let (nextState, nextEvents) := applyToolDelta state events toolDelta
+      state := nextState
+      events := nextEvents
+    pure (state, events)
+
+def applyStreamingChunk
+    (model : String)
+    (state : StreamingState)
+    (events : Array ParsedStreamEvent)
+    (chunk : Lean.Json) : StreamingState × Array ParsedStreamEvent :=
+  let responseId := optionPrefer state.responseId (optionalStringField chunk "id")
+  let responseModel :=
+    match state.responseModel, optionalStringField chunk "model" with
+    | some value, _ => some value
+    | none, some value => if value.isEmpty || value == model then none else some value
+    | none, none => none
+  let usage := optionPrefer (parseUsage? chunk) state.usage
+  match firstChoice? chunk with
+  | none => ({ state with responseId := responseId, responseModel := responseModel, usage := usage }, events)
+  | some choice =>
+      let usage := optionPrefer (usageFromChoice? choice) usage
+      let finishReason :=
+        match optionalStringField choice "finish_reason" with
+        | some value => some value
+        | none => state.finishReason
+      let state := { state with responseId := responseId, responseModel := responseModel, usage := usage, finishReason := finishReason }
+      match optionalObjectField choice "delta" with
+      | none => (state, events)
+      | some delta =>
+          let (state, events) :=
+            match optionalStringField delta "content" with
+            | some content => applyTextDelta state events content
+            | none => (state, events)
+          let (state, events) :=
+            match reasoningDelta? delta with
+            | some (signature, value) => applyThinkingDelta state events signature value
+            | none => (state, events)
+          match optionalArrayField delta "tool_calls" with
+          | some toolDeltas => applyToolDeltas state events toolDeltas
+          | none => (state, events)
+
+def parseStreamingChunks (raw : String) : Except String (Array Lean.Json) := do
+  let mut chunks := #[]
+  for event in LeanAgent.AI.Util.SSE.parse raw do
+    let data := event.data.trimAscii.toString
+    if data == "[DONE]" then
+      pure ()
+    else
+      let json ← Lean.Json.parse event.data
+      if (LeanAgent.Json.optVal? json "error").isSome then
+        throw (LeanAgent.AI.Util.Diagnostics.providerParseErrorMessage json.compress)
+      chunks := chunks.push json
+  pure chunks
+
+def finalParsedEvents (state : StreamingState) : Except String (Array ParsedStreamEvent) := do
+  let mut events := #[]
+  for key in state.order do
+    match key with
+    | .text =>
+        match indexOfBlock? state.order .text with
+        | some index => events := events.push (.textEnd index state.text)
+        | none => pure ()
+    | .thinking =>
+        match indexOfBlock? state.order .thinking with
+        | some index => events := events.push (.thinkingEnd index state.thinking)
+        | none => pure ()
+    | .tool streamIndex =>
+        match indexOfBlock? state.order (.tool streamIndex), findToolState? state.toolStates streamIndex with
+        | some index, some toolState =>
+            let call ← toolCallFromState toolState
+            events := events.push (.toolCallEnd index call)
+        | _, _ => pure ()
+  pure events
+
+def parseStreamingEventStream
+    (api provider model : String)
+    (timestamp : Nat)
+    (raw : String) : Except String LeanAgent.AI.AssistantMessageEventStream := do
+  let chunks ← parseStreamingChunks raw
+  let mut state : StreamingState := {}
+  let mut parsedEvents : Array ParsedStreamEvent := #[]
+  for chunk in chunks do
+    let (nextState, nextEvents) := applyStreamingChunk model state parsedEvents chunk
+    state := nextState
+    parsedEvents := nextEvents
+  let finalEvents ← finalParsedEvents state
+  let allParsedEvents := parsedEvents ++ finalEvents
+  let message := messageFromStreamingState api provider model timestamp state
+  let events :=
+    #[LeanAgent.AI.AssistantMessageEvent.start message]
+      ++ allParsedEvents.map (parsedEventToAssistantEvent message)
+      ++ #[LeanAgent.AI.completionEvent message]
+  pure { events := events, finalResult := message }
 
 def parseChatCompletion (raw : String) : Except String LeanAgent.ProviderResponse := do
   let json ← Lean.Json.parse raw
