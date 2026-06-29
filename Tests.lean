@@ -3528,9 +3528,25 @@ def testOverflowClassifiesProviderErrors : IO Unit := do
       (overflowAssistantMessage .error (some "The input token count (1196265) exceeds the maximum number of tokens allowed (1048575)")))
     "expected Gemini overflow error"
   assertTrue
+    (LeanAgent.AI.Util.Overflow.isContextOverflow
+      (overflowAssistantMessage .error (some "finish_reason=model-context-window-exceeded")))
+    "expected hyphenated model context window exceeded error"
+  assertTrue
+    (LeanAgent.AI.Util.Overflow.isContextOverflow
+      (overflowAssistantMessage .error (some "context.length.exceeded by gateway")))
+    "expected dotted context length exceeded error"
+  assertTrue
+    (LeanAgent.AI.Util.Overflow.isContextOverflow
+      (overflowAssistantMessage .error (some "request-too-large: body exceeds provider size")))
+    "expected hyphenated request too large error"
+  assertTrue
     (!LeanAgent.AI.Util.Overflow.isContextOverflow
       (overflowAssistantMessage .error (some "Throttling error: Too many tokens, please wait before trying again.")))
     "expected Bedrock throttling text to be excluded"
+  assertTrue
+    (!LeanAgent.AI.Util.Overflow.isContextOverflow
+      (overflowAssistantMessage .error (some "Throttling_error: Too many tokens, please wait before trying again.")))
+    "expected separator-varied throttling text to be excluded"
   assertTrue
     (!LeanAgent.AI.Util.Overflow.isContextOverflow
       (overflowAssistantMessage .error (some "rate limit: too many tokens in flight")))

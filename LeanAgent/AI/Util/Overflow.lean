@@ -49,13 +49,25 @@ def containsAny (message : String) (patterns : List String) : Bool :=
   let lower := message.toLower
   patterns.any fun pattern => lower.contains pattern
 
+def compactOverflowText (value : String) : String :=
+  String.ofList <|
+    value.toLower.toList.filter fun char =>
+      char.isAlphanum
+
+def containsAnyCompact (message : String) (patterns : List String) : Bool :=
+  let compactMessage := compactOverflowText message
+  patterns.any fun pattern => compactMessage.contains (compactOverflowText pattern)
+
 def looksLikeInputCountOverflow (message : String) : Bool :=
   let lower := message.toLower
   lower.contains "input token count" && lower.contains "exceeds the maximum"
 
 def isOverflowErrorMessage (message : String) : Bool :=
-  !containsAny message nonOverflowPatterns &&
-    (containsAny message overflowPatterns || looksLikeInputCountOverflow message)
+  !(containsAny message nonOverflowPatterns ||
+      containsAnyCompact message nonOverflowPatterns) &&
+    (containsAny message overflowPatterns ||
+      containsAnyCompact message overflowPatterns ||
+      looksLikeInputCountOverflow message)
 
 def inputTokens (usage : Usage) : Nat :=
   usage.input + usage.cacheRead
