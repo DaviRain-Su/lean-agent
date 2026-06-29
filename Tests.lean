@@ -531,6 +531,28 @@ def testEstimateContextUsesRecentAssistantUsage : IO Unit := do
   assertTrue (estimate.trailingTokens == 2) "expected trailing tokens"
   assertTrue (estimate.lastUsageIndex == some 1) "expected assistant usage index"
 
+def testProviderEnvValueResolution : IO Unit := do
+  let ambient : String → IO (Option String) := fun name =>
+    pure
+      (if name == "API_KEY" then
+        some "ambient-secret"
+      else if name == "EMPTY" then
+        some ""
+      else
+        none)
+  let scopedEnv := #[("API_KEY", "scoped-secret"), ("EMPTY", "scoped-empty")]
+  assertTrue
+    ((← LeanAgent.AI.Util.ProviderEnv.getProviderEnvValueWith ambient "API_KEY" scopedEnv) == some "scoped-secret")
+    "expected scoped env to win"
+  assertTrue
+    ((← LeanAgent.AI.Util.ProviderEnv.getProviderEnvValueWith ambient "API_KEY") == some "ambient-secret")
+    "expected ambient env fallback"
+  assertTrue
+    ((← LeanAgent.AI.Util.ProviderEnv.getProviderEnvValueWith ambient "EMPTY") == none)
+    "expected empty ambient env to be ignored"
+  let merged := LeanAgent.AI.Util.ProviderEnv.merge #[("A", "base"), ("B", "base")] #[("B", "override"), ("C", "new")]
+  assertTrue (merged == #[("A", "base"), ("B", "override"), ("C", "new")]) "expected env merge override"
+
 def retryAssistantMessage (errorMessage : Option String) : LeanAgent.AI.AssistantMessage :=
   { content := #[]
     api := "fake"
@@ -1276,6 +1298,7 @@ def main : IO UInt32 := do
     testShortHashMatchesPi
     testEstimateUtilities
     testEstimateContextUsesRecentAssistantUsage
+    testProviderEnvValueResolution
     testRetryClassifiesAssistantErrors
     testRetryWithRetriesSucceedsAfterTransientFailures
     testRetryWithRetriesStopsOnNonRetryableFailure

@@ -214,7 +214,7 @@ should be generated or checked in as Lean data.
 | `utils/json-parse.ts` | `LeanAgent.Json` or `LeanAgent.AI.Util.JsonParse` | partial | Basic JSON helpers exist, partial JSON cleanup missing. |
 | `utils/node-http-proxy.ts` | `LeanAgent.AI.Util.Proxy` | missing | Proxy detection/config. |
 | `utils/overflow.ts` | `LeanAgent.AI.Util.Overflow` | missing | Context window overflow detection. |
-| `utils/provider-env.ts` | `LeanAgent.AI.Util.ProviderEnv` | missing | Provider-scoped env overrides. |
+| `utils/provider-env.ts` | `LeanAgent.AI.Util.ProviderEnv` | implemented | Scoped provider env lookup, ambient env fallback, empty-value suppression, and merge semantics exist. Bun-specific `/proc/self/environ` fallback is not applicable to Lean. |
 | `utils/retry.ts` | `LeanAgent.AI.Util.Retry` | partial | Retryable assistant/provider error classification, non-retryable quota guard, delay cap, and OpenAI-compatible request retry policy exist. Full Pi regex coverage and cross-provider retry integration are incomplete. |
 | `utils/sanitize-unicode.ts` | `LeanAgent.AI.Util.SanitizeUnicode` | missing | Unicode surrogate handling. |
 | `utils/typebox-helpers.ts` | `LeanAgent.AI.Schema` | missing | Lean equivalent likely JSON schema helpers. |
