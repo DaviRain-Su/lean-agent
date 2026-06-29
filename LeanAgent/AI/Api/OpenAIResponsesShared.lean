@@ -21,6 +21,16 @@ structure ParsedTextSignature where
   phase : Option String := none
 deriving BEq
 
+def encodeTextSignatureV1 (id : String) (phase : Option String := none) : String :=
+  LeanAgent.Json.obj
+    ([ ("v", LeanAgent.Json.nat 1)
+     , ("id", LeanAgent.Json.str id)
+     ] ++
+      match phase with
+      | some value => [("phase", LeanAgent.Json.str value)]
+      | none => [])
+    |>.compress
+
 def allowedOpenAIResponsesToolCallProviders : Array String :=
   #["openai", "openai-codex", "opencode"]
 

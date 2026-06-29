@@ -746,6 +746,82 @@ def testOpenAIResponsesSharedConvertsTools : IO Unit := do
       assertTrue (LeanAgent.Json.optVal? encoded "strict" == some (LeanAgent.Json.bool true)) "expected strict flag"
   | none => fail "expected encoded tool"
 
+def testOpenAIResponsesRequestPayload : IO Unit := do
+  let longSession := String.ofList (List.replicate 67 'x')
+  let expectedSession := String.ofList (List.replicate 64 'x')
+  let context : LeanAgent.AI.Context :=
+    { systemPrompt := some "Be concise."
+      messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      tools :=
+        #[ { name := "read"
+             description := "Read a file"
+             parameters := LeanAgent.Json.obj [("type", LeanAgent.Json.str "object")]
+           }
+         ]
+    }
+  let payload := LeanAgent.AI.Api.OpenAIResponses.requestToJsonWithOptions
+    responsesCodexModel
+    context
+    { maxTokens := some 123
+      temperature := some 0.2
+      sessionId := some longSession
+      cacheRetention := some .long
+      reasoningEffort := some .high
+      serviceTier := some "flex"
+    }
+  assertTrue (jsonStringField? payload "model" == some "gpt-5.5") "expected responses model id"
+  assertTrue (LeanAgent.Json.optVal? payload "stream" == some (LeanAgent.Json.bool false)) "expected non-stream request"
+  assertTrue (LeanAgent.Json.optVal? payload "store" == some (LeanAgent.Json.bool false)) "expected store=false"
+  assertTrue (jsonStringField? payload "prompt_cache_key" == some expectedSession) "expected clamped cache key"
+  assertTrue (jsonStringField? payload "prompt_cache_retention" == some "24h") "expected long cache retention"
+  assertTrue (LeanAgent.Json.optVal? payload "max_output_tokens" == some (LeanAgent.Json.nat 123))
+    "expected max output tokens"
+  assertTrue (jsonStringField? payload "service_tier" == some "flex") "expected service tier"
+  assertTrue (LeanAgent.Json.optVal? payload "temperature" |>.isSome) "expected temperature"
+  match LeanAgent.Json.optVal? payload "reasoning" with
+  | some reasoning =>
+      assertTrue (jsonStringField? reasoning "effort" == some "high") "expected reasoning effort"
+      assertTrue (jsonStringField? reasoning "summary" == some "auto") "expected default reasoning summary"
+  | none => fail "expected reasoning object"
+  match LeanAgent.Json.optVal? payload "tools" with
+  | some tools =>
+      match tools.getArr? with
+      | .ok arr => assertTrue (arr.size == 1) "expected one responses tool"
+      | .error _ => fail "expected tools array"
+  | none => fail "expected tools"
+
+def testOpenAIResponsesParsesResponse : IO Unit := do
+  let raw :=
+    "{ \"id\":\"resp_1\", \"status\":\"completed\", \"output\":[" ++
+    "{\"type\":\"reasoning\",\"id\":\"rs_1\",\"summary\":[{\"text\":\"think\"}]}," ++
+    "{\"type\":\"message\",\"id\":\"msg_1\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\"}]}," ++
+    "{\"type\":\"function_call\",\"call_id\":\"call_1\",\"id\":\"fc_1\",\"name\":\"read\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}" ++
+    "], \"usage\":{\"input_tokens\":10,\"output_tokens\":4,\"total_tokens\":14,\"input_tokens_details\":{\"cached_tokens\":2},\"output_tokens_details\":{\"reasoning_tokens\":1}} }"
+  match LeanAgent.AI.Api.OpenAIResponses.parseResponse "openai-responses" "openai-codex" "gpt-5.5" 7 raw with
+  | .ok response =>
+      assertTrue (response.responseId == some "resp_1") "expected response id"
+      assertTrue (response.stopReason == .toolUse) "expected tool-use stop reason with function call"
+      assertTrue (response.usage.input == 8) "expected cached input subtraction"
+      assertTrue (response.usage.cacheRead == 2) "expected cache read tokens"
+      assertTrue (response.usage.reasoning == some 1) "expected reasoning tokens"
+      assertTrue
+        (response.content.any fun
+          | .thinking thinking => thinking.thinking == "think" && thinking.thinkingSignature.isSome
+          | _ => false)
+        "expected reasoning block"
+      assertTrue
+        (response.content.any fun
+          | .text text => text.text == "hello" && text.textSignature.isSome
+          | _ => false)
+        "expected message text block"
+      match LeanAgent.AI.contentToolCalls response.content |>.toList with
+      | [call] =>
+          assertTrue (call.id == "call_1|fc_1") "expected responses tool call id"
+          assertTrue (LeanAgent.Json.optVal? call.arguments "path" == some (LeanAgent.Json.str "README.md"))
+            "expected parsed tool arguments"
+      | _ => fail "expected one tool call"
+  | .error err => fail s!"expected responses parse success: {err}"
+
 def testDiagnosticsExtractsProviderError : IO Unit := do
   let body := "{\"error\":{\"message\":\"rate limit exceeded\",\"type\":\"rate_limit_error\",\"code\":\"rate_limit\"}}"
   let info := LeanAgent.AI.Util.Diagnostics.providerErrorInfoFromBody body
@@ -1783,6 +1859,17 @@ def httpServerScript : String :=
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
     , "            return"
+    , "        if self.path == '/responses-runtime/responses':"
+    , "            request = json.loads(body)"
+    , "            ok = request.get('model') == 'gpt-5.5' and request.get('stream') is False and request.get('prompt_cache_key') == 'session-123'"
+    , "            text = '|'.join(['ok' if ok else 'bad', self.headers.get('session_id') or '', self.headers.get('x-client-request-id') or '', self.headers.get('X-Trace') or ''])"
+    , "            payload = json.dumps({'id': 'resp_http', 'status': 'completed', 'output': [{'type': 'message', 'id': 'msg_http', 'content': [{'type': 'output_text', 'text': text}]}], 'usage': {'input_tokens': 6, 'output_tokens': 2, 'total_tokens': 8, 'input_tokens_details': {'cached_tokens': 1}}}).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'application/json')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/large':"
     , "            payload = b'x' * 1024"
     , "            self.send_response(200)"
@@ -1999,6 +2086,38 @@ def testOpenAICompatibleStreamsUsesStreamingRuntime : IO Unit := do
     assertTrue (stream.result.api == "openai-completions") "expected runtime api"
     assertTrue (stream.result.provider == LeanAgent.Models.deepSeekProviderId) "expected runtime provider"
 
+def testOpenAIResponsesCompleteWithOptionsLocal : IO Unit := do
+  let port := 18088
+  withHttpServer port do
+    let context : LeanAgent.AI.Context :=
+      { systemPrompt := some "system"
+        messages :=
+          #[.user
+              { content := #[LeanAgent.AI.text "hello"]
+                timestamp := 1
+              }]
+      }
+    let response ← LeanAgent.AI.Api.OpenAIResponses.completeWithOptions
+      { apiKey := "test-key"
+        baseUrl := s!"http://127.0.0.1:{port}/responses-runtime"
+        timeoutSeconds := 5
+        connectTimeoutSeconds := 5
+        noProxy := some "*"
+        userAgent := "lean-agent-test/0.1.0"
+      }
+      responsesCodexModel
+      context
+      { sessionId := some "session-123"
+        cacheRetention := some .short
+        headers := #[("X-Trace", some "trace-1")]
+      }
+    assertTrue (response.responseId == some "resp_http") "expected responses response id"
+    assertTrue (LeanAgent.AI.contentPlainText response.content == "ok|session-123|session-123|trace-1")
+      "expected local responses runtime to send cache affinity and custom headers"
+    assertTrue (response.usage.input == 5) "expected cached token subtraction"
+    assertTrue (response.usage.cacheRead == 1) "expected cache read tokens"
+    assertTrue (response.usage.totalTokens == 8) "expected total tokens"
+
 def testOpenAICompletionsProviderErrorDiagnostics : IO Unit := do
   let port := 18083
   withHttpServer port do
@@ -2107,6 +2226,7 @@ def main : IO UInt32 := do
     testOpenAICompletionsSendsCustomHeaders
     testOpenAICompletionsStreamWithOptionsLocal
     testOpenAICompatibleStreamsUsesStreamingRuntime
+    testOpenAIResponsesCompleteWithOptionsLocal
     testOpenAICompletionsProviderErrorDiagnostics
     IO.println "lean-agent tests passed"
     pure 0
