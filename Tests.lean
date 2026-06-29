@@ -2207,6 +2207,25 @@ def testOAuthSuccessPageOmitsDetails : IO Unit := do
   assertTrue (!html.contains "class=\"details\"") "expected details block to be omitted"
   assertTrue (html.contains "class=\"logo\"") "expected Pi OAuth logo container"
 
+def testOAuthPKCEChallengeMatchesRfcVector : IO Unit := do
+  let verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+  let challenge ← LeanAgent.AI.OAuth.PKCE.codeChallenge verifier
+  assertTrue (challenge == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM")
+    "expected RFC 7636 S256 code challenge"
+  assertTrue (LeanAgent.AI.OAuth.PKCE.isBase64UrlNoPadding challenge)
+    "expected challenge to be base64url without padding"
+
+def testOAuthPKCEGenerateUsesBase64UrlVerifier : IO Unit := do
+  let pkce ← LeanAgent.AI.OAuth.PKCE.generatePKCE
+  assertTrue (pkce.verifier.length == 43) "expected 32 random bytes to produce 43-char verifier"
+  assertTrue (pkce.challenge.length == 43) "expected SHA-256 digest to produce 43-char challenge"
+  assertTrue (LeanAgent.AI.OAuth.PKCE.isBase64UrlNoPadding pkce.verifier)
+    "expected verifier to be base64url without padding"
+  assertTrue (LeanAgent.AI.OAuth.PKCE.isBase64UrlNoPadding pkce.challenge)
+    "expected challenge to be base64url without padding"
+  let recomputed ← LeanAgent.AI.OAuth.PKCE.codeChallenge pkce.verifier
+  assertTrue (recomputed == pkce.challenge) "expected generated challenge to match verifier"
+
 def testGitHubCopilotOAuthDomainAndBaseUrlHelpers : IO Unit := do
   assertTrue
     (LeanAgent.AI.OAuth.GitHubCopilot.normalizeDomain " https://Company.GHE.com/path?q=1 " ==
@@ -4431,6 +4450,8 @@ def main : IO UInt32 := do
     testOAuthDeviceCodeTimeouts
     testOAuthPageHtmlEscapesDynamicContent
     testOAuthSuccessPageOmitsDetails
+    testOAuthPKCEChallengeMatchesRfcVector
+    testOAuthPKCEGenerateUsesBase64UrlVerifier
     testGitHubCopilotOAuthDomainAndBaseUrlHelpers
     testGitHubCopilotOAuthParsesAvailableModels
     testGitHubCopilotOAuthModifiesModelsFromCredential

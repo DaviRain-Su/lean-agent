@@ -1,5 +1,7 @@
 #include <lean/lean.h>
 #include <curl/curl.h>
+#include <openssl/rand.h>
+#include <openssl/sha.h>
 #include <stdint.h>
 #include <limits.h>
 #include <stdio.h>
@@ -76,6 +78,89 @@ static lean_obj_res io_errorf(const char *prefix, const char *detail) {
     lean_obj_res result = io_error(message);
     free(message);
     return result;
+}
+
+static char *base64url_encode(const unsigned char *bytes, size_t len) {
+    static const char alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    size_t full_chunks = len / 3;
+    size_t rem = len % 3;
+    size_t out_len = full_chunks * 4 + (rem == 0 ? 0 : rem + 1);
+    char *out = malloc(out_len + 1);
+    if (out == NULL) {
+        return NULL;
+    }
+
+    size_t in = 0;
+    size_t pos = 0;
+    for (size_t i = 0; i < full_chunks; i++) {
+        unsigned int value =
+            ((unsigned int)bytes[in] << 16) |
+            ((unsigned int)bytes[in + 1] << 8) |
+            (unsigned int)bytes[in + 2];
+        in += 3;
+        out[pos++] = alphabet[(value >> 18) & 0x3f];
+        out[pos++] = alphabet[(value >> 12) & 0x3f];
+        out[pos++] = alphabet[(value >> 6) & 0x3f];
+        out[pos++] = alphabet[value & 0x3f];
+    }
+
+    if (rem == 1) {
+        unsigned int value = (unsigned int)bytes[in] << 16;
+        out[pos++] = alphabet[(value >> 18) & 0x3f];
+        out[pos++] = alphabet[(value >> 12) & 0x3f];
+    } else if (rem == 2) {
+        unsigned int value = ((unsigned int)bytes[in] << 16) | ((unsigned int)bytes[in + 1] << 8);
+        out[pos++] = alphabet[(value >> 18) & 0x3f];
+        out[pos++] = alphabet[(value >> 12) & 0x3f];
+        out[pos++] = alphabet[(value >> 6) & 0x3f];
+    }
+
+    out[pos] = 0;
+    return out;
+}
+
+lean_obj_res lean_agent_pkce_random_verifier(uint32_t byte_count) {
+    if (byte_count == 0) {
+        return io_error("PKCE verifier byte count must be greater than zero");
+    }
+    if (byte_count > 1024) {
+        return io_error("PKCE verifier byte count is too large");
+    }
+
+    unsigned char *bytes = malloc((size_t)byte_count);
+    if (bytes == NULL) {
+        return io_error("failed to allocate PKCE verifier bytes");
+    }
+    if (RAND_bytes(bytes, (int)byte_count) != 1) {
+        free(bytes);
+        return io_error("RAND_bytes failed while generating PKCE verifier");
+    }
+
+    char *encoded = base64url_encode(bytes, (size_t)byte_count);
+    free(bytes);
+    if (encoded == NULL) {
+        return io_error("failed to encode PKCE verifier");
+    }
+
+    lean_object *result = lean_mk_string(encoded);
+    free(encoded);
+    return lean_io_result_mk_ok(result);
+}
+
+lean_obj_res lean_agent_pkce_code_challenge(lean_obj_arg lean_verifier) {
+    const char *verifier = lean_string_cstr(lean_verifier);
+    unsigned char digest[SHA256_DIGEST_LENGTH];
+    SHA256((const unsigned char *)verifier, strlen(verifier), digest);
+
+    char *encoded = base64url_encode(digest, SHA256_DIGEST_LENGTH);
+    if (encoded == NULL) {
+        return io_error("failed to encode PKCE code challenge");
+    }
+
+    lean_object *result = lean_mk_string(encoded);
+    free(encoded);
+    return lean_io_result_mk_ok(result);
 }
 
 static CURLcode ensure_curl_global_init(void) {

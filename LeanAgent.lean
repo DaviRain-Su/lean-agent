@@ -18,6 +18,7 @@ import LeanAgent.AI.Images.Models
 import LeanAgent.AI.Images.Registry
 import LeanAgent.AI.OAuth
 import LeanAgent.AI.OAuth.GitHubCopilot
+import LeanAgent.AI.OAuth.PKCE
 import LeanAgent.AI.OAuth.Page
 import LeanAgent.AI.Providers.CloudflareAuth
 import LeanAgent.AI.Providers.Faux

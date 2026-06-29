@@ -26,8 +26,10 @@ file-backed slash commands from `.omp/commands/*.md` and skills from
 
 ## Build
 
-This project uses a small Lean FFI adapter backed by the native `libcurl` C API
-for HTTPS requests. It does not execute the `curl` command-line program.
+This project uses a small Lean FFI adapter backed by native `libcurl` and
+OpenSSL APIs. `libcurl` handles HTTPS requests, while OpenSSL provides OAuth
+PKCE randomness and SHA-256 challenges. It does not execute the `curl`
+command-line program.
 Transport defaults are intentionally conservative:
 
 - total request timeout: 120 seconds
@@ -39,14 +41,15 @@ The native adapter preserves the HTTP status code internally. The OpenAI-compati
 provider treats non-2xx responses as provider errors and includes the response
 body in the error message for debugging.
 
-On macOS, install Homebrew curl if the library is not already available:
+On macOS, install Homebrew curl and OpenSSL if the libraries are not already available:
 
 ```bash
-brew install curl
+brew install curl openssl@3
 ```
 
-On Linux, install the distro package that provides `libcurl` headers and
-`libcurl` itself, for example `libcurl4-openssl-dev` on Debian/Ubuntu.
+On Linux, install the distro packages that provide `libcurl` and OpenSSL headers
+and libraries, for example `libcurl4-openssl-dev` and `libssl-dev` on
+Debian/Ubuntu.
 
 ```bash
 lake build
