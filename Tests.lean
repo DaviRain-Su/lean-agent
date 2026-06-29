@@ -7137,7 +7137,17 @@ def testCompatApiRegistryDispatchesAndUnregisters : IO Unit := do
     { api := fakeRuntimeModel.api, streams := fakeRuntimeStreams seenApiKey }
     (some "compat-test")
   match ← LeanAgent.AI.Compat.getApiProvider? fakeRuntimeModel.api with
-  | some provider => assertTrue (provider.api == fakeRuntimeModel.api) "expected compat provider lookup"
+  | some provider =>
+      assertTrue (provider.api == fakeRuntimeModel.api) "expected compat provider lookup"
+      let stream ← provider.streamSimple
+        fakeRuntimeModel
+        { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 0 }] }
+        { apiKey := some "provider-method-key" }
+      assertTrue
+        (LeanAgent.AI.contentPlainText stream.result.content == "runtime-ok")
+        "expected compat provider lookup to expose direct streamSimple"
+      assertTrue ((← seenApiKey.get) == some "provider-method-key")
+        "expected compat provider direct streamSimple to pass api key"
   | none => fail "expected compat provider"
   let message ← LeanAgent.AI.Compat.completeSimple
     fakeRuntimeModel

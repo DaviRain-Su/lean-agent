@@ -27,6 +27,22 @@ structure ApiProvider where
   api : String
   streams : LeanAgent.Models.ProviderStreams
 
+def ApiProvider.streamSimple
+    (provider : ApiProvider)
+    (model : LeanAgent.Models.ModelInfo)
+    (context : LeanAgent.AI.Context)
+    (options : LeanAgent.AI.SimpleStreamOptions := {}) :
+    IO LeanAgent.AI.AssistantMessageEventStream :=
+  provider.streams.streamSimple model context options
+
+def ApiProvider.stream
+    (provider : ApiProvider)
+    (model : LeanAgent.Models.ModelInfo)
+    (context : LeanAgent.AI.Context)
+    (options : LeanAgent.AI.StreamOptions := {}) :
+    IO LeanAgent.AI.AssistantMessageEventStream :=
+  provider.streams.stream model context options
+
 structure RegisteredApiProvider where
   provider : ApiProvider
   sourceId : Option String := none
