@@ -6,6 +6,7 @@ import LeanAgent.AI.Util.Diagnostics
 import LeanAgent.AI.Util.Headers
 import LeanAgent.AI.Util.JsonParse
 import LeanAgent.AI.Util.Retry
+import LeanAgent.AI.Util.SSE
 import LeanAgent.Core
 import LeanAgent.Http
 import LeanAgent.Json
@@ -323,6 +324,472 @@ def parseResponse
       timestamp := timestamp
     }
 
+inductive ResponsesSlotKind where
+  | thinking
+  | text
+  | toolCall
+deriving BEq
+
+structure ResponsesOutputSlot where
+  outputIndex : Nat
+  kind : ResponsesSlotKind
+  contentIndex : Nat
+  text : String := ""
+  thinkingSignature : Option String := none
+  callId : String := ""
+  itemId : Option String := none
+  name : String := ""
+  partialArguments : String := ""
+  ended : Bool := false
+deriving BEq
+
+structure ResponsesStreamingState where
+  slots : Array ResponsesOutputSlot := #[]
+  order : Array Nat := #[]
+  responseId : Option String := none
+  usage : LeanAgent.AI.Usage := {}
+  stopReason : LeanAgent.AI.StopReason := .stop
+  sawTerminalResponseEvent : Bool := false
+deriving BEq
+
+inductive ParsedResponsesStreamEvent where
+  | textStart (contentIndex : Nat)
+  | textDelta (contentIndex : Nat) (delta : String)
+  | textEnd (contentIndex : Nat) (content : String)
+  | thinkingStart (contentIndex : Nat)
+  | thinkingDelta (contentIndex : Nat) (delta : String)
+  | thinkingEnd (contentIndex : Nat) (content : String)
+  | toolCallStart (contentIndex : Nat)
+  | toolCallDelta (contentIndex : Nat) (delta : String)
+  | toolCallEnd (contentIndex : Nat) (call : LeanAgent.AI.ToolCall)
+deriving BEq
+
+def natFieldD (json : Lean.Json) (key : String) (default : Nat := 0) : Nat :=
+  match LeanAgent.Json.optVal? json key with
+  | some value => value.getNat?.toOption.getD default
+  | none => default
+
+def optionalObjectField (json : Lean.Json) (key : String) : Option Lean.Json :=
+  match LeanAgent.Json.optVal? json key with
+  | some value =>
+      match value.getObj? with
+      | .ok _ => some value
+      | .error _ => none
+  | none => none
+
+def optionalArrayField (json : Lean.Json) (key : String) : Option (Array Lean.Json) :=
+  match LeanAgent.Json.optVal? json key with
+  | some value =>
+      match value.getArr? with
+      | .ok arr => some arr
+      | .error _ => none
+  | none => none
+
+def slotIndex? (slots : Array ResponsesOutputSlot) (outputIndex : Nat) : Option Nat :=
+  let rec loop (items : List ResponsesOutputSlot) (index : Nat) :=
+    match items with
+    | [] => none
+    | slot :: rest => if slot.outputIndex == outputIndex then some index else loop rest (index + 1)
+  loop slots.toList 0
+
+def findSlot? (state : ResponsesStreamingState) (outputIndex : Nat) :
+    Option ResponsesOutputSlot :=
+  state.slots.find? fun slot => slot.outputIndex == outputIndex
+
+def upsertSlot (state : ResponsesStreamingState) (slot : ResponsesOutputSlot) :
+    ResponsesStreamingState :=
+  let slots :=
+    if state.slots.any fun current => current.outputIndex == slot.outputIndex then
+      state.slots.map fun current =>
+        if current.outputIndex == slot.outputIndex then slot else current
+    else
+      state.slots.push slot
+  { state with slots := slots }
+
+def toolCallId (callId : String) (itemId : Option String) : String :=
+  match itemId with
+  | some id => callId ++ "|" ++ id
+  | none => callId
+
+def toolCallFromSlot (slot : ResponsesOutputSlot) : LeanAgent.AI.ToolCall :=
+  { id := toolCallId slot.callId slot.itemId
+    name := slot.name
+    arguments := parseToolArguments slot.partialArguments
+  }
+
+def contentBlockFromSlot (slot : ResponsesOutputSlot) : LeanAgent.AI.ContentBlock :=
+  match slot.kind with
+  | .thinking =>
+      .thinking
+        { thinking := slot.text
+          thinkingSignature := slot.thinkingSignature
+        }
+  | .text =>
+      .text
+        { text := slot.text
+          textSignature := slot.itemId.map LeanAgent.AI.Api.OpenAIResponsesShared.encodeTextSignatureV1
+        }
+  | .toolCall =>
+      .toolCall (toolCallFromSlot slot)
+
+def contentFromStreamingState (state : ResponsesStreamingState) :
+    Array LeanAgent.AI.ContentBlock :=
+  state.order.filterMap fun outputIndex =>
+    (findSlot? state outputIndex).map contentBlockFromSlot
+
+def finalStopReason (state : ResponsesStreamingState) : LeanAgent.AI.StopReason :=
+  if state.stopReason == .stop && state.slots.any (fun slot => slot.kind == .toolCall) then
+    .toolUse
+  else
+    state.stopReason
+
+def messageFromStreamingState
+    (api provider model : String)
+    (timestamp : Nat)
+    (state : ResponsesStreamingState) : LeanAgent.AI.AssistantMessage :=
+  { content := contentFromStreamingState state
+    api := api
+    provider := provider
+    model := model
+    responseId := state.responseId
+    usage := state.usage
+    stopReason := finalStopReason state
+    timestamp := timestamp
+  }
+
+def parsedEventToAssistantEvent
+    (message : LeanAgent.AI.AssistantMessage) :
+    ParsedResponsesStreamEvent → LeanAgent.AI.AssistantMessageEvent
+  | .textStart index => .textStart index message
+  | .textDelta index delta => .textDelta index delta message
+  | .textEnd index content => .textEnd index content message
+  | .thinkingStart index => .thinkingStart index message
+  | .thinkingDelta index delta => .thinkingDelta index delta message
+  | .thinkingEnd index content => .thinkingEnd index content message
+  | .toolCallStart index => .toolCallStart index message
+  | .toolCallDelta index delta => .toolCallDelta index delta message
+  | .toolCallEnd index call => .toolCallEnd index call message
+
+def slotKindFromItem? (item : Lean.Json) : Option ResponsesSlotKind :=
+  match optionalStringField item "type" with
+  | some "reasoning" => some .thinking
+  | some "message" => some .text
+  | some "function_call" => some .toolCall
+  | _ => none
+
+def createSlotFromItem
+    (state : ResponsesStreamingState)
+    (outputIndex : Nat)
+    (item : Lean.Json) :
+    ResponsesStreamingState × Option ResponsesOutputSlot × Bool :=
+  match findSlot? state outputIndex with
+  | some slot => (state, some slot, false)
+  | none =>
+      match slotKindFromItem? item with
+      | none => (state, none, false)
+      | some kind =>
+          let slot : ResponsesOutputSlot :=
+            { outputIndex := outputIndex
+              kind := kind
+              contentIndex := state.order.size
+              callId := optionalStringField item "call_id" |>.getD ""
+              itemId := optionalStringField item "id"
+              name := optionalStringField item "name" |>.getD ""
+              partialArguments := optionalStringField item "arguments" |>.getD ""
+            }
+          let state := { (upsertSlot state slot) with order := state.order.push outputIndex }
+          (state, some slot, true)
+
+def startEventForSlot (slot : ResponsesOutputSlot) : ParsedResponsesStreamEvent :=
+  match slot.kind with
+  | .thinking => .thinkingStart slot.contentIndex
+  | .text => .textStart slot.contentIndex
+  | .toolCall => .toolCallStart slot.contentIndex
+
+def ensureSlotFromItem
+    (state : ResponsesStreamingState)
+    (events : Array ParsedResponsesStreamEvent)
+    (outputIndex : Nat)
+    (item : Lean.Json) :
+    ResponsesStreamingState × Array ParsedResponsesStreamEvent × Option ResponsesOutputSlot :=
+  let (state, slot?, created) := createSlotFromItem state outputIndex item
+  let events :=
+    match slot?, created with
+    | some slot, true => events.push (startEventForSlot slot)
+    | _, _ => events
+  (state, events, slot?)
+
+def updateSlot
+    (state : ResponsesStreamingState)
+    (slot : ResponsesOutputSlot) : ResponsesStreamingState :=
+  upsertSlot state slot
+
+def applyTextDelta
+    (state : ResponsesStreamingState)
+    (events : Array ParsedResponsesStreamEvent)
+    (outputIndex : Nat)
+    (delta : String) :
+    ResponsesStreamingState × Array ParsedResponsesStreamEvent :=
+  if delta.isEmpty then
+    (state, events)
+  else
+    let item := LeanAgent.Json.obj [("type", LeanAgent.Json.str "message")]
+    let (state, events, slot?) := ensureSlotFromItem state events outputIndex item
+    match slot? with
+    | some slot =>
+        let slot := { slot with text := slot.text ++ delta }
+        (updateSlot state slot, events.push (.textDelta slot.contentIndex delta))
+    | none => (state, events)
+
+def applyThinkingDelta
+    (state : ResponsesStreamingState)
+    (events : Array ParsedResponsesStreamEvent)
+    (outputIndex : Nat)
+    (delta : String) :
+    ResponsesStreamingState × Array ParsedResponsesStreamEvent :=
+  if delta.isEmpty then
+    (state, events)
+  else
+    let item := LeanAgent.Json.obj [("type", LeanAgent.Json.str "reasoning")]
+    let (state, events, slot?) := ensureSlotFromItem state events outputIndex item
+    match slot? with
+    | some slot =>
+        let slot := { slot with text := slot.text ++ delta }
+        (updateSlot state slot, events.push (.thinkingDelta slot.contentIndex delta))
+    | none => (state, events)
+
+def applyToolArgumentDelta
+    (state : ResponsesStreamingState)
+    (events : Array ParsedResponsesStreamEvent)
+    (outputIndex : Nat)
+    (delta : String) :
+    ResponsesStreamingState × Array ParsedResponsesStreamEvent :=
+  if delta.isEmpty then
+    (state, events)
+  else
+    let item := LeanAgent.Json.obj
+      [ ("type", LeanAgent.Json.str "function_call")
+      , ("call_id", LeanAgent.Json.str "")
+      , ("arguments", LeanAgent.Json.str "")
+      ]
+    let (state, events, slot?) := ensureSlotFromItem state events outputIndex item
+    match slot? with
+    | some slot =>
+        let slot := { slot with partialArguments := slot.partialArguments ++ delta }
+        (updateSlot state slot, events.push (.toolCallDelta slot.contentIndex delta))
+    | none => (state, events)
+
+def startsWithString (value needle : String) : Bool :=
+  value.startsWith needle
+
+def dropPrefixChars (value needle : String) : String :=
+  String.ofList (value.toList.drop needle.length)
+
+def applyToolArgumentsDone
+    (state : ResponsesStreamingState)
+    (events : Array ParsedResponsesStreamEvent)
+    (outputIndex : Nat)
+    (arguments : String) :
+    ResponsesStreamingState × Array ParsedResponsesStreamEvent :=
+  let item := LeanAgent.Json.obj
+    [ ("type", LeanAgent.Json.str "function_call")
+    , ("call_id", LeanAgent.Json.str "")
+    , ("arguments", LeanAgent.Json.str arguments)
+    ]
+  let (state, events, slot?) := ensureSlotFromItem state events outputIndex item
+  match slot? with
+  | none => (state, events)
+  | some slot =>
+      let previous := slot.partialArguments
+      let slot := { slot with partialArguments := arguments }
+      let events :=
+        if startsWithString arguments previous then
+          let delta := dropPrefixChars arguments previous
+          if delta.isEmpty then events else events.push (.toolCallDelta slot.contentIndex delta)
+        else
+          events
+      (updateSlot state slot, events)
+
+def finalizeSlotFromItem
+    (state : ResponsesStreamingState)
+    (events : Array ParsedResponsesStreamEvent)
+    (outputIndex : Nat)
+    (item : Lean.Json) :
+    ResponsesStreamingState × Array ParsedResponsesStreamEvent :=
+  let (state, events, slot?) := ensureSlotFromItem state events outputIndex item
+  match slot? with
+  | none => (state, events)
+  | some slot =>
+      match slot.kind with
+      | .thinking =>
+          let parsedText := parseReasoningText item
+          let text := if parsedText.isEmpty then slot.text else parsedText
+          let slot := { slot with text := text, thinkingSignature := some item.compress, ended := true }
+          (updateSlot state slot, events.push (.thinkingEnd slot.contentIndex text))
+      | .text =>
+          let parsedText := parseMessageText item
+          let text := if parsedText.isEmpty then slot.text else parsedText
+          let slot :=
+            { slot with
+              text := text
+              itemId := optionalStringField item "id" <|> slot.itemId
+              ended := true
+            }
+          (updateSlot state slot, events.push (.textEnd slot.contentIndex text))
+      | .toolCall =>
+          let callId := optionalStringField item "call_id" |>.getD slot.callId
+          let itemId := optionalStringField item "id" <|> slot.itemId
+          let name := optionalStringField item "name" |>.getD slot.name
+          let partialArguments := optionalStringField item "arguments" |>.getD slot.partialArguments
+          let slot :=
+            { slot with
+              callId := callId
+              itemId := itemId
+              name := name
+              partialArguments := partialArguments
+              ended := true
+            }
+          (updateSlot state slot, events.push (.toolCallEnd slot.contentIndex (toolCallFromSlot slot)))
+
+def finalizeOpenSlots
+    (state : ResponsesStreamingState)
+    (events : Array ParsedResponsesStreamEvent) :
+    ResponsesStreamingState × Array ParsedResponsesStreamEvent :=
+  Id.run do
+    let mut state := state
+    let mut events := events
+    for outputIndex in state.order do
+      match findSlot? state outputIndex with
+      | none => pure ()
+      | some slot =>
+          if slot.ended then
+            pure ()
+          else
+            let slot := { slot with ended := true }
+            state := updateSlot state slot
+            events :=
+              match slot.kind with
+              | .thinking => events.push (.thinkingEnd slot.contentIndex slot.text)
+              | .text => events.push (.textEnd slot.contentIndex slot.text)
+              | .toolCall => events.push (.toolCallEnd slot.contentIndex (toolCallFromSlot slot))
+    pure (state, events)
+
+def responseObject? (event : Lean.Json) : Option Lean.Json :=
+  optionalObjectField event "response"
+
+def applyTerminalResponse (state : ResponsesStreamingState) (response : Lean.Json) :
+    ResponsesStreamingState :=
+  { state with
+    sawTerminalResponseEvent := true
+    responseId := optionalStringField response "id" <|> state.responseId
+    usage := parseUsage? response
+    stopReason := mapStopReason (optionalStringField response "status")
+  }
+
+def providerErrorFromFailedResponse (response : Lean.Json) : String :=
+  match optionalObjectField response "error" with
+  | some err =>
+      let code := optionalStringField err "code" |>.getD "unknown"
+      let message := optionalStringField err "message" |>.getD "no message"
+      code ++ ": " ++ message
+  | none =>
+      match optionalObjectField response "incomplete_details" with
+      | some details =>
+          match optionalStringField details "reason" with
+          | some reason => "incomplete: " ++ reason
+          | none => "Unknown error (no error details in response)"
+      | none => "Unknown error (no error details in response)"
+
+def outputIndexD (event : Lean.Json) : Nat :=
+  natFieldD event "output_index" 0
+
+def applyResponseStreamEvent
+    (state : ResponsesStreamingState)
+    (events : Array ParsedResponsesStreamEvent)
+    (event : Lean.Json) : Except String (ResponsesStreamingState × Array ParsedResponsesStreamEvent) := do
+  match optionalStringField event "type" with
+  | some "response.created" =>
+      let responseId :=
+        match responseObject? event with
+        | some response => optionalStringField response "id" <|> state.responseId
+        | none => state.responseId
+      pure ({ state with responseId := responseId }, events)
+  | some "response.output_item.added" =>
+      match optionalObjectField event "item" with
+      | some item =>
+          let (state, events, _) := ensureSlotFromItem state events (outputIndexD event) item
+          pure (state, events)
+      | none => pure (state, events)
+  | some "response.reasoning_summary_text.delta" =>
+      pure (applyThinkingDelta state events (outputIndexD event) (optionalStringField event "delta" |>.getD ""))
+  | some "response.reasoning_summary_part.done" =>
+      pure (applyThinkingDelta state events (outputIndexD event) "\n\n")
+  | some "response.reasoning_text.delta" =>
+      pure (applyThinkingDelta state events (outputIndexD event) (optionalStringField event "delta" |>.getD ""))
+  | some "response.output_text.delta" =>
+      pure (applyTextDelta state events (outputIndexD event) (optionalStringField event "delta" |>.getD ""))
+  | some "response.refusal.delta" =>
+      pure (applyTextDelta state events (outputIndexD event) (optionalStringField event "delta" |>.getD ""))
+  | some "response.function_call_arguments.delta" =>
+      pure (applyToolArgumentDelta state events (outputIndexD event) (optionalStringField event "delta" |>.getD ""))
+  | some "response.function_call_arguments.done" =>
+      pure (applyToolArgumentsDone state events (outputIndexD event) (optionalStringField event "arguments" |>.getD "{}"))
+  | some "response.output_item.done" =>
+      match optionalObjectField event "item" with
+      | some item => pure (finalizeSlotFromItem state events (outputIndexD event) item)
+      | none => pure (state, events)
+  | some "response.completed" =>
+      match responseObject? event with
+      | some response => pure (applyTerminalResponse state response, events)
+      | none => pure ({ state with sawTerminalResponseEvent := true }, events)
+  | some "response.incomplete" =>
+      match responseObject? event with
+      | some response => pure (applyTerminalResponse state response, events)
+      | none => pure ({ state with sawTerminalResponseEvent := true, stopReason := .length }, events)
+  | some "response.failed" =>
+      match responseObject? event with
+      | some response => throw (providerErrorFromFailedResponse response)
+      | none => throw "Unknown error (no error details in response)"
+  | some "error" =>
+      let code := optionalStringField event "code" |>.getD "unknown"
+      let message := optionalStringField event "message" |>.getD "Unknown error"
+      throw s!"Error Code {code}: {message}"
+  | _ => pure (state, events)
+
+def parseStreamingEvents (raw : String) : Except String (Array Lean.Json) := do
+  let mut chunks := #[]
+  for event in LeanAgent.AI.Util.SSE.parse raw do
+    let data := event.data.trimAscii.toString
+    if data == "[DONE]" then
+      pure ()
+    else
+      let json ← Lean.Json.parse event.data
+      if (LeanAgent.Json.optVal? json "error").isSome then
+        throw (LeanAgent.AI.Util.Diagnostics.providerParseErrorMessage json.compress)
+      chunks := chunks.push json
+  pure chunks
+
+def parseStreamingEventStream
+    (api provider model : String)
+    (timestamp : Nat)
+    (raw : String) : Except String LeanAgent.AI.AssistantMessageEventStream := do
+  let chunks ← parseStreamingEvents raw
+  let mut state : ResponsesStreamingState := {}
+  let mut parsedEvents : Array ParsedResponsesStreamEvent := #[]
+  for chunk in chunks do
+    let (nextState, nextEvents) ← applyResponseStreamEvent state parsedEvents chunk
+    state := nextState
+    parsedEvents := nextEvents
+  if !state.sawTerminalResponseEvent then
+    throw "OpenAI Responses stream ended before a terminal response event"
+  let (finalState, finalParsedEvents) := finalizeOpenSlots state parsedEvents
+  let message := messageFromStreamingState api provider model timestamp finalState
+  let events :=
+    #[LeanAgent.AI.AssistantMessageEvent.start message]
+      ++ finalParsedEvents.map (parsedEventToAssistantEvent message)
+      ++ #[LeanAgent.AI.completionEvent message]
+  pure { events := events, finalResult := message }
+
 def completeWithOptions
     (config : OpenAIResponsesConfig)
     (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
@@ -342,7 +809,13 @@ def completeStreamWithOptions
     (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
     (context : LeanAgent.AI.Context)
     (options : OpenAIResponsesOptions := {}) : IO LeanAgent.AI.AssistantMessageEventStream := do
-  let response ← completeWithOptions config model context options
-  pure (LeanAgent.AI.fromMessage response)
+  let payload := requestToJsonWithOptions model context options true
+  let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
+  let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
+    (runHttpJson config payload options)
+  let timestamp ← IO.monoMsNow
+  match parseStreamingEventStream model.api model.provider model.id timestamp raw with
+  | .ok stream => pure stream
+  | .error err => throw (IO.userError s!"failed to parse streaming provider response: {err}\n{raw}")
 
 end LeanAgent.AI.Api.OpenAIResponses

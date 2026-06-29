@@ -822,6 +822,99 @@ def testOpenAIResponsesParsesResponse : IO Unit := do
       | _ => fail "expected one tool call"
   | .error err => fail s!"expected responses parse success: {err}"
 
+def testOpenAIResponsesParsesStreamingTextAndUsage : IO Unit := do
+  let raw := String.intercalate "\n"
+    [ "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_stream\"}}"
+    , ""
+    , "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_stream\",\"content\":[]}}"
+    , ""
+    , "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"delta\":\"hel\"}"
+    , ""
+    , "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"delta\":\"lo\"}"
+    , ""
+    , "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_stream\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\"}]}}"
+    , ""
+    , "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_stream\",\"status\":\"completed\",\"usage\":{\"input_tokens\":20,\"output_tokens\":7,\"total_tokens\":27,\"input_tokens_details\":{\"cached_tokens\":2}}}}"
+    , ""
+    ]
+  match LeanAgent.AI.Api.OpenAIResponses.parseStreamingEventStream
+    "openai-responses" "openai" "gpt-5.5" 9 raw with
+  | .ok stream =>
+      assertTrue stream.isComplete "expected complete responses stream"
+      assertTrue (stream.result.responseId == some "resp_stream") "expected streamed response id"
+      assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "hello") "expected streamed text"
+      assertTrue (stream.result.usage.input == 18) "expected cached input subtraction"
+      assertTrue (stream.result.usage.cacheRead == 2) "expected stream cache read"
+      assertTrue
+        (stream.events.any fun
+          | .textDelta _ "hel" _ => true
+          | _ => false)
+        "expected text delta"
+      assertTrue
+        (stream.events.any fun
+          | .textEnd _ "hello" _ => true
+          | _ => false)
+        "expected text end"
+  | .error err => fail s!"expected responses stream parse success: {err}"
+
+def testOpenAIResponsesParsesStreamingToolCall : IO Unit := do
+  let args := "{\"path\":\"README.md\",\"content\":\"updated\"}"
+  let raw := String.intercalate "\n"
+    [ "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"fc_test\",\"call_id\":\"call_test\",\"name\":\"edit\",\"arguments\":\"\"}}"
+    , ""
+    , "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"delta\":\"{\\\"path\\\":\\\"README.md\\\"\"}"
+    , ""
+    , "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"delta\":\",\\\"content\\\":\\\"updated\\\"}\"}"
+    , ""
+    , "data: {\"type\":\"response.function_call_arguments.done\",\"output_index\":0,\"arguments\":\"{\\\"path\\\":\\\"README.md\\\",\\\"content\\\":\\\"updated\\\"}\"}"
+    , ""
+    , "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"fc_test\",\"call_id\":\"call_test\",\"name\":\"edit\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\",\\\"content\\\":\\\"updated\\\"}\"}}"
+    , ""
+    , "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_tool\",\"status\":\"completed\"}}"
+    , ""
+    ]
+  match LeanAgent.AI.Api.OpenAIResponses.parseStreamingEventStream
+    "openai-responses" "openai" "gpt-5.5" 10 raw with
+  | .ok stream =>
+      assertTrue (stream.result.stopReason == .toolUse) "expected tool-use stop reason"
+      match LeanAgent.AI.contentToolCalls stream.result.content |>.toList with
+      | [call] =>
+          assertTrue (call.id == "call_test|fc_test") "expected responses tool id"
+          assertTrue (call.name == "edit") "expected tool name"
+          assertTrue (LeanAgent.Json.optVal? call.arguments "path" == some (LeanAgent.Json.str "README.md"))
+            "expected parsed path"
+          assertTrue (LeanAgent.Json.optVal? call.arguments "content" == some (LeanAgent.Json.str "updated"))
+            "expected parsed content"
+      | _ => fail "expected one streamed tool call"
+      assertTrue
+        (stream.events.any fun
+          | .toolCallDelta _ "{\"path\":\"README.md\"" _ => true
+          | _ => false)
+        "expected first tool delta"
+      assertTrue
+        (stream.events.any fun
+          | .toolCallEnd _ call _ => call.arguments.compress == (LeanAgent.AI.Api.OpenAIResponses.parseToolArguments args).compress
+          | _ => false)
+        "expected tool end"
+  | .error err => fail s!"expected streaming tool parse success: {err}"
+
+def testOpenAIResponsesStreamingRequiresTerminalEvent : IO Unit := do
+  let raw := String.intercalate "\n"
+    [ "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_early\"}}"
+    , ""
+    , "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"id\":\"rs_early\",\"summary\":[]}}"
+    , ""
+    , "data: {\"type\":\"response.reasoning_text.delta\",\"output_index\":0,\"delta\":\"partial\"}"
+    , ""
+    ]
+  match LeanAgent.AI.Api.OpenAIResponses.parseStreamingEventStream
+    "openai-responses" "openai" "gpt-5.5" 11 raw with
+  | .ok _ => fail "expected early EOF streaming parse to fail"
+  | .error err =>
+      assertTrue
+        (err.contains "OpenAI Responses stream ended before a terminal response event")
+        "expected terminal event error"
+
 def testDiagnosticsExtractsProviderError : IO Unit := do
   let body := "{\"error\":{\"message\":\"rate limit exceeded\",\"type\":\"rate_limit_error\",\"code\":\"rate_limit\"}}"
   let info := LeanAgent.AI.Util.Diagnostics.providerErrorInfoFromBody body
@@ -1870,6 +1963,22 @@ def httpServerScript : String :=
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
     , "            return"
+    , "        if self.path == '/responses-stream/responses':"
+    , "            request = json.loads(body)"
+    , "            text = 'streamed' if request.get('stream') is True else 'not-streaming'"
+    , "            payload = ("
+    , "                'data: ' + json.dumps({'type': 'response.output_item.added', 'output_index': 0, 'item': {'type': 'message', 'id': 'msg_stream_http', 'content': []}}) + '\\n\\n' +"
+    , "                'data: ' + json.dumps({'type': 'response.output_text.delta', 'output_index': 0, 'delta': text[:6]}) + '\\n\\n' +"
+    , "                'data: ' + json.dumps({'type': 'response.output_text.delta', 'output_index': 0, 'delta': text[6:]}) + '\\n\\n' +"
+    , "                'data: ' + json.dumps({'type': 'response.output_item.done', 'output_index': 0, 'item': {'type': 'message', 'id': 'msg_stream_http', 'content': [{'type': 'output_text', 'text': text}]}}) + '\\n\\n' +"
+    , "                'data: ' + json.dumps({'type': 'response.completed', 'response': {'id': 'resp_stream_http', 'status': 'completed', 'usage': {'input_tokens': 4, 'output_tokens': 2, 'total_tokens': 6}}}) + '\\n\\n'"
+    , "            ).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'text/event-stream')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/large':"
     , "            payload = b'x' * 1024"
     , "            self.send_response(200)"
@@ -2118,6 +2227,37 @@ def testOpenAIResponsesCompleteWithOptionsLocal : IO Unit := do
     assertTrue (response.usage.cacheRead == 1) "expected cache read tokens"
     assertTrue (response.usage.totalTokens == 8) "expected total tokens"
 
+def testOpenAIResponsesStreamWithOptionsLocal : IO Unit := do
+  let port := 18089
+  withHttpServer port do
+    let context : LeanAgent.AI.Context :=
+      { systemPrompt := some "system"
+        messages :=
+          #[.user
+              { content := #[LeanAgent.AI.text "hello"]
+                timestamp := 1
+              }]
+      }
+    let stream ← LeanAgent.AI.Api.OpenAIResponses.completeStreamWithOptions
+      { apiKey := "test-key"
+        baseUrl := s!"http://127.0.0.1:{port}/responses-stream"
+        timeoutSeconds := 5
+        connectTimeoutSeconds := 5
+        noProxy := some "*"
+        userAgent := "lean-agent-test/0.1.0"
+      }
+      responsesCodexModel
+      context
+    assertTrue stream.isComplete "expected completed responses stream"
+    assertTrue (stream.result.responseId == some "resp_stream_http") "expected streamed response id"
+    assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "streamed") "expected streamed response text"
+    assertTrue (stream.result.usage.totalTokens == 6) "expected streaming usage"
+    assertTrue
+      (stream.events.any fun
+        | .textDelta _ "stream" _ => true
+        | _ => false)
+      "expected streamed text delta"
+
 def testOpenAICompletionsProviderErrorDiagnostics : IO Unit := do
   let port := 18083
   withHttpServer port do
@@ -2174,6 +2314,11 @@ def main : IO UInt32 := do
     testOpenAIResponsesSharedNormalizesForeignToolCallIds
     testOpenAIResponsesSharedOmitsDifferentModelFcItemId
     testOpenAIResponsesSharedConvertsTools
+    testOpenAIResponsesRequestPayload
+    testOpenAIResponsesParsesResponse
+    testOpenAIResponsesParsesStreamingTextAndUsage
+    testOpenAIResponsesParsesStreamingToolCall
+    testOpenAIResponsesStreamingRequiresTerminalEvent
     testDiagnosticsExtractsProviderError
     testOpenAICompletionsParsesUsage
     testShortHashMatchesPi
@@ -2227,6 +2372,7 @@ def main : IO UInt32 := do
     testOpenAICompletionsStreamWithOptionsLocal
     testOpenAICompatibleStreamsUsesStreamingRuntime
     testOpenAIResponsesCompleteWithOptionsLocal
+    testOpenAIResponsesStreamWithOptionsLocal
     testOpenAICompletionsProviderErrorDiagnostics
     IO.println "lean-agent tests passed"
     pure 0
