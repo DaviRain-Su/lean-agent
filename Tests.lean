@@ -4298,6 +4298,38 @@ def fakeAuthContext : LeanAgent.AI.Auth.AuthContext :=
     fileExists := fun _ => pure false
   }
 
+def testAuthDefaultContextEnvAndExpandHomePath : IO Unit := do
+  let ctx := LeanAgent.AI.Auth.defaultProviderAuthContext
+  match ← IO.getEnv "HOME" with
+  | some home =>
+      let trimmedHome := home.trimAscii.toString
+      let envHome ← ctx.env "HOME"
+      if trimmedHome.isEmpty then
+        assertTrue envHome.isNone "expected empty HOME env to be suppressed"
+      else
+        assertTrue (envHome == some trimmedHome) "expected default auth context to read trimmed env vars"
+      let slashHomePath ← LeanAgent.AI.Auth.expandHomePath "~/test"
+      assertTrue (slashHomePath.toString == home ++ "/test")
+        "expected expandHomePath to resolve ~/ to HOME dir"
+      let bareHomePath ← LeanAgent.AI.Auth.expandHomePath "~test"
+      assertTrue (bareHomePath.toString == home ++ "test")
+        "expected expandHomePath to match Pi's leading-~ replacement"
+  | none =>
+      let bareHomePath ← LeanAgent.AI.Auth.expandHomePath "~test"
+      assertTrue (bareHomePath.toString == "~test")
+        "expected expandHomePath to preserve ~ without HOME"
+  let explicitPath ← LeanAgent.AI.Auth.expandHomePath "/tmp/explicit"
+  assertTrue (explicitPath.toString == "/tmp/explicit")
+    "expected expandHomePath to preserve absolute non-home paths"
+  IO.FS.withTempDir fun root => do
+    let existing := root / "auth-context.txt"
+    IO.FS.writeFile existing "ok"
+    assertTrue (← ctx.fileExists existing.toString)
+      "expected default auth context to find existing files"
+    let missingExists ← ctx.fileExists (root / "missing.txt").toString
+    assertTrue (!missingExists)
+      "expected default auth context to return false for missing files"
+
 def fakeProviderAuth : LeanAgent.AI.Auth.ProviderAuth :=
   { apiKey := some (LeanAgent.AI.Auth.envApiKeyAuth "Fake API key" #["FAKE_API_KEY"]) }
 
@@ -8459,6 +8491,7 @@ def main : IO UInt32 := do
     testDefaultModelsRegistersOpenAICompatibleFamily
     testOpenAICompatibleProviderFactoriesMatchCatalog
     testLegacySelectionRejectsAnthropicProvider
+    testAuthDefaultContextEnvAndExpandHomePath
     testModelsAuthEnvApiKeyResolution
     testModelsAuthStoredCredentialWins
     testFileCredentialStoreRoundTrip
