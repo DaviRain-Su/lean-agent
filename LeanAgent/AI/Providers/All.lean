@@ -19,6 +19,8 @@ import LeanAgent.AI.Providers.Mistral
 import LeanAgent.AI.Providers.MoonshotAI
 import LeanAgent.AI.Providers.MoonshotAICN
 import LeanAgent.AI.Providers.NVIDIA
+import LeanAgent.AI.Providers.OpenCode
+import LeanAgent.AI.Providers.OpenCodeGo
 import LeanAgent.AI.Providers.OpenAI
 import LeanAgent.AI.Providers.OpenAICodex
 import LeanAgent.AI.Providers.OpenRouterImages
@@ -83,6 +85,8 @@ def catalogProviders : IO (Array LeanAgent.Models.Provider) := do
      , ← LeanAgent.AI.Providers.MiniMax.provider
      , ← LeanAgent.AI.Providers.MiniMaxCN.provider
      , ← LeanAgent.AI.Providers.VercelAIGateway.provider
+     , ← LeanAgent.AI.Providers.OpenCode.provider
+     , ← LeanAgent.AI.Providers.OpenCodeGo.provider
      , ← LeanAgent.AI.Providers.Google.provider
      , ← LeanAgent.AI.Providers.GoogleVertex.provider
      , ← LeanAgent.AI.Providers.Mistral.provider

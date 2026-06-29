@@ -37,6 +37,9 @@ structure OpenAICompletionsOptions extends LeanAgent.AI.SimpleStreamOptions wher
   reasoningEffort : Option LeanAgent.AI.ThinkingLevel := none
   reasoningEffortValue : Option String := none
   offReasoningEffortValue : Option String := none
+  supportsReasoningEffort : Bool := true
+  maxTokensField : String := "max_tokens"
+  supportsLongCacheRetention : Bool := true
 
 def optionsFromSimple (options : LeanAgent.AI.SimpleStreamOptions) : OpenAICompletionsOptions :=
   { temperature := options.temperature
@@ -151,19 +154,25 @@ def requestOptionFields (options : OpenAICompletionsOptions) : List (String × L
     | none => []
   let maxTokenFields :=
     match options.maxTokens with
-    | some maxTokens => [("max_tokens", LeanAgent.Json.nat maxTokens)]
+    | some maxTokens => [(options.maxTokensField, LeanAgent.Json.nat maxTokens)]
     | none => []
   let reasoning :=
-    match options.reasoningEffort with
-    | some effort => some effort
-    | none => options.reasoning
+    if options.supportsReasoningEffort then
+      match options.reasoningEffort with
+      | some effort => some effort
+      | none => options.reasoning
+    else
+      none
   let reasoningFields :=
     match reasoning with
     | some effort => [("reasoning_effort", LeanAgent.Json.str (requestReasoningEffortString options effort))]
     | none =>
-        match options.offReasoningEffortValue with
-        | some effort => [("reasoning_effort", LeanAgent.Json.str effort)]
-        | none => []
+        if options.supportsReasoningEffort then
+          match options.offReasoningEffortValue with
+          | some effort => [("reasoning_effort", LeanAgent.Json.str effort)]
+          | none => []
+        else
+          []
   temperatureFields ++ maxTokenFields ++ reasoningFields
 
 def cacheRetentionFromEnv? (env : Array (String × String)) : Option LeanAgent.AI.CacheRetention :=
@@ -183,7 +192,9 @@ def promptCacheFields (baseUrl : String) (options : OpenAICompletionsOptions) : 
   if retention == .none then
     []
   else
-    let supportsPromptCacheKey := baseUrl.contains "api.openai.com" || retention == .long
+    let supportsPromptCacheKey :=
+      baseUrl.contains "api.openai.com" ||
+        (retention == .long && options.supportsLongCacheRetention)
     let keyFields :=
       if supportsPromptCacheKey then
         match LeanAgent.AI.Api.OpenAIPromptCache.clampKey options.sessionId with
@@ -192,7 +203,7 @@ def promptCacheFields (baseUrl : String) (options : OpenAICompletionsOptions) : 
       else
         []
     let retentionFields :=
-      if retention == .long then
+      if retention == .long && options.supportsLongCacheRetention then
         [("prompt_cache_retention", LeanAgent.Json.str "24h")]
       else
         []

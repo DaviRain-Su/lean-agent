@@ -336,6 +336,32 @@ def testOpenAICompletionsUsesMappedReasoningEffort : IO Unit := do
     (LeanAgent.Json.optVal? offJson "reasoning_effort" == some (LeanAgent.Json.str "none"))
     "expected mapped off reasoning effort"
 
+def testOpenAICompletionsCompatSuppressesUnsupportedFields : IO Unit := do
+  let options : LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsOptions :=
+    { maxTokens := some 123
+      reasoningEffort := some .high
+      maxTokensField := "max_completion_tokens"
+      supportsReasoningEffort := false
+      supportsLongCacheRetention := false
+      cacheRetention := some .long
+      sessionId := some "session-compat"
+    }
+  let json := LeanAgent.AI.Api.OpenAICompletions.requestToJsonWithOptions
+    (basicProviderRequest)
+    options
+    "https://opencode.ai/zen/v1"
+  assertTrue (LeanAgent.Json.optVal? json "max_tokens" == none)
+    "expected compat max_tokens field to be omitted"
+  assertTrue
+    (LeanAgent.Json.optVal? json "max_completion_tokens" == some (LeanAgent.Json.nat 123))
+    "expected compat max_completion_tokens field"
+  assertTrue (LeanAgent.Json.optVal? json "reasoning_effort" == none)
+    "expected unsupported reasoning effort to be omitted"
+  assertTrue (LeanAgent.Json.optVal? json "prompt_cache_key" == none)
+    "expected unsupported long-cache key to be omitted"
+  assertTrue (LeanAgent.Json.optVal? json "prompt_cache_retention" == none)
+    "expected unsupported long-cache retention to be omitted"
+
 def testOpenAICompletionsPromptCacheKey : IO Unit := do
   let options : LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsOptions :=
     { sessionId := some "session-123" }
@@ -3004,6 +3030,8 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
      , LeanAgent.Models.minimaxProviderId
      , LeanAgent.Models.minimaxCNProviderId
      , LeanAgent.Models.vercelAIGatewayProviderId
+     , LeanAgent.Models.opencodeProviderId
+     , LeanAgent.Models.opencodeGoProviderId
      , LeanAgent.Models.googleProviderId
      , LeanAgent.Models.googleVertexProviderId
      , LeanAgent.Models.mistralProviderId
@@ -3056,6 +3084,14 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
     "expected Vercel AI Gateway default model"
   assertTrue (rendered.contains "vercel-ai-gateway/anthropic/claude-opus-4.7")
     "expected Vercel AI Gateway Anthropic model"
+  assertTrue (rendered.contains "opencode/gpt-5")
+    "expected OpenCode Responses model"
+  assertTrue (rendered.contains "opencode/gemini-3-flash")
+    "expected OpenCode Google model"
+  assertTrue (rendered.contains "opencode/claude-opus-4-7")
+    "expected OpenCode Anthropic model"
+  assertTrue (rendered.contains "opencode-go/minimax-m3")
+    "expected OpenCode Go Anthropic model"
   assertTrue (rendered.contains "google/gemini-2.5-flash") "expected Google Gemini model"
   assertTrue (rendered.contains "google-vertex/gemini-2.5-flash") "expected Google Vertex model"
   assertTrue (rendered.contains "mistral/devstral-medium-latest") "expected Mistral model"
@@ -3081,6 +3117,10 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
   assertTrue (LeanAgent.Models.minimaxCNModels.size == 3) "expected generated MiniMax CN model catalog"
   assertTrue (LeanAgent.Models.vercelAIGatewayModels.size == 185)
     "expected generated Vercel AI Gateway model catalog"
+  assertTrue (LeanAgent.Models.opencodeModels.size == 45)
+    "expected generated OpenCode model catalog"
+  assertTrue (LeanAgent.Models.opencodeGoModels.size == 13)
+    "expected generated OpenCode Go model catalog"
   match LeanAgent.Models.ProviderCatalog.model? catalog LeanAgent.Models.antLingProviderId "Ring-2.6-1T" with
   | some model =>
       assertTrue model.reasoning "expected Ant Ling Ring reasoning metadata"
@@ -3135,6 +3175,13 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
       assertTrue (provider.defaultModel == LeanAgent.Models.vercelAIGatewayDefaultModel)
         "expected Vercel AI Gateway default model"
   | none => fail "expected Vercel AI Gateway provider by env"
+  match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.opencodeApiKeyEnv with
+  | some provider =>
+      assertTrue (provider.id == LeanAgent.Models.opencodeProviderId)
+        "expected OpenCode provider by shared env"
+      assertTrue (provider.defaultModel == LeanAgent.Models.opencodeDefaultModel)
+        "expected OpenCode default model"
+  | none => fail "expected OpenCode provider by env"
   match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.googleApiKeyEnv with
   | some provider =>
       assertTrue (provider.id == LeanAgent.Models.googleProviderId) "expected Google provider by env"
@@ -3169,7 +3216,7 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
 def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
   let collection ← LeanAgent.Models.createDefaultModels
   let providers ← collection.getProviders
-  assertTrue (providers.size == 30) "expected default provider family"
+  assertTrue (providers.size == 32) "expected default provider family"
   match ← collection.getModel? LeanAgent.Models.openAIProviderId LeanAgent.Models.openAIDefaultModel with
   | some model =>
       assertTrue (model.api == "openai-responses") "expected OpenAI Responses API"
@@ -3252,6 +3299,36 @@ def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
       assertTrue ((LeanAgent.Models.thinkingLevelMapValue? model (.level .xhigh)) == some (some "xhigh"))
         "expected Vercel AI Gateway xhigh mapping"
   | none => fail "expected Vercel AI Gateway model in default runtime collection"
+  match ← collection.getModel? LeanAgent.Models.opencodeProviderId "gpt-5" with
+  | some model =>
+      assertTrue (model.api == "openai-responses")
+        "expected OpenCode Responses API"
+      assertTrue (model.baseUrl == "https://opencode.ai/zen/v1")
+        "expected OpenCode Responses base URL"
+      assertTrue ((LeanAgent.Models.thinkingLevelMapValue? model .off) == some none)
+        "expected OpenCode Responses off reasoning metadata"
+  | none => fail "expected OpenCode Responses model in default runtime collection"
+  match ← collection.getModel? LeanAgent.Models.opencodeProviderId "gemini-3.1-pro" with
+  | some model =>
+      assertTrue (model.api == LeanAgent.AI.Api.GoogleGenerativeAI.api)
+        "expected OpenCode Google Generative AI API"
+      assertTrue ((LeanAgent.Models.thinkingLevelMapValue? model (.level .low)) == some (some "LOW"))
+        "expected OpenCode Gemini thinking metadata"
+  | none => fail "expected OpenCode Gemini model in default runtime collection"
+  match ← collection.getModel? LeanAgent.Models.opencodeProviderId "grok-build-0.1" with
+  | some model =>
+      assertTrue (!model.compat.supportsReasoningEffort)
+        "expected OpenCode reasoning effort compat metadata"
+      assertTrue (model.input.contains "image")
+        "expected OpenCode image input metadata"
+  | none => fail "expected OpenCode OpenAI-compatible model in default runtime collection"
+  match ← collection.getModel? LeanAgent.Models.opencodeGoProviderId "minimax-m3" with
+  | some model =>
+      assertTrue (model.api == LeanAgent.AI.Api.AnthropicMessages.api)
+        "expected OpenCode Go Anthropic Messages API"
+      assertTrue (model.contextWindow == 512000)
+        "expected OpenCode Go MiniMax context metadata"
+  | none => fail "expected OpenCode Go Anthropic model in default runtime collection"
   match ← collection.getModel? LeanAgent.Models.anthropicProviderId LeanAgent.Models.anthropicDefaultModel with
   | some model =>
       assertTrue (model.api == LeanAgent.AI.Api.AnthropicMessages.api) "expected Anthropic Messages API"
@@ -3402,6 +3479,8 @@ def testOpenAICompatibleProviderFactoriesMatchCatalog : IO Unit := do
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.MiniMax.provider LeanAgent.Models.minimaxProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.MiniMaxCN.provider LeanAgent.Models.minimaxCNProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.VercelAIGateway.provider LeanAgent.Models.vercelAIGatewayProviderInfo
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.OpenCode.provider LeanAgent.Models.opencodeProviderInfo
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.OpenCodeGo.provider LeanAgent.Models.opencodeGoProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Google.provider LeanAgent.Models.googleProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.GoogleVertex.provider LeanAgent.Models.googleVertexProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Mistral.provider LeanAgent.Models.mistralProviderInfo
@@ -4263,6 +4342,10 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
     "expected all providers to include MiniMax CN catalog provider"
   assertTrue (providerIds.contains LeanAgent.Models.vercelAIGatewayProviderId)
     "expected all providers to include Vercel AI Gateway catalog provider"
+  assertTrue (providerIds.contains LeanAgent.Models.opencodeProviderId)
+    "expected all providers to include OpenCode catalog provider"
+  assertTrue (providerIds.contains LeanAgent.Models.opencodeGoProviderId)
+    "expected all providers to include OpenCode Go catalog provider"
   let openAICompatibleAdditions :=
     #[ LeanAgent.Models.antLingProviderId
      , LeanAgent.Models.huggingFaceProviderId
@@ -4364,6 +4447,18 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
         "expected Vercel AI Gateway builtin model"
   | none => fail "expected Vercel AI Gateway builtin model lookup"
   match LeanAgent.AI.Providers.All.getBuiltinModel?
+    LeanAgent.Models.opencodeProviderId
+    LeanAgent.Models.opencodeDefaultModel with
+  | some model =>
+      assertTrue (model.api == "openai-completions") "expected OpenCode builtin model"
+  | none => fail "expected OpenCode builtin model lookup"
+  match LeanAgent.AI.Providers.All.getBuiltinModel?
+    LeanAgent.Models.opencodeGoProviderId
+    LeanAgent.Models.opencodeGoDefaultModel with
+  | some model =>
+      assertTrue (model.api == "openai-completions") "expected OpenCode Go builtin model"
+  | none => fail "expected OpenCode Go builtin model lookup"
+  match LeanAgent.AI.Providers.All.getBuiltinModel?
     LeanAgent.AI.Providers.CloudflareAIGateway.providerId
     "gpt-4o-mini" with
   | some model =>
@@ -4371,7 +4466,7 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
   | none => fail "expected Cloudflare AI Gateway builtin model lookup"
   let collection ← LeanAgent.AI.Providers.All.builtinModels none fakeCloudflareAuthContext
   let providers ← collection.getProviders
-  assertTrue (providers.size == 32) "expected implemented builtin text providers"
+  assertTrue (providers.size == 34) "expected implemented builtin text providers"
   match ← collection.getProvider? LeanAgent.AI.Providers.CloudflareWorkersAI.providerId with
   | some _ => pure ()
   | none => fail "expected Workers AI provider in builtin collection"
@@ -4446,6 +4541,12 @@ def testEnvApiKeysProviderMap : IO Unit := do
     (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "vercel-ai-gateway" == some #[LeanAgent.Models.vercelAIGatewayApiKeyEnv])
     "expected Vercel AI Gateway env var"
   assertTrue
+    (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "opencode" == some #[LeanAgent.Models.opencodeApiKeyEnv])
+    "expected OpenCode env var"
+  assertTrue
+    (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "opencode-go" == some #[LeanAgent.Models.opencodeGoApiKeyEnv])
+    "expected OpenCode Go env var"
+  assertTrue
     (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "google" == some #[LeanAgent.Models.googleApiKeyEnv])
     "expected Google Gemini env var"
   assertTrue
@@ -4482,6 +4583,10 @@ def testEnvApiKeysProviderMap : IO Unit := do
     "vercel-ai-gateway"
     #[("AI_GATEWAY_API_KEY", "vercel-token")]
   assertTrue (vercelKey == some "vercel-token") "expected configured Vercel AI Gateway API key"
+  let opencodeGoKey ← LeanAgent.AI.EnvApiKeys.getEnvApiKey
+    "opencode-go"
+    #[("OPENCODE_API_KEY", "opencode-token")]
+  assertTrue (opencodeGoKey == some "opencode-token") "expected configured OpenCode Go API key"
   let missing ← LeanAgent.AI.EnvApiKeys.findEnvKeys "unknown-provider" #[]
   assertTrue (missing == none) "expected stable missing provider result"
 
@@ -6747,6 +6852,7 @@ def main : IO UInt32 := do
     testOpenAICompletionsIncludesEmptyToolsForToolHistory
     testOpenAICompletionsSerializesOptions
     testOpenAICompletionsUsesMappedReasoningEffort
+    testOpenAICompletionsCompatSuppressesUnsupportedFields
     testOpenAICompletionsPromptCacheKey
     testOpenAICompletionsPromptCacheLongRetention
     testOpenAICompletionsPromptCacheClampsKey

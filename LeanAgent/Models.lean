@@ -95,6 +95,16 @@ def vercelAIGatewayApiKeyEnv : String := "AI_GATEWAY_API_KEY"
 def vercelAIGatewayDefaultModel : String := "alibaba/qwen-3-14b"
 def vercelAIGatewayBaseUrl : String := "https://ai-gateway.vercel.sh"
 
+def opencodeProviderId : String := "opencode"
+def opencodeApiKeyEnv : String := "OPENCODE_API_KEY"
+def opencodeDefaultModel : String := "big-pickle"
+def opencodeBaseUrl : String := "https://opencode.ai/zen"
+
+def opencodeGoProviderId : String := "opencode-go"
+def opencodeGoApiKeyEnv : String := opencodeApiKeyEnv
+def opencodeGoDefaultModel : String := "deepseek-v4-flash"
+def opencodeGoBaseUrl : String := "https://opencode.ai/zen/go"
+
 def googleProviderId : String := "google"
 def googleApiKeyEnv : String := "GEMINI_API_KEY"
 def googleDefaultModel : String := "gemini-2.5-flash"
@@ -183,6 +193,9 @@ structure ModelCompat where
   supportsDeveloperRole : Bool := true
   requiresReasoningContentOnAssistantMessages : Bool := false
   thinkingFormat : Option String := none
+  supportsReasoningEffort : Bool := true
+  maxTokensField : String := "max_tokens"
+  supportsLongCacheRetention : Bool := true
   supportsTemperature : Bool := true
   forceAdaptiveThinking : Bool := false
 deriving Repr, BEq
@@ -304,6 +317,28 @@ def catalogAnthropicMessagesModel
     contextWindow := contextWindow
     maxTokens := maxTokens
     reasoning := reasoning
+    thinkingLevelMap := thinkingLevelMap
+    input := input
+  }
+
+def catalogModel
+    (providerId id name api baseUrl : String)
+    (inputCost outputCost cacheReadCost cacheWriteCost : Float)
+    (contextWindow maxTokens : Nat)
+    (reasoning : Bool := true)
+    (compat : ModelCompat := {})
+    (thinkingLevelMap : Array LeanAgent.AI.ThinkingLevelMapEntry := #[])
+    (input : Array String := #["text"]) : ModelInfo :=
+  { id := id
+    name := name
+    provider := providerId
+    api := api
+    baseUrl := baseUrl
+    cost := cost inputCost outputCost cacheReadCost cacheWriteCost
+    contextWindow := contextWindow
+    maxTokens := maxTokens
+    reasoning := reasoning
+    compat := compat
     thinkingLevelMap := thinkingLevelMap
     input := input
   }
@@ -996,6 +1031,72 @@ def vercelAIGatewayModels : Array ModelInfo :=
    , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "zai/glm-5v-turbo" "GLM 5V Turbo" 1.2 4.0 0.24 0.0 200000 128000 true #[] #["text", "image"]
    ]
 
+def opencodeModels : Array ModelInfo :=
+  #[
+   catalogModel opencodeProviderId "big-pickle" "Big Pickle" "openai-completions" "https://opencode.ai/zen/v1" 0.0 0.0 0.0 0.0 200000 32000 true { supportsStore := false, supportsDeveloperRole := false } #[] #["text"]
+   , catalogModel opencodeProviderId "claude-haiku-4-5" "Claude Haiku 4.5" "anthropic-messages" "https://opencode.ai/zen" 1.0 5.0 0.1 1.25 200000 64000 true {} #[] #["text", "image"]
+   , catalogModel opencodeProviderId "claude-opus-4-1" "Claude Opus 4.1" "anthropic-messages" "https://opencode.ai/zen" 15.0 75.0 1.5 18.75 200000 32000 true {} #[] #["text", "image"]
+   , catalogModel opencodeProviderId "claude-opus-4-5" "Claude Opus 4.5" "anthropic-messages" "https://opencode.ai/zen" 5.0 25.0 0.5 6.25 200000 64000 true {} #[] #["text", "image"]
+   , catalogModel opencodeProviderId "claude-opus-4-6" "Claude Opus 4.6" "anthropic-messages" "https://opencode.ai/zen" 5.0 25.0 0.5 6.25 1000000 128000 true { forceAdaptiveThinking := true } #[{ level := .level .xhigh, mapped := some "max" }] #["text", "image"]
+   , catalogModel opencodeProviderId "claude-opus-4-7" "Claude Opus 4.7" "anthropic-messages" "https://opencode.ai/zen" 5.0 25.0 0.5 6.25 1000000 128000 true { supportsTemperature := false, forceAdaptiveThinking := true } #[{ level := .level .xhigh, mapped := some "xhigh" }] #["text", "image"]
+   , catalogModel opencodeProviderId "claude-opus-4-8" "Claude Opus 4.8" "anthropic-messages" "https://opencode.ai/zen" 5.0 25.0 0.5 6.25 1000000 128000 true { supportsTemperature := false, forceAdaptiveThinking := true } #[{ level := .level .xhigh, mapped := some "xhigh" }] #["text", "image"]
+   , catalogModel opencodeProviderId "claude-sonnet-4" "Claude Sonnet 4" "anthropic-messages" "https://opencode.ai/zen" 3.0 15.0 0.3 3.75 200000 64000 true {} #[] #["text", "image"]
+   , catalogModel opencodeProviderId "claude-sonnet-4-5" "Claude Sonnet 4.5" "anthropic-messages" "https://opencode.ai/zen" 3.0 15.0 0.3 3.75 200000 64000 true {} #[] #["text", "image"]
+   , catalogModel opencodeProviderId "claude-sonnet-4-6" "Claude Sonnet 4.6" "anthropic-messages" "https://opencode.ai/zen" 3.0 15.0 0.3 3.75 1000000 64000 true { forceAdaptiveThinking := true } #[] #["text", "image"]
+   , catalogModel opencodeProviderId "deepseek-v4-flash" "DeepSeek V4 Flash" "openai-completions" "https://opencode.ai/zen/v1" 0.14 0.28 0.028 0.0 1000000 384000 true { supportsStore := false, supportsDeveloperRole := false, requiresReasoningContentOnAssistantMessages := true, supportsLongCacheRetention := false } #[{ level := .level .minimal, mapped := none }, { level := .level .low, mapped := none }, { level := .level .medium, mapped := none }, { level := .level .high, mapped := some "high" }, { level := .level .xhigh, mapped := some "max" }] #["text"]
+   , catalogModel opencodeProviderId "deepseek-v4-flash-free" "DeepSeek V4 Flash Free" "openai-completions" "https://opencode.ai/zen/v1" 0.0 0.0 0.0 0.0 200000 128000 true { supportsStore := false, supportsDeveloperRole := false, requiresReasoningContentOnAssistantMessages := true } #[{ level := .level .minimal, mapped := none }, { level := .level .low, mapped := none }, { level := .level .medium, mapped := none }, { level := .level .high, mapped := some "high" }, { level := .level .xhigh, mapped := some "max" }] #["text"]
+   , catalogModel opencodeProviderId "deepseek-v4-pro" "DeepSeek V4 Pro" "openai-completions" "https://opencode.ai/zen/v1" 1.74 3.84 0.145 0.0 1000000 384000 true { supportsStore := false, supportsDeveloperRole := false, requiresReasoningContentOnAssistantMessages := true, supportsLongCacheRetention := false } #[{ level := .level .minimal, mapped := none }, { level := .level .low, mapped := none }, { level := .level .medium, mapped := none }, { level := .level .high, mapped := some "high" }, { level := .level .xhigh, mapped := some "max" }] #["text"]
+   , catalogModel opencodeProviderId "gemini-3-flash" "Gemini 3 Flash" "google-generative-ai" "https://opencode.ai/zen/v1" 0.5 3.0 0.05 0.0 1048576 65536 true {} #[{ level := .off, mapped := none }] #["text", "image"]
+   , catalogModel opencodeProviderId "gemini-3.1-pro" "Gemini 3.1 Pro Preview" "google-generative-ai" "https://opencode.ai/zen/v1" 2.0 12.0 0.2 0.0 1048576 65536 true {} #[{ level := .off, mapped := none }, { level := .level .minimal, mapped := none }, { level := .level .low, mapped := some "LOW" }, { level := .level .medium, mapped := none }, { level := .level .high, mapped := some "HIGH" }] #["text", "image"]
+   , catalogModel opencodeProviderId "gemini-3.5-flash" "Gemini 3.5 Flash" "google-generative-ai" "https://opencode.ai/zen/v1" 1.5 9.0 0.15 0.0 1048576 65536 true {} #[{ level := .off, mapped := none }] #["text", "image"]
+   , catalogModel opencodeProviderId "glm-5" "GLM-5" "openai-completions" "https://opencode.ai/zen/v1" 1.0 3.2 0.2 0.0 204800 131072 true { supportsStore := false, supportsDeveloperRole := false } #[] #["text"]
+   , catalogModel opencodeProviderId "glm-5.1" "GLM-5.1" "openai-completions" "https://opencode.ai/zen/v1" 1.4 4.4 0.26 0.0 204800 131072 true { supportsStore := false, supportsDeveloperRole := false } #[] #["text"]
+   , catalogModel opencodeProviderId "glm-5.2" "GLM-5.2" "openai-completions" "https://opencode.ai/zen/v1" 1.4 4.4 0.26 0.0 1000000 131072 true { supportsStore := false, supportsDeveloperRole := false } #[] #["text"]
+   , catalogModel opencodeProviderId "gpt-5" "GPT-5" "openai-responses" "https://opencode.ai/zen/v1" 1.07 8.5 0.107 0.0 400000 128000 true {} #[{ level := .off, mapped := none }] #["text", "image"]
+   , catalogModel opencodeProviderId "gpt-5-codex" "GPT-5 Codex" "openai-responses" "https://opencode.ai/zen/v1" 1.07 8.5 0.107 0.0 400000 128000 true {} #[{ level := .off, mapped := none }] #["text", "image"]
+   , catalogModel opencodeProviderId "gpt-5-nano" "GPT-5 Nano" "openai-responses" "https://opencode.ai/zen/v1" 0.05 0.4 0.005 0.0 400000 128000 true {} #[{ level := .off, mapped := none }] #["text", "image"]
+   , catalogModel opencodeProviderId "gpt-5.1" "GPT-5.1" "openai-responses" "https://opencode.ai/zen/v1" 1.07 8.5 0.107 0.0 400000 128000 true {} #[{ level := .off, mapped := none }] #["text", "image"]
+   , catalogModel opencodeProviderId "gpt-5.1-codex" "GPT-5.1 Codex" "openai-responses" "https://opencode.ai/zen/v1" 1.07 8.5 0.107 0.0 400000 128000 true {} #[{ level := .off, mapped := none }] #["text", "image"]
+   , catalogModel opencodeProviderId "gpt-5.1-codex-max" "GPT-5.1 Codex Max" "openai-responses" "https://opencode.ai/zen/v1" 1.25 10.0 0.125 0.0 400000 128000 true {} #[{ level := .off, mapped := none }] #["text", "image"]
+   , catalogModel opencodeProviderId "gpt-5.1-codex-mini" "GPT-5.1 Codex Mini" "openai-responses" "https://opencode.ai/zen/v1" 0.25 2.0 0.025 0.0 400000 128000 true {} #[{ level := .off, mapped := none }] #["text", "image"]
+   , catalogModel opencodeProviderId "gpt-5.2" "GPT-5.2" "openai-responses" "https://opencode.ai/zen/v1" 1.75 14.0 0.175 0.0 400000 128000 true {} #[{ level := .off, mapped := none }, { level := .level .xhigh, mapped := some "xhigh" }] #["text", "image"]
+   , catalogModel opencodeProviderId "gpt-5.2-codex" "GPT-5.2 Codex" "openai-responses" "https://opencode.ai/zen/v1" 1.75 14.0 0.175 0.0 400000 128000 true {} #[{ level := .off, mapped := none }, { level := .level .xhigh, mapped := some "xhigh" }] #["text", "image"]
+   , catalogModel opencodeProviderId "gpt-5.3-codex" "GPT-5.3 Codex" "openai-responses" "https://opencode.ai/zen/v1" 1.75 14.0 0.175 0.0 400000 128000 true {} #[{ level := .off, mapped := none }, { level := .level .xhigh, mapped := some "xhigh" }] #["text", "image"]
+   , catalogModel opencodeProviderId "gpt-5.4" "GPT-5.4" "openai-responses" "https://opencode.ai/zen/v1" 2.5 15.0 0.25 0.0 1000000 128000 true {} #[{ level := .off, mapped := none }, { level := .level .xhigh, mapped := some "xhigh" }] #["text", "image"]
+   , catalogModel opencodeProviderId "gpt-5.4-mini" "GPT-5.4 mini" "openai-responses" "https://opencode.ai/zen/v1" 0.75 4.5 0.075 0.0 400000 128000 true {} #[{ level := .off, mapped := none }, { level := .level .xhigh, mapped := some "xhigh" }] #["text", "image"]
+   , catalogModel opencodeProviderId "gpt-5.4-nano" "GPT-5.4 nano" "openai-responses" "https://opencode.ai/zen/v1" 0.2 1.25 0.02 0.0 400000 128000 true {} #[{ level := .off, mapped := none }, { level := .level .xhigh, mapped := some "xhigh" }] #["text", "image"]
+   , catalogModel opencodeProviderId "gpt-5.4-pro" "GPT-5.4 Pro" "openai-responses" "https://opencode.ai/zen/v1" 30.0 180.0 30.0 0.0 1050000 128000 true {} #[{ level := .off, mapped := none }, { level := .level .xhigh, mapped := some "xhigh" }] #["text", "image"]
+   , catalogModel opencodeProviderId "gpt-5.5" "GPT-5.5" "openai-responses" "https://opencode.ai/zen/v1" 5.0 30.0 0.5 0.0 1000000 128000 true {} #[{ level := .off, mapped := none }, { level := .level .xhigh, mapped := some "xhigh" }] #["text", "image"]
+   , catalogModel opencodeProviderId "gpt-5.5-pro" "GPT-5.5 Pro" "openai-responses" "https://opencode.ai/zen/v1" 30.0 180.0 30.0 0.0 1050000 128000 true {} #[{ level := .off, mapped := none }, { level := .level .xhigh, mapped := some "xhigh" }, { level := .level .minimal, mapped := none }, { level := .level .low, mapped := none }] #["text", "image"]
+   , catalogModel opencodeProviderId "grok-build-0.1" "Grok Build 0.1" "openai-completions" "https://opencode.ai/zen/v1" 1.0 2.0 0.2 0.0 256000 256000 true { supportsStore := false, supportsDeveloperRole := false, supportsReasoningEffort := false } #[{ level := .off, mapped := none }, { level := .level .minimal, mapped := none }, { level := .level .low, mapped := none }, { level := .level .medium, mapped := none }] #["text", "image"]
+   , catalogModel opencodeProviderId "kimi-k2.5" "Kimi K2.5" "openai-completions" "https://opencode.ai/zen/v1" 0.6 3.0 0.08 0.0 262144 65536 true { supportsStore := false, supportsDeveloperRole := false, supportsLongCacheRetention := false } #[] #["text", "image"]
+   , catalogModel opencodeProviderId "kimi-k2.6" "Kimi K2.6" "openai-completions" "https://opencode.ai/zen/v1" 0.95 4.0 0.16 0.0 262144 65536 true { supportsStore := false, supportsDeveloperRole := false, thinkingFormat := some "deepseek", supportsReasoningEffort := false, supportsLongCacheRetention := false } #[] #["text", "image"]
+   , catalogModel opencodeProviderId "mimo-v2.5-free" "MiMo V2.5 Free" "openai-completions" "https://opencode.ai/zen/v1" 0.0 0.0 0.0 0.0 200000 32000 true { supportsStore := false, supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogModel opencodeProviderId "minimax-m2.5" "MiniMax M2.5" "openai-completions" "https://opencode.ai/zen/v1" 0.3 1.2 0.06 0.0 204800 131072 true { supportsStore := false, supportsDeveloperRole := false } #[] #["text"]
+   , catalogModel opencodeProviderId "minimax-m2.7" "MiniMax M2.7" "openai-completions" "https://opencode.ai/zen/v1" 0.3 1.2 0.06 0.0 204800 131072 true { supportsStore := false, supportsDeveloperRole := false, supportsLongCacheRetention := false } #[] #["text"]
+   , catalogModel opencodeProviderId "nemotron-3-ultra-free" "Nemotron 3 Ultra Free" "openai-completions" "https://opencode.ai/zen/v1" 0.0 0.0 0.0 0.0 1000000 128000 true { supportsStore := false, supportsDeveloperRole := false } #[] #["text"]
+   , catalogModel opencodeProviderId "north-mini-code-free" "North Mini Code Free" "openai-completions" "https://opencode.ai/zen/v1" 0.0 0.0 0.0 0.0 256000 64000 true { supportsStore := false, supportsDeveloperRole := false } #[] #["text"]
+   , catalogModel opencodeProviderId "qwen3.5-plus" "Qwen3.5 Plus" "anthropic-messages" "https://opencode.ai/zen" 0.2 1.2 0.02 0.25 262144 65536 true {} #[] #["text", "image"]
+   , catalogModel opencodeProviderId "qwen3.6-plus" "Qwen3.6 Plus" "anthropic-messages" "https://opencode.ai/zen" 0.5 3.0 0.05 0.625 262144 65536 true {} #[] #["text", "image"]
+   ]
+
+def opencodeGoModels : Array ModelInfo :=
+  #[
+   catalogModel opencodeGoProviderId "deepseek-v4-flash" "DeepSeek V4 Flash" "openai-completions" "https://opencode.ai/zen/go/v1" 0.14 0.28 0.0028 0.0 1000000 384000 true { supportsStore := false, supportsDeveloperRole := false, requiresReasoningContentOnAssistantMessages := true, thinkingFormat := some "deepseek" } #[{ level := .level .minimal, mapped := none }, { level := .level .low, mapped := none }, { level := .level .medium, mapped := none }, { level := .level .high, mapped := some "high" }, { level := .level .xhigh, mapped := some "max" }] #["text"]
+   , catalogModel opencodeGoProviderId "deepseek-v4-pro" "DeepSeek V4 Pro" "openai-completions" "https://opencode.ai/zen/go/v1" 1.74 3.48 0.0145 0.0 1000000 384000 true { supportsStore := false, supportsDeveloperRole := false, requiresReasoningContentOnAssistantMessages := true, thinkingFormat := some "deepseek" } #[{ level := .level .minimal, mapped := none }, { level := .level .low, mapped := none }, { level := .level .medium, mapped := none }, { level := .level .high, mapped := some "high" }, { level := .level .xhigh, mapped := some "max" }] #["text"]
+   , catalogModel opencodeGoProviderId "glm-5.1" "GLM-5.1" "openai-completions" "https://opencode.ai/zen/go/v1" 1.4 4.4 0.26 0.0 202752 32768 true { supportsStore := false, supportsDeveloperRole := false } #[] #["text"]
+   , catalogModel opencodeGoProviderId "glm-5.2" "GLM-5.2" "openai-completions" "https://opencode.ai/zen/go/v1" 1.4 4.4 0.26 0.0 1000000 131072 true { supportsStore := false, supportsDeveloperRole := false } #[{ level := .off, mapped := none }, { level := .level .minimal, mapped := none }, { level := .level .low, mapped := none }, { level := .level .medium, mapped := none }, { level := .level .high, mapped := some "high" }, { level := .level .xhigh, mapped := some "max" }] #["text"]
+   , catalogModel opencodeGoProviderId "kimi-k2.6" "Kimi K2.6" "openai-completions" "https://opencode.ai/zen/go/v1" 0.95 4.0 0.16 0.0 262144 65536 true { supportsStore := false, supportsDeveloperRole := false, thinkingFormat := some "deepseek", supportsReasoningEffort := false, supportsLongCacheRetention := false } #[{ level := .level .minimal, mapped := none }, { level := .level .low, mapped := none }, { level := .level .medium, mapped := none }] #["text", "image"]
+   , catalogModel opencodeGoProviderId "kimi-k2.7-code" "Kimi K2.7 Code" "openai-completions" "https://opencode.ai/zen/go/v1" 0.95 4.0 0.19 0.0 262144 262144 true { supportsStore := false, supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogModel opencodeGoProviderId "mimo-v2.5" "MiMo V2.5" "openai-completions" "https://opencode.ai/zen/go/v1" 0.14 0.28 0.0028 0.0 1000000 128000 true { supportsStore := false, supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogModel opencodeGoProviderId "mimo-v2.5-pro" "MiMo V2.5 Pro" "openai-completions" "https://opencode.ai/zen/go/v1" 1.74 3.48 0.0145 0.0 1048576 128000 true { supportsStore := false, supportsDeveloperRole := false } #[] #["text"]
+   , catalogModel opencodeGoProviderId "minimax-m2.7" "MiniMax M2.7" "openai-completions" "https://opencode.ai/zen/go/v1" 0.3 1.2 0.06 0.0 204800 131072 true { supportsStore := false, supportsDeveloperRole := false } #[] #["text"]
+   , catalogModel opencodeGoProviderId "minimax-m3" "MiniMax M3 (3x usage)" "anthropic-messages" "https://opencode.ai/zen/go" 0.1 0.4 0.02 0.0 512000 131072 true {} #[] #["text", "image"]
+   , catalogModel opencodeGoProviderId "qwen3.6-plus" "Qwen3.6 Plus" "openai-completions" "https://opencode.ai/zen/go/v1" 0.5 3.0 0.05 0.625 1000000 65536 true { supportsStore := false, supportsDeveloperRole := false, thinkingFormat := some "qwen" } #[] #["text", "image"]
+   , catalogModel opencodeGoProviderId "qwen3.7-max" "Qwen3.7 Max" "anthropic-messages" "https://opencode.ai/zen/go" 2.5 7.5 0.5 3.125 1000000 65536 true {} #[] #["text"]
+   , catalogModel opencodeGoProviderId "qwen3.7-plus" "Qwen3.7 Plus" "anthropic-messages" "https://opencode.ai/zen/go" 0.4 1.6 0.04 0.5 1000000 65536 true {} #[] #["text", "image"]
+   ]
+
 def googleModel
     (id name : String)
     (inputCost outputCost cacheReadCost cacheWriteCost : Float)
@@ -1674,6 +1775,24 @@ def vercelAIGatewayProviderInfo : ProviderInfo :=
     models := vercelAIGatewayModels
   }
 
+def opencodeProviderInfo : ProviderInfo :=
+  { id := opencodeProviderId
+    name := "OpenCode Zen"
+    baseUrl := opencodeBaseUrl
+    apiKeyEnv := opencodeApiKeyEnv
+    defaultModel := opencodeDefaultModel
+    models := opencodeModels
+  }
+
+def opencodeGoProviderInfo : ProviderInfo :=
+  { id := opencodeGoProviderId
+    name := "OpenCode Zen Go"
+    baseUrl := opencodeGoBaseUrl
+    apiKeyEnv := opencodeGoApiKeyEnv
+    defaultModel := opencodeGoDefaultModel
+    models := opencodeGoModels
+  }
+
 def googleProviderInfo : ProviderInfo :=
   { id := googleProviderId
     name := "Google"
@@ -1743,6 +1862,8 @@ def defaultCatalog : ProviderCatalog :=
      , minimaxProviderInfo
      , minimaxCNProviderInfo
      , vercelAIGatewayProviderInfo
+     , opencodeProviderInfo
+     , opencodeGoProviderInfo
      , googleProviderInfo
      , googleVertexProviderInfo
      , mistralProviderInfo
@@ -1969,6 +2090,9 @@ def openAICompletionsOptionsFromSimple
   { apiOptions with
     reasoningEffortValue := reasoningValue
     offReasoningEffortValue := offValue
+    supportsReasoningEffort := model.compat.supportsReasoningEffort
+    maxTokensField := model.compat.maxTokensField
+    supportsLongCacheRetention := model.compat.supportsLongCacheRetention
   }
 
 def thinkingLevelIndex? : LeanAgent.AI.ModelThinkingLevel → Option Nat

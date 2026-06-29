@@ -50,6 +50,8 @@ import LeanAgent.AI.Providers.Mistral
 import LeanAgent.AI.Providers.MoonshotAI
 import LeanAgent.AI.Providers.MoonshotAICN
 import LeanAgent.AI.Providers.NVIDIA
+import LeanAgent.AI.Providers.OpenCode
+import LeanAgent.AI.Providers.OpenCodeGo
 import LeanAgent.AI.Providers.OpenAI
 import LeanAgent.AI.Providers.OpenAICodex
 import LeanAgent.AI.Providers.OpenRouterImages
