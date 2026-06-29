@@ -2471,6 +2471,48 @@ def testCloudflareStoredCredentialResolution : IO Unit := do
       assertTrue (result.source == some "stored credential") "expected stored Cloudflare source"
   | none => fail "expected stored Cloudflare auth result"
 
+def testCloudflareProviderFactoriesExposeModelsAndAuth : IO Unit := do
+  let workers ← LeanAgent.AI.Providers.CloudflareWorkersAI.provider
+  assertTrue (workers.id == "cloudflare-workers-ai") "expected Workers AI provider id"
+  assertTrue (workers.name == "Cloudflare Workers AI") "expected Workers AI provider name"
+  let workersModels ← workers.getModels
+  match workersModels.find? (fun model => model.id == "@cf/openai/gpt-oss-120b") with
+  | some model =>
+      assertTrue (model.api == "openai-completions") "expected Workers AI OpenAI-compatible API"
+      assertTrue (model.baseUrl == LeanAgent.AI.Api.Cloudflare.workersAIBaseUrl)
+        "expected Workers AI base URL template"
+      let collection ← LeanAgent.Models.createModels none fakeCloudflareAuthContext
+      let (requestModel, options) ← collection.applyAuth workers model {}
+      assertTrue
+        (requestModel.baseUrl == "https://api.cloudflare.com/client/v4/accounts/acct-env/ai/v1")
+        "expected Workers AI factory auth to resolve account base URL"
+      assertTrue (options.apiKey == some "cf-env-key") "expected Workers AI factory auth API key"
+  | none => fail "expected Workers AI GPT OSS model"
+  let gateway ← LeanAgent.AI.Providers.CloudflareAIGateway.provider
+  assertTrue (gateway.id == "cloudflare-ai-gateway") "expected AI Gateway provider id"
+  assertTrue (gateway.name == "Cloudflare AI Gateway") "expected AI Gateway provider name"
+  let gatewayModels ← gateway.getModels
+  assertTrue (gatewayModels.any (fun model => model.api == "openai-responses"))
+    "expected AI Gateway Responses models"
+  assertTrue (gatewayModels.any (fun model => model.api == "openai-completions"))
+    "expected AI Gateway OpenAI-compatible models"
+  match gatewayModels.find? (fun model => model.id == "gpt-4o-mini") with
+  | some model =>
+      assertTrue (model.baseUrl == LeanAgent.AI.Api.Cloudflare.aiGatewayOpenAIBaseUrl)
+        "expected AI Gateway OpenAI base URL template"
+      let collection ← LeanAgent.Models.createModels none fakeCloudflareAuthContext
+      let (requestModel, options) ← collection.applyAuth gateway model {}
+      assertTrue
+        (requestModel.baseUrl == "https://gateway.ai.cloudflare.com/v1/acct-env/gateway-env/openai")
+        "expected AI Gateway factory auth to resolve gateway base URL"
+      assertTrue options.apiKey.isNone "expected AI Gateway factory auth to suppress bearer API key"
+      assertTrue
+        (headerValueOpt? options.headers "cf-aig-authorization" == some (some "Bearer cf-env-key"))
+        "expected AI Gateway factory auth header"
+      assertTrue (headerValueOpt? options.headers "Authorization" == some (some ""))
+        "expected AI Gateway factory auth to suppress Authorization"
+  | none => fail "expected AI Gateway GPT-4o mini model"
+
 def testEnvApiKeysProviderMap : IO Unit := do
   assertTrue
     (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "github-copilot" == some #["COPILOT_GITHUB_TOKEN"])
@@ -4502,6 +4544,7 @@ def main : IO UInt32 := do
     testCloudflareWorkersAIAuthResolution
     testCloudflareAIGatewayAuthResolution
     testCloudflareStoredCredentialResolution
+    testCloudflareProviderFactoriesExposeModelsAndAuth
     testEnvApiKeysProviderMap
     testEnvApiKeysPrefersAnthropicOAuthToken
     testEnvApiKeysAmbientAuthMarkers
