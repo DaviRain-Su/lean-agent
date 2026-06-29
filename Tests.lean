@@ -1052,7 +1052,11 @@ def testAnthropicMessagesRequestPayload : IO Unit := do
 def testAnthropicMessagesCompatOptions : IO Unit := do
   let model : LeanAgent.Models.ModelInfo :=
     { LeanAgent.Models.anthropicSonnet45 with
-      compat := { forceAdaptiveThinking := true, supportsTemperature := false }
+      compat :=
+        { forceAdaptiveThinking := true
+          supportsTemperature := false
+          sendSessionAffinityHeaders := true
+        }
       thinkingLevelMap := #[{ level := .level .xhigh, mapped := some "max" }]
     }
   let options := LeanAgent.Models.anthropicMessagesOptionsFromSimple
@@ -1067,6 +1071,8 @@ def testAnthropicMessagesCompatOptions : IO Unit := do
     "expected adaptive Anthropic thinking to omit budget tokens"
   assertTrue (!options.supportsTemperature)
     "expected Anthropic compat to disable temperature"
+  assertTrue options.sendSessionAffinityHeaders
+    "expected Anthropic session affinity compat to map into options"
   let payload := LeanAgent.AI.Api.AnthropicMessages.requestToJsonWithOptions
     model.toModelRef
     model.input
@@ -1113,6 +1119,29 @@ def testAnthropicMessagesHeaders : IO Unit := do
   assertTrue
     (headerValueCaseInsensitive? oauthHeaders "anthropic-beta" == some "claude-code-20250219,oauth-2025-04-20")
     "expected OAuth beta headers"
+  let affinityHeaders := LeanAgent.AI.Api.AnthropicMessages.requestHeaders
+    { apiKey := "anthropic-key" }
+    { sessionId := some "session-anthropic"
+      sendSessionAffinityHeaders := true
+    }
+  assertTrue (headerValueCaseInsensitive? affinityHeaders "x-session-affinity" == some "session-anthropic")
+    "expected Anthropic session affinity header"
+  let overriddenAffinity := LeanAgent.AI.Api.AnthropicMessages.requestHeaders
+    { apiKey := "anthropic-key" }
+    { sessionId := some "session-anthropic"
+      sendSessionAffinityHeaders := true
+      headers := #[("x-session-affinity", some "caller-session")]
+    }
+  assertTrue (headerValueCaseInsensitive? overriddenAffinity "x-session-affinity" == some "caller-session")
+    "expected caller to override Anthropic session affinity header"
+  let disabledAffinity := LeanAgent.AI.Api.AnthropicMessages.requestHeaders
+    { apiKey := "anthropic-key" }
+    { sessionId := some "session-anthropic"
+      cacheRetention := some .none
+      sendSessionAffinityHeaders := true
+    }
+  assertTrue (headerValueCaseInsensitive? disabledAffinity "x-session-affinity" == none)
+    "expected cacheRetention none to omit Anthropic session affinity header"
 
 def testAnthropicMessagesParsesResponse : IO Unit := do
   let raw :=
@@ -5898,7 +5927,7 @@ def httpServerScript : String :=
     , "            return"
     , "        if self.path == '/anthropic-stream/v1/messages':"
     , "            request = json.loads(body)"
-    , "            text = '|'.join([request.get('model') or '', str(request.get('stream')), self.headers.get('x-api-key') or '', self.headers.get('anthropic-version') or '', self.headers.get('X-Trace') or ''])"
+    , "            text = '|'.join([request.get('model') or '', str(request.get('stream')), self.headers.get('x-api-key') or '', self.headers.get('anthropic-version') or '', self.headers.get('X-Trace') or '', self.headers.get('x-session-affinity') or ''])"
     , "            payload = ("
     , "                'event: message_start\\n' +"
     , "                'data: ' + json.dumps({'type': 'message_start', 'message': {'id': 'msg_anthropic_http', 'model': request.get('model') or '', 'usage': {'input_tokens': 4}}}) + '\\n\\n' +"
@@ -6726,15 +6755,38 @@ def testAnthropicMessagesStreamWithOptionsLocal : IO Unit := do
     assertTrue (stream.result.responseId == some "msg_anthropic_http") "expected Anthropic response id"
     assertTrue
       (LeanAgent.AI.contentPlainText stream.result.content ==
-        "claude-sonnet-4-5|True|anthropic-key|2023-06-01|trace-anthropic")
+        "claude-sonnet-4-5|True|anthropic-key|2023-06-01|trace-anthropic|")
       "expected Anthropic model, stream flag, x-api-key, version header, and custom header"
     assertTrue (stream.result.usage.input == 4) "expected Anthropic local input usage"
     assertTrue (stream.result.usage.output == 2) "expected Anthropic local output usage"
     assertTrue
       (stream.events.any fun
-        | .textDelta _ "claude-sonnet-4-5|True|anthropic-key|2023-06-01|trace-anthropic" _ => true
+        | .textDelta _ "claude-sonnet-4-5|True|anthropic-key|2023-06-01|trace-anthropic|" _ => true
         | _ => false)
       "expected Anthropic local text delta"
+    let affinityStream ← LeanAgent.AI.Api.AnthropicMessages.completeStreamWithOptions
+      { apiKey := "anthropic-key"
+        baseUrl := s!"http://127.0.0.1:{port}/anthropic-stream/v1"
+        timeoutSeconds := 5
+        connectTimeoutSeconds := 5
+        noProxy := some "*"
+        userAgent := "lean-agent-test/0.1.0"
+      }
+      anthropicModelRef
+      #["text", "image"]
+      64000
+      true
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+      { sessionId := some "session-anthropic"
+        sendSessionAffinityHeaders := true
+        headers := #[("X-Trace", some "trace-anthropic"), ("x-session-affinity", some "caller-session")]
+      }
+    assertTrue
+      (LeanAgent.AI.contentPlainText affinityStream.result.content ==
+        "claude-sonnet-4-5|True|anthropic-key|2023-06-01|trace-anthropic|caller-session")
+      "expected Anthropic session affinity header with caller override"
 
 def testGoogleGenerativeAIStreamWithOptionsLocal : IO Unit := do
   let port := 18098

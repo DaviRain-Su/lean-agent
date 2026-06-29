@@ -41,6 +41,7 @@ structure AnthropicMessagesOptions extends LeanAgent.AI.SimpleStreamOptions wher
   thinkingEffort : Option String := none
   thinkingDisplay : Option String := none
   supportsTemperature : Bool := true
+  sendSessionAffinityHeaders : Bool := false
 
 def optionsFromSimple (options : LeanAgent.AI.SimpleStreamOptions) : AnthropicMessagesOptions :=
   { temperature := options.temperature
@@ -378,14 +379,22 @@ def requestHeaders
        ]
     else
       #[("x-api-key", config.apiKey)]
-  LeanAgent.AI.Util.Headers.merge
+  let sessionHeaders :=
+    if options.sendSessionAffinityHeaders && options.cacheRetention != some .none then
+      match options.sessionId with
+      | some sessionId => #[("x-session-affinity", sessionId)]
+      | none => #[]
+    else
+      #[]
+  LeanAgent.AI.Util.Headers.mergeProvider
     (config.headers ++
       (authHeaders ++
+      sessionHeaders ++
       #[ ("anthropic-version", anthropicVersion)
        , ("accept", "application/json")
        , ("anthropic-dangerous-direct-browser-access", "true")
        ]))
-    (LeanAgent.AI.Util.Headers.providerHeadersToArray options.headers)
+    options.headers
 
 def runHttpJson
     (config : AnthropicMessagesConfig)
