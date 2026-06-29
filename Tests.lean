@@ -8491,6 +8491,7 @@ def httpServerScript : String :=
     , "            ).encode('utf-8')"
     , "            self.send_response(200)"
     , "            self.send_header('Content-Type', 'text/event-stream')"
+    , "            self.send_header('X-Hook-Response', 'codex')"
     , "            self.send_header('Content-Length', str(len(payload)))"
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
@@ -8534,6 +8535,7 @@ def httpServerScript : String :=
     , "            ).encode('utf-8')"
     , "            self.send_response(200)"
     , "            self.send_header('Content-Type', 'text/event-stream')"
+    , "            self.send_header('X-Hook-Response', 'azure-responses')"
     , "            self.send_header('Content-Length', str(len(payload)))"
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
@@ -8550,6 +8552,7 @@ def httpServerScript : String :=
     , "            ).encode('utf-8')"
     , "            self.send_response(200)"
     , "            self.send_header('Content-Type', 'text/event-stream')"
+    , "            self.send_header('X-Hook-Response', 'google')"
     , "            self.send_header('Content-Length', str(len(payload)))"
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
@@ -8635,6 +8638,7 @@ def httpServerScript : String :=
     , "            ).encode('utf-8')"
     , "            self.send_response(200)"
     , "            self.send_header('Content-Type', 'text/event-stream')"
+    , "            self.send_header('X-Hook-Response', 'vertex')"
     , "            self.send_header('Content-Length', str(len(payload)))"
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
@@ -8675,6 +8679,7 @@ def httpServerScript : String :=
     , "            ).encode('utf-8')"
     , "            self.send_response(200)"
     , "            self.send_header('Content-Type', 'text/event-stream')"
+    , "            self.send_header('X-Hook-Response', 'anthropic')"
     , "            self.send_header('Content-Length', str(len(payload)))"
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
@@ -8721,6 +8726,7 @@ def httpServerScript : String :=
     , "            ).encode('utf-8')"
     , "            self.send_response(200)"
     , "            self.send_header('Content-Type', 'text/event-stream')"
+    , "            self.send_header('X-Hook-Response', 'mistral')"
     , "            self.send_header('Content-Length', str(len(payload)))"
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
@@ -10570,6 +10576,7 @@ def testOpenAICodexProviderDispatchesSSEWithStoredOAuth : IO Unit := do
 def testCompatOpenAICodexResponsesBuiltinDispatch : IO Unit := do
   let port := 18098
   withHttpServer port do
+    let sawResponse ← IO.mkRef false
     let model :=
       { LeanAgent.Models.openAICodexModel "gpt-5.5" "GPT-5.5" 5.0 30.0 0.5 0.0 272000 128000 with
         baseUrl := s!"http://127.0.0.1:{port}/codex-provider"
@@ -10584,11 +10591,19 @@ def testCompatOpenAICodexResponsesBuiltinDispatch : IO Unit := do
       { apiKey := some fakeOpenAICodexJwt
         sessionId := some "codex-session"
         reasoning := some .minimal
+        onResponse := some fun response ref => do
+          assertTrue (ref.api == LeanAgent.AI.Api.OpenAICodexResponses.api)
+            "expected Codex response hook model api"
+          assertTrue (response.status == 200) "expected Codex response hook status"
+          assertTrue (headerValueCaseInsensitive? response.headers "x-hook-response" == some "codex")
+            "expected Codex response hook headers"
+          sawResponse.set true
       }
     assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "codex-ok")
       "expected compat OpenAI Codex Responses alias to dispatch"
     assertTrue (stream.result.api == LeanAgent.AI.Api.OpenAICodexResponses.api)
       "expected compat Codex runtime api"
+    assertTrue (← sawResponse.get) "expected Codex response hook to run"
 
 def testCompatOpenAICodexResponsesMissingTokenUsesOauthCode : IO Unit := do
   let model :=
@@ -10897,6 +10912,7 @@ def testCompatOpenAIResponsesEarlyEofReturnsErrorStream : IO Unit := do
 def testAzureOpenAIResponsesStreamWithOptionsLocal : IO Unit := do
   let port := 18094
   withHttpServer port do
+    let sawResponse ← IO.mkRef false
     let stream ← LeanAgent.AI.Api.AzureOpenAIResponses.completeStreamWithOptions
       { apiKey := "azure-key"
         baseUrl := s!"http://127.0.0.1:{port}/azure-responses"
@@ -10912,12 +10928,20 @@ def testAzureOpenAIResponsesStreamWithOptionsLocal : IO Unit := do
       { azureApiVersion := some "2025-01-01"
         azureDeploymentName := some "mini-deployment"
         headers := #[("X-Trace", some "trace-azure")]
+        onResponse := some fun response model => do
+          assertTrue (model.api == azureResponsesModel.api)
+            "expected Azure response hook model api"
+          assertTrue (response.status == 200) "expected Azure response hook status"
+          assertTrue (headerValueCaseInsensitive? response.headers "x-hook-response" == some "azure-responses")
+            "expected Azure response hook headers"
+          sawResponse.set true
       }
     assertTrue stream.isComplete "expected completed Azure Responses stream"
     assertTrue (stream.result.responseId == some "resp_azure_http") "expected Azure response id"
     assertTrue
       (LeanAgent.AI.contentPlainText stream.result.content == "mini-deployment|True|azure-key||trace-azure")
       "expected Azure deployment, stream flag, api-key header, no bearer auth, and custom header"
+    assertTrue (← sawResponse.get) "expected Azure response hook to run"
 
 def testCompatAzureOpenAIResponsesTypedLegacyAliasLocal : IO Unit := do
   let port := 18103
@@ -10945,6 +10969,7 @@ def testCompatAzureOpenAIResponsesTypedLegacyAliasLocal : IO Unit := do
 def testAnthropicMessagesStreamWithOptionsLocal : IO Unit := do
   let port := 18096
   withHttpServer port do
+    let sawResponse ← IO.mkRef false
     let stream ← LeanAgent.AI.Api.AnthropicMessages.completeStreamWithOptions
       { apiKey := "anthropic-key"
         baseUrl := s!"http://127.0.0.1:{port}/anthropic-stream/v1"
@@ -10960,7 +10985,15 @@ def testAnthropicMessagesStreamWithOptionsLocal : IO Unit := do
       { systemPrompt := some "system"
         messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
       }
-      { headers := #[("X-Trace", some "trace-anthropic")] }
+      { headers := #[("X-Trace", some "trace-anthropic")]
+        onResponse := some fun response model => do
+          assertTrue (model.api == LeanAgent.AI.Api.AnthropicMessages.api)
+            "expected Anthropic response hook model api"
+          assertTrue (response.status == 200) "expected Anthropic response hook status"
+          assertTrue (headerValueCaseInsensitive? response.headers "x-hook-response" == some "anthropic")
+            "expected Anthropic response hook headers"
+          sawResponse.set true
+      }
     assertTrue stream.isComplete "expected completed Anthropic stream"
     assertTrue (stream.result.responseId == some "msg_anthropic_http") "expected Anthropic response id"
     assertTrue
@@ -10974,6 +11007,7 @@ def testAnthropicMessagesStreamWithOptionsLocal : IO Unit := do
         | .textDelta _ "claude-sonnet-4-5|True|anthropic-key|2023-06-01|trace-anthropic|" _ => true
         | _ => false)
       "expected Anthropic local text delta"
+    assertTrue (← sawResponse.get) "expected Anthropic response hook to run"
     let affinityStream ← LeanAgent.AI.Api.AnthropicMessages.completeStreamWithOptions
       { apiKey := "anthropic-key"
         baseUrl := s!"http://127.0.0.1:{port}/anthropic-stream/v1"
@@ -11103,6 +11137,7 @@ def testCompatAnthropicCompleteSimpleAliasLocal : IO Unit := do
 def testGoogleGenerativeAIStreamWithOptionsLocal : IO Unit := do
   let port := 18098
   withHttpServer port do
+    let sawResponse ← IO.mkRef false
     let stream ← LeanAgent.AI.Api.GoogleGenerativeAI.completeStreamWithOptions
       { apiKey := "google-key"
         baseUrl := s!"http://127.0.0.1:{port}/google-stream"
@@ -11119,6 +11154,13 @@ def testGoogleGenerativeAIStreamWithOptionsLocal : IO Unit := do
       }
       { maxTokens := some 64
         headers := #[("X-Trace", some "trace-google")]
+        onResponse := some fun response model => do
+          assertTrue (model.api == LeanAgent.AI.Api.GoogleGenerativeAI.api)
+            "expected Google response hook model api"
+          assertTrue (response.status == 200) "expected Google response hook status"
+          assertTrue (headerValueCaseInsensitive? response.headers "x-hook-response" == some "google")
+            "expected Google response hook headers"
+          sawResponse.set true
       }
     assertTrue stream.isComplete "expected completed Google stream"
     assertTrue (stream.result.responseId == some "resp_google_http") "expected Google response id"
@@ -11133,6 +11175,7 @@ def testGoogleGenerativeAIStreamWithOptionsLocal : IO Unit := do
         | .textDelta _ "hello|True" _ => true
         | _ => false)
       "expected Google local text delta"
+    assertTrue (← sawResponse.get) "expected Google response hook to run"
 
 def testCompatGoogleTypedLegacyAliasLocal : IO Unit := do
   let port := 18106
@@ -11203,6 +11246,7 @@ def testGoogleVertexResolvedRequestHeadersWithAuthorizedUserAdc : IO Unit := do
 def testGoogleVertexStreamWithOptionsLocal : IO Unit := do
   let port := 18099
   withHttpServer port do
+    let sawResponse ← IO.mkRef false
     let stream ← LeanAgent.AI.Api.GoogleVertex.completeStreamWithOptions
       { apiKey := LeanAgent.AI.Api.GoogleVertex.vertexCredentialsMarker
         baseUrl := s!"http://127.0.0.1:{port}/vertex"
@@ -11221,6 +11265,13 @@ def testGoogleVertexStreamWithOptionsLocal : IO Unit := do
         location := some "us-central1"
         maxTokens := some 64
         headers := #[("Authorization", some "Bearer adc-token"), ("X-Trace", some "trace-vertex")]
+        onResponse := some fun response model => do
+          assertTrue (model.api == LeanAgent.AI.Api.GoogleVertex.api)
+            "expected Vertex response hook model api"
+          assertTrue (response.status == 200) "expected Vertex response hook status"
+          assertTrue (headerValueCaseInsensitive? response.headers "x-hook-response" == some "vertex")
+            "expected Vertex response hook headers"
+          sawResponse.set true
       }
     assertTrue stream.isComplete "expected completed Vertex stream"
     assertTrue (stream.result.responseId == some "resp_vertex_http") "expected Vertex response id"
@@ -11235,6 +11286,7 @@ def testGoogleVertexStreamWithOptionsLocal : IO Unit := do
         | .textDelta _ "hello|Bearer" _ => true
         | _ => false)
       "expected Vertex local text delta"
+    assertTrue (← sawResponse.get) "expected Vertex response hook to run"
 
 def testGoogleVertexStreamWithServiceAccountAdcLocal : IO Unit := do
   let port := 18111
@@ -11318,6 +11370,7 @@ def testCompatGoogleVertexTypedLegacyAliasLocal : IO Unit := do
 def testMistralConversationsStreamWithOptionsLocal : IO Unit := do
   let port := 18100
   withHttpServer port do
+    let sawResponse ← IO.mkRef false
     let stream ← LeanAgent.AI.Api.MistralConversations.completeStreamWithOptions
       { apiKey := "mistral-key"
         baseUrl := s!"http://127.0.0.1:{port}/mistral"
@@ -11335,6 +11388,13 @@ def testMistralConversationsStreamWithOptionsLocal : IO Unit := do
         reasoningEffort := some "high"
         promptMode := some "reasoning"
         headers := #[("X-Trace", some "trace-mistral")]
+        onResponse := some fun response model => do
+          assertTrue (model.api == LeanAgent.AI.Api.MistralConversations.api)
+            "expected Mistral response hook model api"
+          assertTrue (response.status == 200) "expected Mistral response hook status"
+          assertTrue (headerValueCaseInsensitive? response.headers "x-hook-response" == some "mistral")
+            "expected Mistral response hook headers"
+          sawResponse.set true
       }
     assertTrue stream.isComplete "expected completed Mistral stream"
     assertTrue (stream.result.responseId == some "chatcmpl_mistral_http") "expected Mistral response id"
@@ -11350,6 +11410,7 @@ def testMistralConversationsStreamWithOptionsLocal : IO Unit := do
         | .textDelta _ delta _ => delta.contains "devstral-medium-latest"
         | _ => false)
       "expected Mistral local text delta"
+    assertTrue (← sawResponse.get) "expected Mistral response hook to run"
 
 def testCompatMistralTypedLegacyAliasLocal : IO Unit := do
   let port := 18101
