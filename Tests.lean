@@ -1760,6 +1760,72 @@ def testCompatMissingProviderReturnsError : IO Unit := do
   assertTrue failed "expected compat dispatch to fail without provider"
   LeanAgent.AI.Compat.resetApiProviders
 
+def testCompatLegacyAliasesDispatchFixedApi : IO Unit := do
+  LeanAgent.AI.Compat.resetApiProviders
+  let seenApiKey ← IO.mkRef (none : Option String)
+  LeanAgent.AI.Compat.registerApiProvider
+    { api := "openai-completions", streams := fakeRuntimeStreams seenApiKey }
+    (some "compat-alias-openai")
+  let model :=
+    { fakeRuntimeModel with
+      id := "alias-openai"
+      provider := LeanAgent.Models.openAIProviderId
+      api := "openai-completions"
+    }
+  let stream ← LeanAgent.AI.Compat.Aliases.streamSimpleOpenAICompletions
+    model
+    { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 0 }] }
+    { apiKey := some "alias-key" }
+  assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "runtime-ok")
+    "expected legacy OpenAI completions alias to dispatch"
+  assertTrue ((← seenApiKey.get) == some "alias-key") "expected alias to pass api key"
+  LeanAgent.AI.Compat.resetApiProviders
+
+def testCompatLegacyAliasesRejectMismatchedApi : IO Unit := do
+  LeanAgent.AI.Compat.resetApiProviders
+  let seenApiKey ← IO.mkRef (none : Option String)
+  LeanAgent.AI.Compat.registerApiProvider
+    { api := "openai-completions", streams := fakeRuntimeStreams seenApiKey }
+    (some "compat-alias-openai")
+  let failed ←
+    try
+      let _ ← LeanAgent.AI.Compat.Aliases.streamSimpleOpenAICompletions fakeRuntimeModel {} {}
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains "Mismatched api") "expected fixed alias api mismatch"
+      pure true
+  assertTrue failed "expected legacy alias to reject mismatched model api"
+  LeanAgent.AI.Compat.resetApiProviders
+
+def testCompatLegacyAliasesUseRegistryForNonBuiltins : IO Unit := do
+  LeanAgent.AI.Compat.resetApiProviders
+  let seenApiKey ← IO.mkRef (none : Option String)
+  let model :=
+    { fakeRuntimeModel with
+      id := "claude"
+      provider := "anthropic"
+      api := "anthropic-messages"
+    }
+  let missing ←
+    try
+      let _ ← LeanAgent.AI.Compat.Aliases.streamSimpleAnthropic model {} {}
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains "No API provider registered") "expected missing Anthropic alias provider"
+      pure true
+  assertTrue missing "expected missing non-builtin alias provider"
+  LeanAgent.AI.Compat.registerApiProvider
+    { api := "anthropic-messages", streams := fakeRuntimeStreams seenApiKey }
+    (some "compat-alias-anthropic")
+  let message ← LeanAgent.AI.Compat.Aliases.streamSimpleAnthropic
+    model
+    {}
+    { apiKey := some "anthropic-key" }
+  assertTrue (LeanAgent.AI.contentPlainText message.result.content == "runtime-ok")
+    "expected registered Anthropic alias provider"
+  assertTrue ((← seenApiKey.get) == some "anthropic-key") "expected Anthropic alias api key"
+  LeanAgent.AI.Compat.resetApiProviders
+
 def assertLazyErrorStream
     (stream : LeanAgent.AI.AssistantMessageEventStream)
     (expectedMessage : String) : IO Unit := do
@@ -2984,6 +3050,9 @@ def main : IO UInt32 := do
     testCompatApiRegistryDispatchesAndUnregisters
     testCompatInjectsEnvApiKeyForKnownProviders
     testCompatMissingProviderReturnsError
+    testCompatLegacyAliasesDispatchFixedApi
+    testCompatLegacyAliasesRejectMismatchedApi
+    testCompatLegacyAliasesUseRegistryForNonBuiltins
     testModelsCreateProviderMissingApiReturnsLazyErrorStream
     testModelsCreateProviderSetupFailureReturnsLazyErrorStream
     testModelsLazyProviderStreamsLoadFailureReturnsErrorStream

@@ -8,6 +8,7 @@ import LeanAgent.AI.Api.OpenAIResponsesShared
 import LeanAgent.AI.Api.SimpleOptions
 import LeanAgent.AI.Api.TransformMessages
 import LeanAgent.AI.Compat
+import LeanAgent.AI.Compat.Aliases
 import LeanAgent.AI.EventStream
 import LeanAgent.AI.Providers.Faux
 import LeanAgent.AI.Schema

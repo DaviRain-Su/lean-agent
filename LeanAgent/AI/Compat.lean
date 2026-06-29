@@ -97,12 +97,32 @@ def streamSimple
   let options ← withEnvApiKey model options
   provider.streams.streamSimple model context options
 
+def streamSimpleWithApi
+    (api : String)
+    (model : LeanAgent.Models.ModelInfo)
+    (context : LeanAgent.AI.Context)
+    (options : LeanAgent.AI.SimpleStreamOptions := {}) :
+    IO LeanAgent.AI.AssistantMessageEventStream := do
+  let provider ← resolveApiProvider api
+  ensureApiMatches provider model
+  let options ← withEnvApiKey model options
+  provider.streams.streamSimple model context options
+
 def completeSimple
     (model : LeanAgent.Models.ModelInfo)
     (context : LeanAgent.AI.Context)
     (options : LeanAgent.AI.SimpleStreamOptions := {}) :
     IO LeanAgent.AI.AssistantMessage := do
   let stream ← streamSimple model context options
+  pure stream.result
+
+def completeSimpleWithApi
+    (api : String)
+    (model : LeanAgent.Models.ModelInfo)
+    (context : LeanAgent.AI.Context)
+    (options : LeanAgent.AI.SimpleStreamOptions := {}) :
+    IO LeanAgent.AI.AssistantMessage := do
+  let stream ← streamSimpleWithApi api model context options
   pure stream.result
 
 end LeanAgent.AI.Compat
