@@ -249,8 +249,7 @@ def streamSimple
     if LeanAgent.AI.Util.Abort.isAbortErrorMessage err.toString then
       pure (abortedCompatStream model (← IO.monoMsNow))
     else
-      throw err
-
+      pure (LeanAgent.Models.errorEventStream model err (← IO.monoMsNow))
 def streamSimpleWithApi
     (api : String)
     (model : LeanAgent.Models.ModelInfo)
@@ -268,7 +267,7 @@ def streamSimpleWithApi
     if LeanAgent.AI.Util.Abort.isAbortErrorMessage err.toString then
       pure (abortedCompatStream model (← IO.monoMsNow))
     else
-      throw err
+      pure (LeanAgent.Models.errorEventStream model err (← IO.monoMsNow))
 
 def completeSimple
     (model : LeanAgent.Models.ModelInfo)

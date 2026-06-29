@@ -2927,6 +2927,25 @@ def abortedAssistantMessage (model : ModelInfo) (timestamp : Nat) : LeanAgent.AI
 def abortedEventStream (model : ModelInfo) (timestamp : Nat) : LeanAgent.AI.AssistantMessageEventStream :=
   LeanAgent.AI.fromMessage (abortedAssistantMessage model timestamp)
 
+def errorEventStream (model : ModelInfo) (error : IO.Error) (timestamp : Nat) : LeanAgent.AI.AssistantMessageEventStream :=
+  let message : LeanAgent.AI.AssistantMessage :=
+    { content := #[]
+      api := model.api
+      provider := model.provider
+      model := model.id
+      stopReason := .error
+      errorMessage := some error.toString
+      diagnostics :=
+        #[ LeanAgent.AI.Util.Diagnostics.createAssistantMessageDiagnostic
+            "provider_error"
+            error.toString
+            none
+            timestamp
+         ]
+      timestamp := timestamp
+    }
+  LeanAgent.AI.errorStream message
+
 def Collection.streamSimple
     (collection : Collection)
     (model : ModelInfo)
@@ -2943,7 +2962,7 @@ def Collection.streamSimple
     if LeanAgent.AI.Util.Abort.isAbortErrorMessage err.toString then
       pure (abortedEventStream requestModel (← IO.monoMsNow))
     else
-      throw err
+      pure (errorEventStream requestModel err (← IO.monoMsNow))
 
 def Collection.completeSimple
     (collection : Collection)

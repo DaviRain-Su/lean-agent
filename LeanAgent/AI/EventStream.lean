@@ -172,4 +172,7 @@ def streamLegacyProvider
   let timestamp ← IO.monoMsNow
   pure (streamFromLegacyProviderResponse api providerId request.model timestamp response)
 
+def errorStream (message : AssistantMessage) : AssistantMessageEventStream :=
+  { events := #[.error .error message], finalResult := message }
+
 end LeanAgent.AI

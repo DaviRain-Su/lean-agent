@@ -1767,6 +1767,254 @@ def testGoogleSharedConvertToolsSanitizesOpenApiParameters : IO Unit := do
       | none => fail "expected default Google tool group"
   | none => fail "expected default converted tools"
 
+def makeGoogleSharedModelRef (api provider modelId baseUrl : String) : LeanAgent.AI.ModelRef :=
+  { id := modelId
+    api := api
+    provider := provider
+    baseUrl := some baseUrl
+  }
+
+def makeGoogleSharedImageRoutingContext
+    (assistantApi assistantProvider assistantModel : String) : LeanAgent.AI.Context :=
+  let assistant : LeanAgent.AI.AssistantMessage :=
+    { content :=
+        #[ .toolCall { id := "call_a", name := "read", arguments := LeanAgent.Json.obj [("path", LeanAgent.Json.str "a.txt")] }
+         , .toolCall { id := "call_img", name := "read", arguments := LeanAgent.Json.obj [("path", LeanAgent.Json.str "image.png")] }
+         , .toolCall { id := "call_b", name := "read", arguments := LeanAgent.Json.obj [("path", LeanAgent.Json.str "b.txt")] }
+         ]
+      api := assistantApi
+      provider := assistantProvider
+      model := assistantModel
+      stopReason := .toolUse
+      timestamp := 2
+    }
+  { messages :=
+      #[ .user { content := #[LeanAgent.AI.text "read the files"], timestamp := 1 }
+       , .assistant assistant
+       , .toolResult
+          { toolCallId := "call_a"
+            toolName := "read"
+            content := #[LeanAgent.AI.text "alpha text"]
+            isError := false
+            timestamp := 3
+          }
+       , .toolResult
+          { toolCallId := "call_img"
+            toolName := "read"
+            content := #[LeanAgent.AI.image "abc" "image/png"]
+            isError := false
+            timestamp := 4
+          }
+       , .toolResult
+          { toolCallId := "call_b"
+            toolName := "read"
+            content := #[LeanAgent.AI.text "beta text"]
+            isError := false
+            timestamp := 5
+          }
+       ]
+  }
+
+def makeGoogleSharedToolCallContext
+    (assistantApi assistantProvider assistantModel : String)
+    (thoughtSignature : Option String := none) : LeanAgent.AI.Context :=
+  let firstCall : LeanAgent.AI.ToolCall :=
+    { id := "call_1"
+      name := "bash"
+      arguments := LeanAgent.Json.obj [("command", LeanAgent.Json.str "echo hi")]
+      thoughtSignature := thoughtSignature
+    }
+  let secondCall : LeanAgent.AI.ToolCall :=
+    { id := "call_2"
+      name := "bash"
+      arguments := LeanAgent.Json.obj [("command", LeanAgent.Json.str "ls -la")]
+    }
+  let assistant : LeanAgent.AI.AssistantMessage :=
+    { content := #[.toolCall firstCall, .toolCall secondCall]
+      api := assistantApi
+      provider := assistantProvider
+      model := assistantModel
+      stopReason := .toolUse
+      timestamp := 2
+    }
+  { messages :=
+      #[ .user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }
+       , .assistant assistant
+       ]
+  }
+
+def testGoogleSharedThinkingHelpers : IO Unit := do
+  let withThought := LeanAgent.Json.obj
+    [ ("thought", LeanAgent.Json.bool true)
+    , ("thoughtSignature", LeanAgent.Json.str "opaque-signature")
+    ]
+  assertTrue (LeanAgent.AI.Api.GoogleShared.isThinkingPart withThought)
+    "expected thought=true to mark Google thinking part"
+
+  let signatureOnly := LeanAgent.Json.obj [("thoughtSignature", LeanAgent.Json.str "opaque-signature")]
+  assertTrue (!LeanAgent.AI.Api.GoogleShared.isThinkingPart signatureOnly)
+    "expected thoughtSignature alone not to mark thinking part"
+
+  let first := LeanAgent.AI.Api.GoogleShared.retainThoughtSignature none (some "sig-1")
+  assertTrue (first == some "sig-1") "expected first thought signature retained"
+  let second := LeanAgent.AI.Api.GoogleShared.retainThoughtSignature first none
+  assertTrue (second == some "sig-1") "expected missing delta to preserve signature"
+  let third := LeanAgent.AI.Api.GoogleShared.retainThoughtSignature second (some "")
+  assertTrue (third == some "sig-1") "expected empty delta to preserve signature"
+  let updated := LeanAgent.AI.Api.GoogleShared.retainThoughtSignature third (some "sig-2")
+  assertTrue (updated == some "sig-2") "expected non-empty delta to replace signature"
+
+def testGoogleSharedImageToolResultRouting : IO Unit := do
+  let gemini2Model :=
+    makeGoogleSharedModelRef
+      LeanAgent.AI.Api.GoogleGenerativeAI.api
+      LeanAgent.Models.googleProviderId
+      "gemini-2.5-flash"
+      LeanAgent.Models.googleBaseUrl
+  let gemini2Contents := LeanAgent.AI.Api.GoogleShared.convertMessages
+    gemini2Model
+    #["text", "image"]
+    (makeGoogleSharedImageRoutingContext
+      LeanAgent.AI.Api.GoogleGenerativeAI.api
+      LeanAgent.Models.googleProviderId
+      "gemini-2.5-flash")
+  assertTrue (gemini2Contents.size == 5) "expected Gemini 2.x image tool results to create an extra user turn"
+  match gemini2Contents[2]?, gemini2Contents[3]?, gemini2Contents[4]? with
+  | some functionResponsesTurn, some imageTurn, some trailingFunctionResponse =>
+      match jsonArrayField? functionResponsesTurn "parts" with
+      | some parts =>
+          assertTrue (parts.size == 2) "expected first Gemini 2.x tool-result turn to contain two function responses"
+          assertTrue (parts.all fun part => (LeanAgent.Json.optVal? part "functionResponse").isSome)
+            "expected only function responses before synthetic image turn"
+      | none => fail "expected Gemini 2.x function-response parts"
+      match jsonArrayField? imageTurn "parts" with
+      | some parts =>
+          match parts[0]?, parts[1]? with
+          | some marker, some image =>
+              assertTrue (jsonStringField? marker "text" == some "Tool result image:")
+                "expected Gemini 2.x image marker text"
+              assertTrue ((LeanAgent.Json.optVal? image "inlineData").isSome)
+                "expected Gemini 2.x synthetic image inlineData"
+          | _, _ => fail "expected Gemini 2.x image marker and inline image"
+      | none => fail "expected Gemini 2.x synthetic image turn"
+      match jsonArrayField? trailingFunctionResponse "parts" with
+      | some parts =>
+          assertTrue (parts.size == 1) "expected trailing Gemini 2.x tool result to stay separate"
+          assertTrue ((parts[0]? >>= fun part => LeanAgent.Json.optVal? part "functionResponse").isSome)
+            "expected trailing Gemini 2.x turn to contain a function response"
+      | none => fail "expected trailing Gemini 2.x function response turn"
+  | _, _, _ => fail "expected Gemini 2.x tool-result turns"
+
+  let gemini3Model :=
+    makeGoogleSharedModelRef
+      LeanAgent.AI.Api.GoogleGenerativeAI.api
+      LeanAgent.Models.googleProviderId
+      "gemini-3-pro-preview"
+      LeanAgent.Models.googleBaseUrl
+  let gemini3Contents := LeanAgent.AI.Api.GoogleShared.convertMessages
+    gemini3Model
+    #["text", "image"]
+    (makeGoogleSharedImageRoutingContext
+      LeanAgent.AI.Api.GoogleGenerativeAI.api
+      LeanAgent.Models.googleProviderId
+      "gemini-3-pro-preview")
+  assertTrue (gemini3Contents.size == 3) "expected Gemini 3 tool results to stay in one user turn"
+  match gemini3Contents[2]? with
+  | some toolResultTurn =>
+      match jsonArrayField? toolResultTurn "parts" with
+      | some parts =>
+          assertTrue (parts.size == 3) "expected Gemini 3 tool-result turn to contain all three function responses"
+          match parts[1]? >>= fun part => LeanAgent.Json.optVal? part "functionResponse" with
+          | some functionResponse =>
+              match jsonArrayField? functionResponse "parts" with
+              | some nestedParts =>
+                  assertTrue (nestedParts.size == 1) "expected nested Gemini 3 image response part"
+                  assertTrue ((nestedParts[0]? >>= fun part => LeanAgent.Json.optVal? part "inlineData").isSome)
+                    "expected Gemini 3 nested inlineData"
+              | none => fail "expected nested Gemini 3 functionResponse parts"
+          | none => fail "expected Gemini 3 image functionResponse"
+      | none => fail "expected Gemini 3 tool-result parts"
+  | none => fail "expected Gemini 3 tool-result turn"
+
+def testGoogleSharedGemini3ToolCallThoughtSignatures : IO Unit := do
+  let gemini3Google :=
+    makeGoogleSharedModelRef
+      LeanAgent.AI.Api.GoogleGenerativeAI.api
+      LeanAgent.Models.googleProviderId
+      "gemini-3-pro-preview"
+      LeanAgent.Models.googleBaseUrl
+  let unsignedGoogle := LeanAgent.AI.Api.GoogleShared.convertMessages
+    gemini3Google
+    #["text"]
+    (makeGoogleSharedToolCallContext
+      LeanAgent.AI.Api.GoogleGenerativeAI.api
+      LeanAgent.Models.googleProviderId
+      "other-model")
+  match unsignedGoogle.find? fun content => jsonStringField? content "role" == some "model" with
+  | some modelTurn =>
+      match jsonArrayField? modelTurn "parts" with
+      | some parts =>
+          let functionCallParts := parts.filter fun part => (LeanAgent.Json.optVal? part "functionCall").isSome
+          assertTrue (functionCallParts.size == 2) "expected Google Gemini 3 model turn to keep two function calls"
+          assertTrue (functionCallParts.all fun part => LeanAgent.Json.optVal? part "thoughtSignature" == none)
+            "expected unsigned Google Gemini 3 tool calls to omit thoughtSignature"
+          assertTrue
+            (!parts.any fun part =>
+              match jsonStringField? part "text" with
+              | some text => text.contains "Historical context"
+              | none => false)
+            "expected unsigned Google Gemini 3 tool calls not to synthesize historical context text"
+      | none => fail "expected Google Gemini 3 model parts"
+  | none => fail "expected Google Gemini 3 model turn"
+
+  let gemini3Vertex :=
+    makeGoogleSharedModelRef
+      LeanAgent.AI.Api.GoogleVertex.api
+      LeanAgent.Models.googleVertexProviderId
+      "gemini-3-pro-preview"
+      LeanAgent.Models.googleVertexBaseUrl
+  let unsignedVertex := LeanAgent.AI.Api.GoogleShared.convertMessages
+    gemini3Vertex
+    #["text"]
+    (makeGoogleSharedToolCallContext
+      LeanAgent.AI.Api.GoogleVertex.api
+      LeanAgent.Models.googleVertexProviderId
+      "gemini-3-pro-preview")
+  match unsignedVertex.find? fun content => jsonStringField? content "role" == some "model" with
+  | some modelTurn =>
+      match jsonArrayField? modelTurn "parts" with
+      | some parts =>
+          let functionCallParts := parts.filter fun part => (LeanAgent.Json.optVal? part "functionCall").isSome
+          assertTrue (functionCallParts.size == 2) "expected Vertex Gemini 3 model turn to keep two function calls"
+          assertTrue (functionCallParts.all fun part => LeanAgent.Json.optVal? part "thoughtSignature" == none)
+            "expected unsigned Vertex Gemini 3 tool calls to omit thoughtSignature"
+      | none => fail "expected Vertex Gemini 3 model parts"
+  | none => fail "expected Vertex Gemini 3 model turn"
+
+  let signedGoogle := LeanAgent.AI.Api.GoogleShared.convertMessages
+    gemini3Google
+    #["text"]
+    (makeGoogleSharedToolCallContext
+      LeanAgent.AI.Api.GoogleGenerativeAI.api
+      LeanAgent.Models.googleProviderId
+      "gemini-3-pro-preview"
+      (some "AAAAAAAAAAAAAAAAAAAAAA=="))
+  match signedGoogle.find? fun content => jsonStringField? content "role" == some "model" with
+  | some modelTurn =>
+      match jsonArrayField? modelTurn "parts" with
+      | some parts =>
+          let functionCallParts := parts.filter fun part => (LeanAgent.Json.optVal? part "functionCall").isSome
+          assertTrue (functionCallParts.size == 2) "expected signed Google Gemini 3 model turn to keep two function calls"
+          match functionCallParts[0]?, functionCallParts[1]? with
+          | some first, some second =>
+              assertTrue (jsonStringField? first "thoughtSignature" == some "AAAAAAAAAAAAAAAAAAAAAA==")
+                "expected matching Google Gemini 3 tool call to preserve valid thoughtSignature"
+              assertTrue (LeanAgent.Json.optVal? second "thoughtSignature" == none)
+                "expected unsigned sibling tool call to omit thoughtSignature"
+          | _, _ => fail "expected signed Google Gemini 3 function call parts"
+      | none => fail "expected signed Google Gemini 3 model parts"
+  | none => fail "expected signed Google Gemini 3 model turn"
+
 def testGoogleGenerativeAIParsesResponse : IO Unit := do
   let raw :=
     "{ \"responseId\":\"resp_google\", \"modelVersion\":\"gemini-2.5-flash\", \"candidates\":[{" ++
@@ -8023,20 +8271,19 @@ def testCompatOpenAICodexResponsesMissingTokenUsesOauthCode : IO Unit := do
     { systemPrompt := some "codex system"
       messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
     }
-  let failed ←
-    try
-      let _ ← LeanAgent.AI.Compat.Aliases.streamSimpleOpenAICodexResponses
-        model
-        context
-        {}
-      pure false
-    catch err =>
-      assertTrue (err.toString.contains "ModelsError(oauth)")
+  let stream ← LeanAgent.AI.Compat.Aliases.streamSimpleOpenAICodexResponses
+    model
+    context
+    {}
+  assertTrue (stream.result.stopReason == .error)
+    "expected missing Codex OAuth token to produce error stream"
+  match stream.result.errorMessage with
+  | some message =>
+      assertTrue (message.contains "ModelsError(oauth)")
         "expected typed oauth error for missing Codex token"
-      assertTrue (err.toString.contains "missing OAuth access token")
+      assertTrue (message.contains "missing OAuth access token")
         "expected missing token details"
-      pure true
-  assertTrue failed "expected missing Codex OAuth token to fail"
+  | none => fail "expected error message in Codex OAuth error stream"
 
 def testCompatOpenAICodexResponsesTypedLegacyAliasLocal : IO Unit := do
   let port := 18104
@@ -8705,6 +8952,9 @@ def main : IO UInt32 := do
     testAnthropicMessagesStreamingRequiresMessageStop
     testGoogleGenerativeAIRequestPayload
     testGoogleSharedConvertToolsSanitizesOpenApiParameters
+    testGoogleSharedThinkingHelpers
+    testGoogleSharedImageToolResultRouting
+    testGoogleSharedGemini3ToolCallThoughtSignatures
     testGoogleGenerativeAIParsesResponse
     testGoogleGenerativeAIParsesStreamingEvents
     testGoogleVertexUrlsAndHeaders
