@@ -218,6 +218,7 @@ structure ModelInfo where
   input : Array String := #["text"]
   supportsToolCalls : Bool := true
   supportsJsonOutput : Bool := true
+  headers : LeanAgent.AI.Auth.ProviderHeaders := #[]
   compat : ModelCompat := {}
 deriving Repr, BEq
 
@@ -596,6 +597,9 @@ def nvidiaCompat : ModelCompat :=
     supportsDeveloperRole := false
   }
 
+def nvidiaModelHeaders : LeanAgent.AI.Auth.ProviderHeaders :=
+  #[("NVCF-POLL-SECONDS", "3600")]
+
 def xiaomiCompat : ModelCompat :=
   { requiresReasoningContentOnAssistantMessages := true
     thinkingFormat := some "deepseek"
@@ -713,7 +717,7 @@ def nvidiaModels : Array ModelInfo :=
    , catalogOpenAICompatibleModel nvidiaProviderId nvidiaBaseUrl "stepfun-ai/step-3.5-flash" "Step 3.5 Flash" 0.0 0.0 0.0 0.0 256000 16384 true nvidiaCompat #[] #["text"]
    , catalogOpenAICompatibleModel nvidiaProviderId nvidiaBaseUrl "stepfun-ai/step-3.7-flash" "Step 3.7 Flash" 0.0 0.0 0.0 0.0 256000 16384 true nvidiaCompat #[] #["text", "image"]
    , catalogOpenAICompatibleModel nvidiaProviderId nvidiaBaseUrl "z-ai/glm-5.1" "GLM-5.1" 0.0 0.0 0.0 0.0 131072 131072 true nvidiaCompat #[] #["text"]
-   ]
+   ].map fun model => { model with headers := nvidiaModelHeaders }
 
 def xiaomiModels : Array ModelInfo :=
   #[ catalogOpenAICompatibleModel xiaomiProviderId xiaomiBaseUrl "mimo-v2-flash" "MiMo-V2-Flash" 0.1 0.3 0.01 0.0 262144 65536 true xiaomiCompat #[] #["text"]
@@ -2882,9 +2886,12 @@ def Collection.applyAuth
     LeanAgent.AI.Auth.resolveProviderAuth provider.id provider.auth collection.credentials collection.authContext
       { apiKey := options.apiKey, env := options.env }
       (some model.baseUrl)
+  let providerModelHeaders :=
+    authHeadersToStreamHeaders provider.headers
+      (authHeadersToStreamHeaders model.headers options.headers)
   match resolution with
   | none =>
-      pure (model, { options with headers := authHeadersToStreamHeaders provider.headers options.headers })
+      pure (model, { options with headers := providerModelHeaders })
   | some resolution =>
       let requestModel :=
         match resolution.auth.baseUrl with
@@ -2899,7 +2906,8 @@ def Collection.applyAuth
           apiKey := apiKey
           headers :=
             authHeadersToStreamHeaders provider.headers
-              (authHeadersToStreamHeaders resolution.auth.headers options.headers)
+              (authHeadersToStreamHeaders model.headers
+                (authHeadersToStreamHeaders resolution.auth.headers options.headers))
           env := LeanAgent.AI.Auth.providerEnvMerge resolution.env options.env
         }
       pure (requestModel, requestOptions)

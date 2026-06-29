@@ -3386,6 +3386,12 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
   assertTrue (LeanAgent.Models.moonshotAIModels.size == 9) "expected generated Moonshot AI model catalog"
   assertTrue (LeanAgent.Models.moonshotAICNModels.size == 9) "expected generated Moonshot AI CN model catalog"
   assertTrue (LeanAgent.Models.nvidiaModels.size == 19) "expected generated NVIDIA model catalog"
+  assertTrue
+    (LeanAgent.Models.nvidiaModels.all fun model =>
+      model.headers.findSome?
+        (fun (name, value) =>
+          if name.toLower == "nvcf-poll-seconds" then some value else none) == some "3600")
+    "expected generated NVIDIA model headers"
   assertTrue (LeanAgent.Models.xiaomiModels.size == 6) "expected generated Xiaomi model catalog"
   assertTrue (LeanAgent.Models.xiaomiTokenPlanAMSModels.size == 5)
     "expected generated Xiaomi Token Plan AMS model catalog"
@@ -3547,6 +3553,11 @@ def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
   | some model =>
       assertTrue (model.baseUrl == LeanAgent.Models.nvidiaBaseUrl) "expected NVIDIA base URL"
       assertTrue (!model.compat.supportsStore) "expected NVIDIA store compat metadata"
+      assertTrue
+        (model.headers.findSome?
+          (fun (name, value) =>
+            if name.toLower == "nvcf-poll-seconds" then some value else none) == some "3600")
+        "expected NVIDIA model-level poll header"
   | none => fail "expected NVIDIA model in default runtime collection"
   match ← collection.getModel? LeanAgent.Models.xiaomiProviderId "mimo-v2.5" with
   | some model =>
@@ -4478,6 +4489,32 @@ def testCatalogProviderHeadersApplyThroughAuth : IO Unit := do
         (headerValueOpt? overrideOptions.headers "User-Agent" == some (some "caller-agent"))
         "expected request header to override provider header"
   | none => fail "expected Kimi Coding default model"
+  let nvidiaProvider ← LeanAgent.AI.Providers.NVIDIA.provider
+  let nvidiaModels ← nvidiaProvider.getModels
+  match nvidiaModels.find? (fun model => model.id == LeanAgent.Models.nvidiaDefaultModel) with
+  | some model =>
+      let ctx : LeanAgent.AI.Auth.AuthContext :=
+        { env := fun name =>
+            pure (if name == LeanAgent.Models.nvidiaApiKeyEnv then some "nvidia-token" else none)
+          fileExists := fun _ => pure false
+        }
+      let collection ← LeanAgent.Models.createModels none ctx
+      let (_requestModel, options) ← collection.applyAuth nvidiaProvider model {}
+      assertTrue (options.apiKey == some "nvidia-token") "expected NVIDIA API key auth"
+      assertTrue
+        (headerValueOpt? options.headers "NVCF-POLL-SECONDS" == some (some "3600"))
+        "expected NVIDIA model header to be inherited"
+      let (_requestModel, overrideOptions) ← collection.applyAuth nvidiaProvider model
+        { headers := #[("NVCF-POLL-SECONDS", some "120")] }
+      assertTrue
+        (headerValueOpt? overrideOptions.headers "NVCF-POLL-SECONDS" == some (some "120"))
+        "expected request header to override NVIDIA model header"
+      let (_requestModel, removedOptions) ← collection.applyAuth nvidiaProvider model
+        { headers := #[("NVCF-POLL-SECONDS", none)] }
+      assertTrue
+        (headerValueOpt? removedOptions.headers "NVCF-POLL-SECONDS" == some none)
+        "expected request header removal to override NVIDIA model header"
+  | none => fail "expected NVIDIA default model"
 
 def testCloudflareWorkersAIAuthResolution : IO Unit := do
   let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
