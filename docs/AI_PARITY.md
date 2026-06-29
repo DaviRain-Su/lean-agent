@@ -1,0 +1,337 @@
+# AI Parity Ledger
+
+This file tracks LeanAgent parity with Pi `packages/ai`. It is the source of
+truth for preventing AI-module omissions.
+
+Reference root: `vendor/pi/packages/ai`
+
+Current Pi package version: `@earendil-works/pi-ai` `0.80.2`
+
+## Status Legend
+
+| Status | Meaning |
+| --- | --- |
+| `implemented` | Lean has equivalent behavior and tests. |
+| `partial` | Lean has a subset, or behavior is API-compatible only for selected providers. |
+| `missing` | No Lean equivalent exists yet. |
+| `deferred` | Intentionally not implemented in the current milestone, with a reason. |
+
+Every row must move through this ledger before it is considered complete.
+
+## Current Lean Coverage
+
+| Pi area | Lean modules | Status | Notes |
+| --- | --- | --- | --- |
+| HTTP transport | `LeanAgent.Http` | partial | Native libcurl JSON POST exists. No generic headers, streaming, retry, proxy helpers, or response headers yet. |
+| OpenAI-compatible chat completions | `LeanAgent.OpenAI` | partial | Non-streaming Chat Completions with tool calls exists. No streaming events, prompt cache, reasoning details, images, retries, or Responses API. |
+| Static model catalog | `LeanAgent.Models` | partial | DeepSeek and OpenAI fallback only. No generated full catalog or dynamic refresh. |
+| Provider/model collection | `LeanAgent.Models` | partial | Static lookup only. No `Models` runtime collection, auth application, or mixed API dispatch. |
+| Agent-facing messages | `LeanAgent.Core` | partial | Simplified user/assistant/toolResult strings. Missing Pi content blocks, usage, image content, thinking, stop reasons, diagnostics. |
+| Images | none | missing | No image input or image generation API. |
+| OAuth/auth store | none | missing | Env lookup exists in CLI only, not Pi-style auth resolution. |
+| Compat/global API registry | none | missing | No `compat` registry or legacy global entrypoint. |
+
+## Implementation Gates
+
+Before implementing Pi `packages/agent` features that depend on AI:
+
+1. Define AI types first: content blocks, messages, tools, usage, stream events, stop reasons.
+2. Add a stream/result abstraction, even if an API starts as non-streaming internally.
+3. Move auth resolution out of `Main.lean` and into a Pi-style provider/model layer.
+4. Implement OpenAI-compatible APIs as API modules, not as CLI-specific provider helpers.
+5. Add tests mapped from Pi tests for every completed row.
+
+Before starting OMP advanced work:
+
+1. `Models` collection must support provider registration, lookup, auth application, and completion dispatch.
+2. OpenAI-compatible provider family must be solid enough for DeepSeek, OpenAI, OpenRouter, Groq, xAI, Cerebras, Together, and similar providers.
+3. Agent core must consume AI stream events rather than direct provider responses.
+
+## Source Inventory
+
+| Group | Pi files | Lean target | Current status |
+| --- | ---: | --- | --- |
+| Root entrypoints and package API | 16 | `LeanAgent.AI`, `LeanAgent.Models`, `LeanAgent.Compat`, docs | partial |
+| API protocol implementations | 28 | `LeanAgent.AI.Api.*` | partial |
+| Auth | 5 | `LeanAgent.AI.Auth.*` | missing |
+| Providers and model catalogs | 74 | `LeanAgent.AI.Providers.*`, generated/catalog data | partial |
+| Utils | 14 | `LeanAgent.AI.Util.*` | missing |
+| Tests | 83+ | `Tests.lean`, future focused test modules | partial |
+
+## Root Entrypoints
+
+| Pi source | Lean target | Status | Notes |
+| --- | --- | --- | --- |
+| `src/index.ts` | `LeanAgent.AI` or `LeanAgent.lean` exports | partial | Lean root exports modules, but not Pi AI public surface. |
+| `src/compat.ts` | `LeanAgent.AI.Compat` | missing | Needs global API registry and legacy helpers. |
+| `src/cli.ts` | future `lean-agent ai ...` commands | missing | Not needed for core loop yet. |
+| `src/models.ts` | `LeanAgent.Models` | partial | Static catalog only. Runtime `Models` collection missing. |
+| `src/models.generated.ts` | generated Lean catalog or checked-in catalog | missing | Current catalog has only DeepSeek and OpenAI fallback. |
+| `src/types.ts` | `LeanAgent.AI.Types` | missing | Current `Core` types are too simplified. |
+| `src/env-api-keys.ts` | `LeanAgent.AI.Auth.Env` | missing | Env lookup is still in CLI. |
+| `src/session-resources.ts` | `LeanAgent.AI.SessionResources` | missing | Needed for cross-provider handoff and session resources. |
+| `src/legacy-api-aliases.ts` | `LeanAgent.AI.Compat.Aliases` | missing | Needed only when compat API is implemented. |
+| `src/oauth.ts` | `LeanAgent.AI.OAuth` | missing | Depends on auth and device-code support. |
+| `src/bedrock-provider.ts` | `LeanAgent.AI.Providers.Bedrock` | missing | Depends on AWS/Bedrock support. |
+| `src/image-models.ts` | `LeanAgent.AI.Images.Models` | missing | Image phase. |
+| `src/image-models.generated.ts` | generated image model catalog | missing | Image phase. |
+| `src/images-models.ts` | `LeanAgent.AI.Images.Models` | missing | Image phase. |
+| `src/images.ts` | `LeanAgent.AI.Images` | missing | Image generation API. |
+| `src/images-api-registry.ts` | `LeanAgent.AI.Images.Registry` | missing | Image API dispatch. |
+
+## Types Layer
+
+Pi `src/types.ts` is a hard prerequisite. Lean should add `LeanAgent/AI/Types.lean`
+before expanding provider behavior.
+
+| Contract | Lean target | Status | Notes |
+| --- | --- | --- | --- |
+| API/provider identifiers | `LeanAgent.AI.Types` | partial | String ids exist in `Models`, not as a central AI type. |
+| Text/image content blocks | `LeanAgent.AI.Types` | missing | Required for image inputs and tool-result images. |
+| User/assistant/tool result messages | `LeanAgent.AI.Types` | partial | `Core.AgentMessage` is string-only and lacks timestamps/usage/content arrays. |
+| Tool schema and tool call content | `LeanAgent.AI.Types` | partial | Tool call exists, but schema validation/typebox parity is missing. |
+| Assistant stream events | `LeanAgent.AI.EventStream` | missing | Required to match Pi streaming contract. |
+| Usage and cost | `LeanAgent.AI.Types`, `LeanAgent.AI.Usage` | missing | No token/cost accounting. |
+| Stop reasons and errors | `LeanAgent.AI.Types` | partial | Only finish reason string exists on provider response. |
+| Thinking/reasoning levels | `LeanAgent.AI.Types` | partial | Model metadata has reasoning bool only. |
+| Simple stream options | `LeanAgent.AI.Types` | missing | Need max tokens, temperature, cache retention, headers, retry limits, session id. |
+
+## Models Runtime
+
+| Pi source | Lean target | Status | Notes |
+| --- | --- | --- | --- |
+| `Provider` interface | `LeanAgent.Models.Provider` | missing | Need provider as runtime unit with model list and stream/complete. |
+| `Models` interface | `LeanAgent.Models.Collection` | missing | Need collection with registration, lookup, refresh, auth, stream, complete. |
+| `MutableModels` | `LeanAgent.Models.Collection` | missing | Needed for custom providers and tests. |
+| `createModels` | `LeanAgent.Models.Collection` | missing | Constructor with credential store/auth context. |
+| `createProvider` | `LeanAgent.Models.Provider` | missing | Needs single API and mixed API dispatch. |
+| `hasApi` | `LeanAgent.Models` | missing | Runtime checked API narrowing. |
+| `calculateCost` | `LeanAgent.AI.Usage` | missing | Must follow Pi usage cost semantics. |
+| `getSupportedThinkingLevels` | `LeanAgent.Models.Thinking` | missing | Needs thinking level map. |
+| `clampThinkingLevel` | `LeanAgent.Models.Thinking` | missing | Needed before UI/model selector. |
+| `modelsAreEqual` | `LeanAgent.Models` | missing | Small helper. |
+
+## Auth Layer
+
+| Pi source | Lean target | Status | Notes |
+| --- | --- | --- | --- |
+| `auth/types.ts` | `LeanAgent.AI.Auth.Types` | missing | Defines provider auth and resolution results. |
+| `auth/context.ts` | `LeanAgent.AI.Auth.Context` | missing | Default auth context. |
+| `auth/credential-store.ts` | `LeanAgent.AI.Auth.CredentialStore` | missing | Start with in-memory and file-backed stores. |
+| `auth/helpers.ts` | `LeanAgent.AI.Auth.Helpers` | missing | Env API key auth and keyless/ambient helpers. |
+| `auth/resolve.ts` | `LeanAgent.AI.Auth.Resolve` | missing | Apply auth to model/options and surface auth errors. |
+
+## API Protocol Implementations
+
+| Pi source | Lean target | Status | Notes |
+| --- | --- | --- | --- |
+| `api/lazy.ts` | `LeanAgent.AI.Api.Lazy` | missing | Lean may not need lazy loading, but needs equivalent dispatch boundary. |
+| `api/simple-options.ts` | `LeanAgent.AI.Api.SimpleOptions` | missing | Required by agent loop. |
+| `api/openai-completions.ts` | `LeanAgent.AI.Api.OpenAICompletions` | partial | Current `LeanAgent.OpenAI` must be refactored into this shape. |
+| `api/openai-completions.lazy.ts` | `LeanAgent.AI.Api.OpenAICompletions` | deferred | Lean does not need TS lazy import, but dispatch boundary should exist. |
+| `api/openai-responses.ts` | `LeanAgent.AI.Api.OpenAIResponses` | missing | Needed for OpenAI/Codex style Responses API. |
+| `api/openai-responses-shared.ts` | `LeanAgent.AI.Api.OpenAIResponses` | missing | Shared serialization/replay helpers. |
+| `api/openai-responses.lazy.ts` | `LeanAgent.AI.Api.OpenAIResponses` | deferred | Lazy wrapper can be skipped if dispatch is explicit. |
+| `api/openai-codex-responses.ts` | `LeanAgent.AI.Api.OpenAICodexResponses` | missing | OAuth and WebSocket/cached transport later. |
+| `api/openai-codex-responses.lazy.ts` | `LeanAgent.AI.Api.OpenAICodexResponses` | deferred | Lazy wrapper. |
+| `api/azure-openai-responses.ts` | `LeanAgent.AI.Api.AzureOpenAIResponses` | missing | Needs Azure base URL handling. |
+| `api/azure-openai-responses.lazy.ts` | `LeanAgent.AI.Api.AzureOpenAIResponses` | deferred | Lazy wrapper. |
+| `api/anthropic-messages.ts` | `LeanAgent.AI.Api.AnthropicMessages` | missing | Large protocol, thinking, cache, tool normalization. |
+| `api/anthropic-messages.lazy.ts` | `LeanAgent.AI.Api.AnthropicMessages` | deferred | Lazy wrapper. |
+| `api/google-generative-ai.ts` | `LeanAgent.AI.Api.GoogleGenerativeAI` | missing | Gemini API. |
+| `api/google-generative-ai.lazy.ts` | `LeanAgent.AI.Api.GoogleGenerativeAI` | deferred | Lazy wrapper. |
+| `api/google-vertex.ts` | `LeanAgent.AI.Api.GoogleVertex` | missing | Vertex auth and endpoint handling. |
+| `api/google-vertex.lazy.ts` | `LeanAgent.AI.Api.GoogleVertex` | deferred | Lazy wrapper. |
+| `api/google-shared.ts` | `LeanAgent.AI.Api.GoogleShared` | missing | Tool conversion and thinking helpers. |
+| `api/mistral-conversations.ts` | `LeanAgent.AI.Api.MistralConversations` | missing | Mistral protocol. |
+| `api/mistral-conversations.lazy.ts` | `LeanAgent.AI.Api.MistralConversations` | deferred | Lazy wrapper. |
+| `api/bedrock-converse-stream.ts` | `LeanAgent.AI.Api.BedrockConverseStream` | missing | AWS SDK equivalent needed or deferred with reason. |
+| `api/bedrock-converse-stream.lazy.ts` | `LeanAgent.AI.Api.BedrockConverseStream` | deferred | Lazy wrapper. |
+| `api/cloudflare.ts` | `LeanAgent.AI.Api.Cloudflare` | missing | Cloudflare gateway/workers helper. |
+| `api/github-copilot-headers.ts` | `LeanAgent.AI.Api.GitHubCopilotHeaders` | missing | Needed with OAuth providers. |
+| `api/openai-prompt-cache.ts` | `LeanAgent.AI.Api.OpenAIPromptCache` | missing | Prompt cache control format. |
+| `api/openrouter-images.ts` | `LeanAgent.AI.Api.OpenRouterImages` | missing | Image generation phase. |
+| `api/openrouter-images.lazy.ts` | `LeanAgent.AI.Api.OpenRouterImages` | deferred | Lazy wrapper. |
+| `api/transform-messages.ts` | `LeanAgent.AI.Api.TransformMessages` | missing | Cross-provider handoff and model conversion. |
+
+## Provider Factories
+
+All provider factory files must have a corresponding row. Model catalog files
+should be generated or checked in as Lean data.
+
+| Provider | Pi files | Lean target | Status |
+| --- | --- | --- | --- |
+| All builtins | `providers/all.ts` | `LeanAgent.AI.Providers.All` | missing |
+| Amazon Bedrock | `amazon-bedrock.ts`, `amazon-bedrock.models.ts` | `LeanAgent.AI.Providers.AmazonBedrock` | missing |
+| Ant Ling | `ant-ling.ts`, `ant-ling.models.ts` | `LeanAgent.AI.Providers.AntLing` | missing |
+| Anthropic | `anthropic.ts`, `anthropic.models.ts` | `LeanAgent.AI.Providers.Anthropic` | missing |
+| Azure OpenAI Responses | `azure-openai-responses.ts`, `azure-openai-responses.models.ts` | `LeanAgent.AI.Providers.AzureOpenAIResponses` | missing |
+| Cerebras | `cerebras.ts`, `cerebras.models.ts` | `LeanAgent.AI.Providers.Cerebras` | missing |
+| Cloudflare AI Gateway | `cloudflare-ai-gateway.ts`, `cloudflare-ai-gateway.models.ts` | `LeanAgent.AI.Providers.CloudflareAIGateway` | missing |
+| Cloudflare Workers AI | `cloudflare-workers-ai.ts`, `cloudflare-workers-ai.models.ts` | `LeanAgent.AI.Providers.CloudflareWorkersAI` | missing |
+| Cloudflare auth | `cloudflare-auth.ts` | `LeanAgent.AI.Providers.CloudflareAuth` | missing |
+| DeepSeek | `deepseek.ts`, `deepseek.models.ts` | `LeanAgent.AI.Providers.DeepSeek` | partial |
+| Faux test provider | `faux.ts` | `LeanAgent.AI.Providers.Faux` | missing |
+| Fireworks | `fireworks.ts`, `fireworks.models.ts` | `LeanAgent.AI.Providers.Fireworks` | missing |
+| GitHub Copilot | `github-copilot.ts`, `github-copilot.models.ts` | `LeanAgent.AI.Providers.GitHubCopilot` | missing |
+| Google | `google.ts`, `google.models.ts` | `LeanAgent.AI.Providers.Google` | missing |
+| Google Vertex | `google-vertex.ts`, `google-vertex.models.ts` | `LeanAgent.AI.Providers.GoogleVertex` | missing |
+| Groq | `groq.ts`, `groq.models.ts` | `LeanAgent.AI.Providers.Groq` | missing |
+| Hugging Face | `huggingface.ts`, `huggingface.models.ts` | `LeanAgent.AI.Providers.HuggingFace` | missing |
+| Kimi Coding | `kimi-coding.ts`, `kimi-coding.models.ts` | `LeanAgent.AI.Providers.KimiCoding` | missing |
+| MiniMax | `minimax.ts`, `minimax.models.ts` | `LeanAgent.AI.Providers.MiniMax` | missing |
+| MiniMax CN | `minimax-cn.ts`, `minimax-cn.models.ts` | `LeanAgent.AI.Providers.MiniMaxCN` | missing |
+| Mistral | `mistral.ts`, `mistral.models.ts` | `LeanAgent.AI.Providers.Mistral` | missing |
+| Moonshot AI | `moonshotai.ts`, `moonshotai.models.ts` | `LeanAgent.AI.Providers.MoonshotAI` | missing |
+| Moonshot AI CN | `moonshotai-cn.ts`, `moonshotai-cn.models.ts` | `LeanAgent.AI.Providers.MoonshotAICN` | missing |
+| NVIDIA | `nvidia.ts`, `nvidia.models.ts` | `LeanAgent.AI.Providers.NVIDIA` | missing |
+| OpenAI | `openai.ts`, `openai.models.ts` | `LeanAgent.AI.Providers.OpenAI` | partial |
+| OpenAI Codex | `openai-codex.ts`, `openai-codex.models.ts` | `LeanAgent.AI.Providers.OpenAICodex` | missing |
+| OpenCode | `opencode.ts`, `opencode.models.ts` | `LeanAgent.AI.Providers.OpenCode` | missing |
+| OpenCode Go | `opencode-go.ts`, `opencode-go.models.ts` | `LeanAgent.AI.Providers.OpenCodeGo` | missing |
+| OpenRouter | `openrouter.ts`, `openrouter.models.ts` | `LeanAgent.AI.Providers.OpenRouter` | missing |
+| OpenRouter images | `openrouter-images.ts` | `LeanAgent.AI.Providers.OpenRouterImages` | missing |
+| Together | `together.ts`, `together.models.ts` | `LeanAgent.AI.Providers.Together` | missing |
+| Vercel AI Gateway | `vercel-ai-gateway.ts`, `vercel-ai-gateway.models.ts` | `LeanAgent.AI.Providers.VercelAIGateway` | missing |
+| xAI | `xai.ts`, `xai.models.ts` | `LeanAgent.AI.Providers.XAI` | missing |
+| Xiaomi | `xiaomi.ts`, `xiaomi.models.ts` | `LeanAgent.AI.Providers.Xiaomi` | missing |
+| Xiaomi Token Plan AMS | `xiaomi-token-plan-ams.ts`, `xiaomi-token-plan-ams.models.ts` | `LeanAgent.AI.Providers.XiaomiTokenPlanAMS` | missing |
+| Xiaomi Token Plan CN | `xiaomi-token-plan-cn.ts`, `xiaomi-token-plan-cn.models.ts` | `LeanAgent.AI.Providers.XiaomiTokenPlanCN` | missing |
+| Xiaomi Token Plan SGP | `xiaomi-token-plan-sgp.ts`, `xiaomi-token-plan-sgp.models.ts` | `LeanAgent.AI.Providers.XiaomiTokenPlanSGP` | missing |
+| ZAI | `zai.ts`, `zai.models.ts` | `LeanAgent.AI.Providers.ZAI` | missing |
+| ZAI Coding CN | `zai-coding-cn.ts`, `zai-coding-cn.models.ts` | `LeanAgent.AI.Providers.ZAICodingCN` | missing |
+
+## Utils
+
+| Pi source | Lean target | Status | Notes |
+| --- | --- | --- | --- |
+| `utils/abort-signals.ts` | `LeanAgent.AI.Util.Abort` | missing | Lean cancellation model needs separate design. |
+| `utils/diagnostics.ts` | `LeanAgent.AI.Util.Diagnostics` | missing | Provider diagnostics and assistant message diagnostics. |
+| `utils/estimate.ts` | `LeanAgent.AI.Util.Estimate` | missing | Token estimation. |
+| `utils/event-stream.ts` | `LeanAgent.AI.EventStream` | missing | Core stream abstraction. |
+| `utils/hash.ts` | `LeanAgent.AI.Util.Hash` | missing | Stable hashing for cache/session affinity. |
+| `utils/headers.ts` | `LeanAgent.AI.Util.Headers` | missing | Header merge/suppression helpers. |
+| `utils/json-parse.ts` | `LeanAgent.Json` or `LeanAgent.AI.Util.JsonParse` | partial | Basic JSON helpers exist, partial JSON cleanup missing. |
+| `utils/node-http-proxy.ts` | `LeanAgent.AI.Util.Proxy` | missing | Proxy detection/config. |
+| `utils/overflow.ts` | `LeanAgent.AI.Util.Overflow` | missing | Context window overflow detection. |
+| `utils/provider-env.ts` | `LeanAgent.AI.Util.ProviderEnv` | missing | Provider-scoped env overrides. |
+| `utils/retry.ts` | `LeanAgent.AI.Util.Retry` | missing | Retry delay caps and retry policy. |
+| `utils/sanitize-unicode.ts` | `LeanAgent.AI.Util.SanitizeUnicode` | missing | Unicode surrogate handling. |
+| `utils/typebox-helpers.ts` | `LeanAgent.AI.Schema` | missing | Lean equivalent likely JSON schema helpers. |
+| `utils/validation.ts` | `LeanAgent.AI.Validation` | missing | Tool argument and response validation. |
+
+## Images
+
+| Pi source | Lean target | Status | Notes |
+| --- | --- | --- | --- |
+| `images.ts` | `LeanAgent.AI.Images` | missing | Image generation API. |
+| `images-models.ts` | `LeanAgent.AI.Images.Models` | missing | Runtime model types. |
+| `image-models.ts` | `LeanAgent.AI.Images.Models` | missing | Static image model access. |
+| `image-models.generated.ts` | generated Lean image catalog | missing | Generated or checked-in data. |
+| `images-api-registry.ts` | `LeanAgent.AI.Images.Registry` | missing | Image API dispatch. |
+| `api/openrouter-images.ts` | `LeanAgent.AI.Api.OpenRouterImages` | missing | First image provider candidate. |
+| `providers/openrouter-images.ts` | `LeanAgent.AI.Providers.OpenRouterImages` | missing | Image provider factory. |
+
+## Test Mapping
+
+Initial Lean parity should port tests in this order:
+
+| Pi tests | Lean target | Status | Why first |
+| --- | --- | --- | --- |
+| `models-runtime.test.ts`, `providers.test.ts`, `supports-xhigh.test.ts`, `xhigh.test.ts` | model catalog and thinking tests | partial | Protects provider/model registry. |
+| `env-api-keys.test.ts`, `compat-env.test.ts` | auth/env tests | missing | Moves auth out of CLI. |
+| `stream.test.ts`, `empty.test.ts`, `abort.test.ts` | event stream tests | missing | Establishes stream contract. |
+| `openai-completions-*.test.ts` | OpenAI completions tests | partial | Hardens current DeepSeek/OpenAI path. |
+| `retry.test.ts`, `overflow.test.ts`, `validation.test.ts`, `unicode-surrogate.test.ts` | util tests | missing | Prevents subtle provider failures. |
+| `faux-provider.test.ts` | faux provider tests | missing | Needed for deterministic agent tests. |
+| `images*.test.ts`, `openrouter-images.test.ts` | image tests | missing | Separate image phase. |
+| Anthropic/Google/Mistral/Bedrock/Azure/Codex tests | provider protocol tests | missing | After core OpenAI-compatible path is stable. |
+
+## Milestones
+
+### M1: Core AI Types
+
+Deliver:
+
+- `LeanAgent.AI.Types` for content blocks, messages, tools, usage, stop reasons, stream options.
+- Migration path from old `LeanAgent.Core.AgentMessage` to AI message types.
+- Tests for serialization and basic content filtering.
+
+Exit criteria:
+
+- Existing CLI still runs.
+- Old simplified messages are either wrappers around AI types or explicitly marked legacy.
+
+### M2: Event Stream and Complete
+
+Deliver:
+
+- `LeanAgent.AI.EventStream` with event iteration/result semantics.
+- Wrapper that turns current non-streaming `LeanAgent.OpenAI.provider` into a stream-compatible API.
+- Tests mapped from `stream.test.ts` and `empty.test.ts`.
+
+Exit criteria:
+
+- Agent loop can consume stream events or complete results through the same boundary.
+
+### M3: Models Collection and Auth
+
+Deliver:
+
+- Runtime `Models` collection with provider registration, lookup, refresh no-op for static providers.
+- Env API key auth, in-memory credential store, auth resolution.
+- `createProvider` for single API dispatch.
+
+Exit criteria:
+
+- `Main.lean` no longer owns provider-specific auth/default resolution.
+- Tests mapped from `models-runtime.test.ts`, `env-api-keys.test.ts`, and `providers.test.ts`.
+
+### M4: OpenAI-Compatible API Family
+
+Deliver:
+
+- Refactor `LeanAgent.OpenAI` into `LeanAgent.AI.Api.OpenAICompletions`.
+- Add prompt cache fields, retry, response diagnostics, tool choice behavior, empty tools behavior.
+- Add provider factories for DeepSeek, OpenAI, OpenRouter, Groq, xAI, Cerebras, Together, Fireworks where they share OpenAI-compatible protocol.
+
+Exit criteria:
+
+- DeepSeek remains the default path.
+- OpenAI-compatible Pi tests that do not require live network are ported.
+
+### M5: Provider Protocol Expansion
+
+Deliver in this order:
+
+- Anthropic Messages.
+- Google Generative AI and Google Vertex.
+- Mistral Conversations.
+- Azure OpenAI Responses.
+- OpenAI Responses and Codex Responses.
+- Bedrock Converse Stream.
+
+Exit criteria:
+
+- Each provider has factory, model catalog, auth semantics, and protocol tests before marking implemented.
+
+### M6: Images and Compat
+
+Deliver:
+
+- Image content support in message types.
+- Image generation registry and OpenRouter image provider.
+- Compat/global API registry after new `Models` API is stable.
+
+Exit criteria:
+
+- Image tests pass.
+- Compat API is a thin wrapper over the new model collection, not a second runtime.
+
+## Rules for Updating This Ledger
+
+- Every AI change must update this file in the same commit when status changes.
+- New Lean modules must cite the Pi source row they are closing in commit notes or PR text.
+- A row can become `implemented` only with tests or an explicit reason why runtime validation is impossible.
+- `vendor/pi` is read-only. Do not edit reference files.
+- Prefer behavior parity over line-by-line TypeScript translation.

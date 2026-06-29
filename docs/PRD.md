@@ -11,6 +11,9 @@ Treat it as the source-of-truth reference for module boundaries, behavior, and
 terminology. Do not edit files under `vendor/pi` as part of LeanAgent
 implementation work.
 
+AI-module parity is tracked in [`docs/AI_PARITY.md`](AI_PARITY.md). That ledger
+must be updated before marking any Pi `packages/ai` area complete.
+
 ## Product Goal
 
 Build a self-contained Lean coding agent that can:
@@ -77,5 +80,6 @@ Not yet complete:
 - `lake build` and `lake test` pass on every milestone.
 - README reflects current user-facing behavior only.
 - `docs/ARCHITECTURE.md` reflects implementation boundaries before new subsystems land.
+- `docs/AI_PARITY.md` reflects current `packages/ai` parity before and after AI-module changes.
 - New features include CLI smoke tests or unit tests.
 - OMP work starts only after the corresponding Pi core dependency exists in Lean.

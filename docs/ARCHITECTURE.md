@@ -3,6 +3,9 @@
 LeanAgent follows Pi's package boundaries while using Lean modules instead of
 TypeScript packages. `vendor/pi` is the comparison target.
 
+AI-module parity is tracked in [`docs/AI_PARITY.md`](AI_PARITY.md). Update that
+ledger whenever `packages/ai` coverage changes.
+
 ## Module Map
 
 | Pi domain | LeanAgent modules |
@@ -51,6 +54,9 @@ Current catalog scope is intentionally static:
 Dynamic model refresh, OAuth auth, image APIs, and mixed API dispatch remain
 future work. CLI defaults must resolve through this catalog instead of hardcoded
 provider constants.
+
+The complete `packages/ai` migration order and status lives in
+[`docs/AI_PARITY.md`](AI_PARITY.md).
 
 ## Current Runtime Flow
 
