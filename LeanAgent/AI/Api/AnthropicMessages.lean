@@ -16,6 +16,7 @@ open LeanAgent
 
 def api : String := "anthropic-messages"
 def anthropicVersion : String := "2023-06-01"
+def fineGrainedToolStreamingBeta : String := "fine-grained-tool-streaming-2025-05-14"
 
 structure AnthropicMessagesConfig where
   apiKey : String
@@ -43,6 +44,9 @@ structure AnthropicMessagesOptions extends LeanAgent.AI.SimpleStreamOptions wher
   supportsTemperature : Bool := true
   sendSessionAffinityHeaders : Bool := false
   supportsLongCacheRetention : Bool := true
+  supportsEagerToolInputStreaming : Bool := true
+  supportsCacheControlOnTools : Bool := true
+  allowEmptySignature : Bool := false
 
 def optionsFromSimple (options : LeanAgent.AI.SimpleStreamOptions) : AnthropicMessagesOptions :=
   { temperature := options.temperature
@@ -177,7 +181,14 @@ def convertToolResultContent (content : Array LeanAgent.AI.ContentBlock) : Lean.
       if hasText then blocks else #[textBlock "(see attached image)"] ++ blocks
     LeanAgent.Json.arr blocks
 
-def assistantContentBlock? : LeanAgent.AI.ContentBlock → Option Lean.Json
+def thinkingBlock (thinking signature : String) : Lean.Json :=
+  LeanAgent.Json.obj
+    [ ("type", LeanAgent.Json.str "thinking")
+    , ("thinking", LeanAgent.Json.str thinking)
+    , ("signature", LeanAgent.Json.str signature)
+    ]
+
+def assistantContentBlock? (allowEmptySignature : Bool) : LeanAgent.AI.ContentBlock → Option Lean.Json
   | .text content =>
       if content.text.trimAscii.toString.isEmpty then none else some (textBlock content.text)
   | .thinking content =>
@@ -192,13 +203,18 @@ def assistantContentBlock? : LeanAgent.AI.ContentBlock → Option Lean.Json
       else
         match content.thinkingSignature with
         | some signature =>
-            some
-              (LeanAgent.Json.obj
-                [ ("type", LeanAgent.Json.str "thinking")
-                , ("thinking", LeanAgent.Json.str content.thinking)
-                , ("signature", LeanAgent.Json.str signature)
-                ])
-        | none => some (textBlock content.thinking)
+            if signature.trimAscii.toString.isEmpty then
+              if allowEmptySignature then
+                some (thinkingBlock content.thinking "")
+              else
+                some (textBlock content.thinking)
+            else
+              some (thinkingBlock content.thinking signature)
+        | none =>
+            if allowEmptySignature then
+              some (thinkingBlock content.thinking "")
+            else
+              some (textBlock content.thinking)
   | .toolCall call =>
       some
         (LeanAgent.Json.obj
@@ -209,8 +225,10 @@ def assistantContentBlock? : LeanAgent.AI.ContentBlock → Option Lean.Json
           ])
   | .image _ => none
 
-def convertAssistantContent (content : Array LeanAgent.AI.ContentBlock) : Option Lean.Json :=
-  let blocks := content.filterMap assistantContentBlock?
+def convertAssistantContent
+    (content : Array LeanAgent.AI.ContentBlock)
+    (allowEmptySignature : Bool := false) : Option Lean.Json :=
+  let blocks := content.filterMap (assistantContentBlock? allowEmptySignature)
   if blocks.isEmpty then none else some (LeanAgent.Json.arr blocks)
 
 def toolResultBlock (message : LeanAgent.AI.ToolResultMessage) : Lean.Json :=
@@ -228,30 +246,31 @@ partial def collectToolResults :
 
 partial def convertMessagesAux
     (messages : List LeanAgent.AI.Message)
+    (allowEmptySignature : Bool := false)
     (acc : Array Lean.Json := #[]) : Array Lean.Json :=
   match messages with
   | [] => acc
   | .user message :: rest =>
       match convertUserContent message.content with
       | some content =>
-          convertMessagesAux rest
+          convertMessagesAux rest allowEmptySignature
             (acc.push (LeanAgent.Json.obj
               [ ("role", LeanAgent.Json.str "user")
               , ("content", content)
               ]))
-      | none => convertMessagesAux rest acc
+      | none => convertMessagesAux rest allowEmptySignature acc
   | .assistant message :: rest =>
-      match convertAssistantContent message.content with
+      match convertAssistantContent message.content allowEmptySignature with
       | some content =>
-          convertMessagesAux rest
+          convertMessagesAux rest allowEmptySignature
             (acc.push (LeanAgent.Json.obj
               [ ("role", LeanAgent.Json.str "assistant")
               , ("content", content)
               ]))
-      | none => convertMessagesAux rest acc
+      | none => convertMessagesAux rest allowEmptySignature acc
   | .toolResult result :: rest =>
       let (toolResults, remaining) := collectToolResults rest #[toolResultBlock result]
-      convertMessagesAux remaining
+      convertMessagesAux remaining allowEmptySignature
         (acc.push (LeanAgent.Json.obj
           [ ("role", LeanAgent.Json.str "user")
           , ("content", LeanAgent.Json.arr toolResults)
@@ -289,13 +308,16 @@ def convertMessages
     (model : LeanAgent.AI.ModelRef)
     (input : Array String)
     (context : LeanAgent.AI.Context)
-    (cacheControl? : Option Lean.Json := none) : Array Lean.Json :=
+    (cacheControl? : Option Lean.Json := none)
+    (allowEmptySignature : Bool := false) : Array Lean.Json :=
   let transformed :=
     LeanAgent.AI.Api.TransformMessages.transformMessages
       context.messages
       (targetModel model input)
       { normalizeToolCallId? := some normalizeToolCallId }
-  addCacheControlToLastUserMessage (convertMessagesAux transformed.toList) cacheControl?
+  addCacheControlToLastUserMessage
+    (convertMessagesAux transformed.toList allowEmptySignature)
+    cacheControl?
 
 def systemFields (context : LeanAgent.AI.Context) (cacheControl? : Option Lean.Json := none) : List (String × Lean.Json) :=
   match context.systemPrompt with
@@ -306,29 +328,40 @@ def systemFields (context : LeanAgent.AI.Context) (cacheControl? : Option Lean.J
         [("system", LeanAgent.Json.arr #[textBlock prompt cacheControl?])]
   | none => []
 
-def toolToJson (tool : LeanAgent.AI.Tool) : Lean.Json :=
+def toolToJson
+    (tool : LeanAgent.AI.Tool)
+    (supportsEagerToolInputStreaming : Bool := true) : Lean.Json :=
   let properties := (LeanAgent.Json.optVal? tool.parameters "properties").getD (LeanAgent.Json.obj [])
   let required := (LeanAgent.Json.optVal? tool.parameters "required").getD (LeanAgent.Json.arr #[])
   LeanAgent.Json.obj
-    [ ("name", LeanAgent.Json.str tool.name)
-    , ("description", LeanAgent.Json.str tool.description)
-    , ("input_schema",
-        LeanAgent.Json.obj
-          [ ("type", LeanAgent.Json.str "object")
-          , ("properties", properties)
-          , ("required", required)
-          ])
-    ]
+    ([ ("name", LeanAgent.Json.str tool.name)
+     , ("description", LeanAgent.Json.str tool.description)
+     ] ++
+     (if supportsEagerToolInputStreaming then
+       [("eager_input_streaming", LeanAgent.Json.bool true)]
+     else
+       []) ++
+     [ ("input_schema",
+          LeanAgent.Json.obj
+            [ ("type", LeanAgent.Json.str "object")
+            , ("properties", properties)
+            , ("required", required)
+            ])
+     ])
 
-def toolFields (tools : Array LeanAgent.AI.Tool) (cacheControl? : Option Lean.Json := none) : List (String × Lean.Json) :=
+def toolFields
+    (tools : Array LeanAgent.AI.Tool)
+    (cacheControl? : Option Lean.Json := none)
+    (supportsEagerToolInputStreaming : Bool := true)
+    (supportsCacheControlOnTools : Bool := true) : List (String × Lean.Json) :=
   if tools.isEmpty then
     []
   else
     let toolJson := tools.mapIdx fun index tool =>
-      let json := toolToJson tool
+      let json := toolToJson tool supportsEagerToolInputStreaming
       match cacheControl? with
       | some cacheControl =>
-          if index + 1 == tools.size then
+          if supportsCacheControlOnTools && index + 1 == tools.size then
             jsonObjectUpsert json "cache_control" cacheControl
           else
             json
@@ -434,29 +467,52 @@ def requestToJsonWithOptions
   let cacheControl := cacheControl? options
   LeanAgent.Json.obj
     ([ ("model", LeanAgent.Json.str model.id)
-     , ("messages", LeanAgent.Json.arr (convertMessages model input context cacheControl))
+     , ("messages", LeanAgent.Json.arr
+          (convertMessages model input context cacheControl options.allowEmptySignature))
      , ("stream", LeanAgent.Json.bool stream)
      ] ++ systemFields context cacheControl
        ++ requestOptionFields modelMaxTokens options
        ++ thinkingFields reasoning options
-       ++ toolFields context.tools cacheControl
+       ++ toolFields
+            context.tools
+            cacheControl
+            options.supportsEagerToolInputStreaming
+            options.supportsCacheControlOnTools
        ++ toolChoiceFields options
        ++ metadataFields options.metadata)
 
+def shouldUseFineGrainedToolStreamingBeta
+    (tools : Array LeanAgent.AI.Tool)
+    (options : AnthropicMessagesOptions) : Bool :=
+  !tools.isEmpty && !options.supportsEagerToolInputStreaming
+
 def requestHeaders
     (config : AnthropicMessagesConfig)
-    (options : AnthropicMessagesOptions) : Array (String × String) :=
+    (options : AnthropicMessagesOptions)
+    (tools : Array LeanAgent.AI.Tool := #[]) : Array (String × String) :=
+  let useFineGrainedToolStreamingBeta :=
+    shouldUseFineGrainedToolStreamingBeta tools options
   let authHeaders :=
     if config.apiKey.trimAscii.toString.isEmpty then
       #[]
     else if config.apiKey.contains "sk-ant-oat" then
+      let beta :=
+        if useFineGrainedToolStreamingBeta then
+          "claude-code-20250219,oauth-2025-04-20," ++ fineGrainedToolStreamingBeta
+        else
+          "claude-code-20250219,oauth-2025-04-20"
       #[ ("Authorization", "Bearer " ++ config.apiKey)
-       , ("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
+       , ("anthropic-beta", beta)
        , ("user-agent", "claude-cli/2.1.75")
        , ("x-app", "cli")
        ]
     else
       #[("x-api-key", config.apiKey)]
+  let betaHeaders :=
+    if !config.apiKey.contains "sk-ant-oat" && useFineGrainedToolStreamingBeta then
+      #[("anthropic-beta", fineGrainedToolStreamingBeta)]
+    else
+      #[]
   let sessionHeaders :=
     if options.sendSessionAffinityHeaders && options.cacheRetention != some .none then
       match options.sessionId with
@@ -467,6 +523,7 @@ def requestHeaders
   LeanAgent.AI.Util.Headers.mergeProvider
     (config.headers ++
       (authHeaders ++
+      betaHeaders ++
       sessionHeaders ++
       #[ ("anthropic-version", anthropicVersion)
        , ("accept", "application/json")
@@ -478,11 +535,12 @@ def runHttpJson
     (config : AnthropicMessagesConfig)
     (model : LeanAgent.AI.ModelRef)
     (payload : Lean.Json)
-    (options : AnthropicMessagesOptions := {}) : IO String := do
+    (options : AnthropicMessagesOptions := {})
+    (tools : Array LeanAgent.AI.Tool := #[]) : IO String := do
   let response ← LeanAgent.Http.postJsonResponse
     { url := messagesUrl config.baseUrl
       apiKey := ""
-      headers := requestHeaders config options
+      headers := requestHeaders config options tools
       timeoutSeconds := config.timeoutSeconds
       connectTimeoutSeconds := config.connectTimeoutSeconds
       maxResponseBytes := config.maxResponseBytes
@@ -1032,7 +1090,7 @@ def completeWithOptions
     (requestToJsonWithOptions ref input modelMaxTokens reasoning context options false)
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
   let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
-    (runHttpJson config ref payload options)
+    (runHttpJson config ref payload options context.tools)
   let timestamp ← IO.monoMsNow
   match parseResponse model.api model.provider model.id timestamp raw with
   | .ok message => pure message
@@ -1051,7 +1109,7 @@ def completeStreamWithOptions
     (requestToJsonWithOptions ref input modelMaxTokens reasoning context options true)
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
   let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
-    (runHttpJson config ref payload options)
+    (runHttpJson config ref payload options context.tools)
   let timestamp ← IO.monoMsNow
   match parseStreamingEventStream model.api model.provider model.id timestamp raw with
   | .ok stream => pure stream

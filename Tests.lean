@@ -1055,6 +1055,9 @@ def testAnthropicMessagesRequestPayload : IO Unit := do
       match tools[0]? with
       | some tool =>
           assertTrue (jsonStringField? tool "name" == some "read") "expected Anthropic tool"
+          assertTrue
+            (LeanAgent.Json.optVal? tool "eager_input_streaming" == some (LeanAgent.Json.bool true))
+            "expected Anthropic tool eager input streaming"
           match jsonObjectField? tool "cache_control" with
           | some cacheControl =>
               assertTrue (jsonStringField? cacheControl "ttl" == some "1h")
@@ -1125,7 +1128,117 @@ def testAnthropicMessagesCompatOptions : IO Unit := do
   assertTrue (LeanAgent.Json.optVal? payload "temperature" == none)
     "expected disabled Anthropic temperature support to omit temperature"
 
+def testAnthropicMessagesCompatPayloadOptions : IO Unit := do
+  let readTool : LeanAgent.AI.Tool :=
+    { name := "read"
+      description := "Read a file"
+      parameters :=
+        LeanAgent.Json.obj
+          [ ("type", LeanAgent.Json.str "object")
+          , ("properties", LeanAgent.Json.obj [("path", LeanAgent.Json.obj [("type", LeanAgent.Json.str "string")])])
+          , ("required", LeanAgent.Json.arr #[LeanAgent.Json.str "path"])
+          ]
+    }
+  let toolContext : LeanAgent.AI.Context :=
+    { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      tools := #[readTool]
+    }
+  let noToolCompatPayload := LeanAgent.AI.Api.AnthropicMessages.requestToJsonWithOptions
+    anthropicModelRef
+    #["text"]
+    64000
+    false
+    toolContext
+    { cacheRetention := some .long
+      supportsEagerToolInputStreaming := false
+      supportsCacheControlOnTools := false
+    }
+  match jsonArrayField? noToolCompatPayload "tools" with
+  | some tools =>
+      match tools[0]? with
+      | some tool =>
+          assertTrue (LeanAgent.Json.optVal? tool "eager_input_streaming" == none)
+            "expected compat to omit Anthropic eager input streaming"
+          assertTrue (LeanAgent.Json.optVal? tool "cache_control" == none)
+            "expected compat to omit Anthropic tool cache_control"
+      | none => fail "expected compat tool"
+  | none => fail "expected compat tools"
+  let thinkingAssistant : LeanAgent.AI.AssistantMessage :=
+    { content :=
+        #[ .thinking
+            { thinking := "draft reasoning"
+              thinkingSignature := none
+            }
+         ]
+      api := LeanAgent.AI.Api.AnthropicMessages.api
+      provider := LeanAgent.Models.anthropicProviderId
+      model := LeanAgent.Models.anthropicDefaultModel
+      stopReason := .stop
+      timestamp := 2
+    }
+  let thinkingContext : LeanAgent.AI.Context :=
+    { messages :=
+        #[ .user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }
+         , .assistant thinkingAssistant
+         ]
+    }
+  let defaultPayload := LeanAgent.AI.Api.AnthropicMessages.requestToJsonWithOptions
+    anthropicModelRef
+    #["text"]
+    64000
+    true
+    thinkingContext
+  match jsonArrayField? defaultPayload "messages" with
+  | some messages =>
+      match messages[1]? with
+      | some assistantMessage =>
+          match jsonArrayField? assistantMessage "content" with
+          | some content =>
+              match content[0]? with
+              | some block =>
+                  assertTrue (jsonStringField? block "type" == some "text")
+                    "expected missing Anthropic thinking signature to downgrade to text"
+                  assertTrue (jsonStringField? block "text" == some "draft reasoning")
+                    "expected downgraded Anthropic thinking text"
+              | none => fail "expected default thinking block"
+          | none => fail "expected default assistant content"
+      | none => fail "expected default assistant message"
+  | none => fail "expected default messages"
+  let allowPayload := LeanAgent.AI.Api.AnthropicMessages.requestToJsonWithOptions
+    anthropicModelRef
+    #["text"]
+    64000
+    true
+    thinkingContext
+    { allowEmptySignature := true }
+  match jsonArrayField? allowPayload "messages" with
+  | some messages =>
+      match messages[1]? with
+      | some assistantMessage =>
+          match jsonArrayField? assistantMessage "content" with
+          | some content =>
+              match content[0]? with
+              | some block =>
+                  assertTrue (jsonStringField? block "type" == some "thinking")
+                    "expected compat to preserve Anthropic thinking block"
+                  assertTrue (jsonStringField? block "signature" == some "")
+                    "expected compat to replay empty Anthropic signature"
+              | none => fail "expected allow-empty thinking block"
+          | none => fail "expected allow-empty assistant content"
+      | none => fail "expected allow-empty assistant message"
+  | none => fail "expected allow-empty messages"
+
 def testAnthropicMessagesHeaders : IO Unit := do
+  let readTool : LeanAgent.AI.Tool :=
+    { name := "read"
+      description := "Read a file"
+      parameters :=
+        LeanAgent.Json.obj
+          [ ("type", LeanAgent.Json.str "object")
+          , ("properties", LeanAgent.Json.obj [])
+          , ("required", LeanAgent.Json.arr #[])
+          ]
+    }
   let headers := LeanAgent.AI.Api.AnthropicMessages.requestHeaders
     { apiKey := "anthropic-key"
       headers := #[("X-Custom", "custom")]
@@ -1154,6 +1267,36 @@ def testAnthropicMessagesHeaders : IO Unit := do
   assertTrue
     (headerValueCaseInsensitive? oauthHeaders "anthropic-beta" == some "claude-code-20250219,oauth-2025-04-20")
     "expected OAuth beta headers"
+  let fineGrainedHeaders := LeanAgent.AI.Api.AnthropicMessages.requestHeaders
+    { apiKey := "anthropic-key" }
+    { supportsEagerToolInputStreaming := false }
+    #[readTool]
+  assertTrue
+    (headerValueCaseInsensitive? fineGrainedHeaders "anthropic-beta" ==
+      some LeanAgent.AI.Api.AnthropicMessages.fineGrainedToolStreamingBeta)
+    "expected Anthropic fine-grained tool streaming beta header"
+  let noToolFineGrainedHeaders := LeanAgent.AI.Api.AnthropicMessages.requestHeaders
+    { apiKey := "anthropic-key" }
+    { supportsEagerToolInputStreaming := false }
+  assertTrue (headerValueCaseInsensitive? noToolFineGrainedHeaders "anthropic-beta" == none)
+    "expected no Anthropic fine-grained beta header without tools"
+  let oauthFineGrainedHeaders := LeanAgent.AI.Api.AnthropicMessages.requestHeaders
+    { apiKey := "sk-ant-oat-token" }
+    { supportsEagerToolInputStreaming := false }
+    #[readTool]
+  assertTrue
+    (headerValueCaseInsensitive? oauthFineGrainedHeaders "anthropic-beta" ==
+      some ("claude-code-20250219,oauth-2025-04-20," ++
+        LeanAgent.AI.Api.AnthropicMessages.fineGrainedToolStreamingBeta))
+    "expected OAuth Anthropic beta header to include fine-grained tool streaming"
+  let overriddenBetaHeaders := LeanAgent.AI.Api.AnthropicMessages.requestHeaders
+    { apiKey := "anthropic-key" }
+    { supportsEagerToolInputStreaming := false
+      headers := #[("anthropic-beta", some "caller-beta")]
+    }
+    #[readTool]
+  assertTrue (headerValueCaseInsensitive? overriddenBetaHeaders "anthropic-beta" == some "caller-beta")
+    "expected caller to override Anthropic beta header"
   let affinityHeaders := LeanAgent.AI.Api.AnthropicMessages.requestHeaders
     { apiKey := "anthropic-key" }
     { sessionId := some "session-anthropic"
@@ -7019,6 +7162,7 @@ def main : IO UInt32 := do
     testOpenAIResponsesSharedConvertsTools
     testAnthropicMessagesRequestPayload
     testAnthropicMessagesCompatOptions
+    testAnthropicMessagesCompatPayloadOptions
     testAnthropicMessagesHeaders
     testAnthropicMessagesParsesResponse
     testAnthropicMessagesParsesStreamingEvents

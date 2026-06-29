@@ -198,6 +198,9 @@ structure ModelCompat where
   supportsLongCacheRetention : Bool := true
   sendSessionAffinityHeaders : Bool := false
   supportsTemperature : Bool := true
+  supportsEagerToolInputStreaming : Bool := true
+  supportsCacheControlOnTools : Bool := true
+  allowEmptySignature : Bool := false
   forceAdaptiveThinking : Bool := false
 deriving Repr, BEq
 
@@ -2321,6 +2324,9 @@ def anthropicMessagesOptionsFromSimple
       supportsTemperature := model.compat.supportsTemperature
       sendSessionAffinityHeaders := model.compat.sendSessionAffinityHeaders
       supportsLongCacheRetention := model.compat.supportsLongCacheRetention
+      supportsEagerToolInputStreaming := model.compat.supportsEagerToolInputStreaming
+      supportsCacheControlOnTools := model.compat.supportsCacheControlOnTools
+      allowEmptySignature := model.compat.allowEmptySignature
     }
   match options.reasoning with
   | none =>
