@@ -2076,6 +2076,114 @@ def testOAuthGetOAuthApiKeyErrors : IO Unit := do
   assertTrue ((← refreshCalls.get) == 1) "expected failed refresh to be attempted once"
   LeanAgent.AI.OAuth.resetOAuthProviders
 
+def nextOAuthDeviceCodePoll
+    (polls : IO.Ref (List (LeanAgent.AI.OAuth.OAuthDeviceCodePollResult String))) :
+    IO (LeanAgent.AI.OAuth.OAuthDeviceCodePollResult String) := do
+  match ← polls.get with
+  | [] => throw (IO.userError "unexpected extra OAuth device-code poll")
+  | result :: rest =>
+      polls.set rest
+      pure result
+
+def fakeOAuthDeviceCodeSleep (nowRef : IO.Ref Nat) (sleepsRef : IO.Ref (Array Nat)) (ms : Nat) : IO Unit := do
+  sleepsRef.modify (·.push ms)
+  nowRef.modify (· + ms)
+
+def testOAuthDeviceCodeCompletesAfterPending : IO Unit := do
+  let polls ← IO.mkRef
+    [ LeanAgent.AI.OAuth.OAuthDeviceCodePollResult.pending
+    , LeanAgent.AI.OAuth.OAuthDeviceCodePollResult.complete "device-token"
+    ]
+  let nowRef ← IO.mkRef 0
+  let sleepsRef ← IO.mkRef #[]
+  let result ← LeanAgent.AI.OAuth.pollOAuthDeviceCodeFlow
+    { poll := nextOAuthDeviceCodePoll polls
+      nowMs := nowRef.get
+      sleepMs := fakeOAuthDeviceCodeSleep nowRef sleepsRef
+    }
+  assertTrue (result == "device-token") "expected completed device-code token"
+  assertTrue ((← sleepsRef.get) == #[5000]) "expected default 5s device-code polling interval"
+
+def testOAuthDeviceCodeSlowDownIncreasesInterval : IO Unit := do
+  let polls ← IO.mkRef
+    [ LeanAgent.AI.OAuth.OAuthDeviceCodePollResult.slowDown
+    , LeanAgent.AI.OAuth.OAuthDeviceCodePollResult.pending
+    , LeanAgent.AI.OAuth.OAuthDeviceCodePollResult.complete "device-token"
+    ]
+  let nowRef ← IO.mkRef 0
+  let sleepsRef ← IO.mkRef #[]
+  let result ← LeanAgent.AI.OAuth.pollOAuthDeviceCodeFlow
+    { poll := nextOAuthDeviceCodePoll polls
+      nowMs := nowRef.get
+      sleepMs := fakeOAuthDeviceCodeSleep nowRef sleepsRef
+    }
+  assertTrue (result == "device-token") "expected completed device-code token after slow_down"
+  assertTrue ((← sleepsRef.get) == #[10000, 10000])
+    "expected slow_down to add 5s to current and later intervals"
+
+def testOAuthDeviceCodeFailureAndCancellation : IO Unit := do
+  let failedPolls ← IO.mkRef [LeanAgent.AI.OAuth.OAuthDeviceCodePollResult.failed "authorization declined"]
+  let failed ←
+    try
+      let _ ← LeanAgent.AI.OAuth.pollOAuthDeviceCodeFlow
+        { poll := nextOAuthDeviceCodePoll failedPolls }
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains "authorization declined") "expected device-code failed message"
+      pure true
+  assertTrue failed "device-code failed poll should throw"
+  let cancelPolls ← IO.mkRef [LeanAgent.AI.OAuth.OAuthDeviceCodePollResult.complete "unused"]
+  let cancelled ←
+    try
+      let _ ← LeanAgent.AI.OAuth.pollOAuthDeviceCodeFlow
+        { poll := nextOAuthDeviceCodePoll cancelPolls
+          isCancelled := pure true
+        }
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains LeanAgent.AI.OAuth.cancelMessage)
+        "expected device-code cancellation message"
+      pure true
+  assertTrue cancelled "cancelled device-code flow should throw before polling"
+
+def testOAuthDeviceCodeTimeouts : IO Unit := do
+  let timeoutPolls ← IO.mkRef [LeanAgent.AI.OAuth.OAuthDeviceCodePollResult.pending]
+  let nowRef ← IO.mkRef 0
+  let sleepsRef ← IO.mkRef #[]
+  let timedOut ←
+    try
+      let _ ← LeanAgent.AI.OAuth.pollOAuthDeviceCodeFlow
+        { expiresInSeconds := some 1
+          poll := nextOAuthDeviceCodePoll timeoutPolls
+          nowMs := nowRef.get
+          sleepMs := fakeOAuthDeviceCodeSleep nowRef sleepsRef
+        }
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains LeanAgent.AI.OAuth.timeoutMessage)
+        "expected device-code timeout message"
+      pure true
+  assertTrue timedOut "pending device-code flow should time out"
+  assertTrue ((← sleepsRef.get) == #[1000]) "expected sleep to be capped by deadline"
+  let slowDownPolls ← IO.mkRef [LeanAgent.AI.OAuth.OAuthDeviceCodePollResult.slowDown]
+  let slowNowRef ← IO.mkRef 0
+  let slowSleepsRef ← IO.mkRef #[]
+  let slowTimedOut ←
+    try
+      let _ ← LeanAgent.AI.OAuth.pollOAuthDeviceCodeFlow
+        { expiresInSeconds := some 1
+          poll := nextOAuthDeviceCodePoll slowDownPolls
+          nowMs := slowNowRef.get
+          sleepMs := fakeOAuthDeviceCodeSleep slowNowRef slowSleepsRef
+        }
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains "slow_down responses")
+        "expected slow_down timeout message"
+      pure true
+  assertTrue slowTimedOut "slow_down device-code flow should time out with slow_down message"
+  assertTrue ((← slowSleepsRef.get) == #[1000]) "expected slow_down sleep to be capped by deadline"
+
 def headerValueOpt? (headers : Array (String × Option String)) (name : String) : Option (Option String) :=
   headers.findSome? fun (headerName, value) =>
     if headerName.toLower == name.toLower then some value else none
@@ -4178,6 +4286,10 @@ def main : IO UInt32 := do
     testOAuthRefreshTokenDispatch
     testOAuthGetOAuthApiKey
     testOAuthGetOAuthApiKeyErrors
+    testOAuthDeviceCodeCompletesAfterPending
+    testOAuthDeviceCodeSlowDownIncreasesInterval
+    testOAuthDeviceCodeFailureAndCancellation
+    testOAuthDeviceCodeTimeouts
     testCloudflareWorkersAIAuthResolution
     testCloudflareAIGatewayAuthResolution
     testCloudflareStoredCredentialResolution

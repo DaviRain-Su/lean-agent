@@ -60,11 +60,89 @@ structure OAuthApiKeyResult where
   apiKey : String
 deriving BEq
 
+def cancelMessage : String := "Login cancelled"
+def timeoutMessage : String := "Device flow timed out"
+def slowDownTimeoutMessage : String :=
+  "Device flow timed out after one or more slow_down responses. This is often caused by clock drift in WSL or VM environments. Please sync or restart the VM clock and try again."
+def minimumIntervalMs : Nat := 1000
+def defaultPollIntervalSeconds : Nat := 5
+def slowDownIntervalIncrementMs : Nat := 5000
+
+inductive OAuthDeviceCodePollResult (α : Type) where
+  | pending
+  | slowDown
+  | failed (message : String)
+  | complete (value : α)
+deriving BEq
+
+structure OAuthDeviceCodePollOptions (α : Type) where
+  intervalSeconds : Option Nat := none
+  expiresInSeconds : Option Nat := none
+  poll : IO (OAuthDeviceCodePollResult α)
+  nowMs : IO Nat := LeanAgent.AI.Auth.epochMsNow
+  sleepMs : Nat → IO Unit := fun ms => IO.sleep (UInt32.ofNat ms)
+  isCancelled : IO Bool := pure false
+
 structure RegisteredOAuthProvider where
   provider : OAuthProviderInterface
 
 initialize oauthProviderRegistry : IO.Ref (Array RegisteredOAuthProvider) ← IO.mkRef #[]
 initialize builtInOAuthProviders : IO.Ref (Array OAuthProviderInterface) ← IO.mkRef #[]
+
+def initialDeviceCodeIntervalMs (intervalSeconds : Option Nat) : Nat :=
+  Nat.max minimumIntervalMs ((intervalSeconds.getD defaultPollIntervalSeconds) * 1000)
+
+def deviceCodeDeadline? (nowMs : Nat) (expiresInSeconds : Option Nat) : Option Nat :=
+  expiresInSeconds.map fun seconds => nowMs + seconds * 1000
+
+def deviceCodeTimeoutError (slowDownResponses : Nat) : IO α :=
+  if slowDownResponses > 0 then
+    throw (IO.userError slowDownTimeoutMessage)
+  else
+    throw (IO.userError timeoutMessage)
+
+def sleepUntilNextDevicePoll
+    (options : OAuthDeviceCodePollOptions α)
+    (intervalMs : Nat)
+    (deadline? : Option Nat)
+    (slowDownResponses : Nat) : IO Unit := do
+  match deadline? with
+  | none => options.sleepMs intervalMs
+  | some deadline =>
+      let now ← options.nowMs
+      if now >= deadline then
+        deviceCodeTimeoutError slowDownResponses
+      else
+        options.sleepMs (Nat.min intervalMs (deadline - now))
+
+partial def pollOAuthDeviceCodeLoop
+    (options : OAuthDeviceCodePollOptions α)
+    (deadline? : Option Nat)
+    (intervalMs : Nat)
+    (slowDownResponses : Nat) : IO α := do
+  if ← options.isCancelled then
+    throw (IO.userError cancelMessage)
+  match deadline? with
+  | some deadline =>
+      if (← options.nowMs) >= deadline then
+        deviceCodeTimeoutError slowDownResponses
+  | none => pure ()
+  match ← options.poll with
+  | .complete value => pure value
+  | .failed message => throw (IO.userError message)
+  | .pending =>
+      sleepUntilNextDevicePoll options intervalMs deadline? slowDownResponses
+      pollOAuthDeviceCodeLoop options deadline? intervalMs slowDownResponses
+  | .slowDown =>
+      let slowDownResponses := slowDownResponses + 1
+      let intervalMs := Nat.max minimumIntervalMs (intervalMs + slowDownIntervalIncrementMs)
+      sleepUntilNextDevicePoll options intervalMs deadline? slowDownResponses
+      pollOAuthDeviceCodeLoop options deadline? intervalMs slowDownResponses
+
+def pollOAuthDeviceCodeFlow (options : OAuthDeviceCodePollOptions α) : IO α := do
+  let now ← options.nowMs
+  let deadline? := deviceCodeDeadline? now options.expiresInSeconds
+  pollOAuthDeviceCodeLoop options deadline? (initialDeviceCodeIntervalMs options.intervalSeconds) 0
 
 def providerById? (providers : Array RegisteredOAuthProvider) (id : OAuthProviderId) :
     Option OAuthProviderInterface :=
