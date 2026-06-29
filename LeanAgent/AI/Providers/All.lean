@@ -11,6 +11,7 @@ import LeanAgent.AI.Providers.GoogleVertex
 import LeanAgent.AI.Providers.Groq
 import LeanAgent.AI.Providers.Mistral
 import LeanAgent.AI.Providers.OpenAI
+import LeanAgent.AI.Providers.OpenAICodex
 import LeanAgent.AI.Providers.OpenRouterImages
 import LeanAgent.AI.Providers.OpenRouter
 import LeanAgent.AI.Providers.Together
@@ -43,6 +44,7 @@ def catalogProviders : IO (Array LeanAgent.Models.Provider) := do
   pure
     #[ ← LeanAgent.AI.Providers.DeepSeek.provider
      , ← LeanAgent.AI.Providers.OpenAI.provider
+     , ← LeanAgent.AI.Providers.OpenAICodex.provider
      , ← LeanAgent.AI.Providers.OpenRouter.provider
      , ← LeanAgent.AI.Providers.Groq.provider
      , ← LeanAgent.AI.Providers.XAI.provider

@@ -926,6 +926,10 @@ def applyResponseStreamEvent
       match responseObject? event with
       | some response => pure (applyTerminalResponse state response, events)
       | none => pure ({ state with sawTerminalResponseEvent := true }, events)
+  | some "response.done" =>
+      match responseObject? event with
+      | some response => pure (applyTerminalResponse state response, events)
+      | none => pure ({ state with sawTerminalResponseEvent := true }, events)
   | some "response.incomplete" =>
       match responseObject? event with
       | some response => pure (applyTerminalResponse state response, events)

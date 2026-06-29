@@ -535,6 +535,9 @@ def responsesCodexModel : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel 
     supportsDeveloperRole := true
   }
 
+def fakeOpenAICodexJwt : String :=
+  "e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdF90ZXN0In19.sig"
+
 def azureResponsesModel : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel :=
   { id := "gpt-4o-mini"
     provider := "azure-openai-responses"
@@ -1883,6 +1886,82 @@ def testOpenAIResponsesRequestClampsMaxTokens : IO Unit := do
     (LeanAgent.Json.optVal? payload "max_output_tokens" == some (LeanAgent.Json.nat 902))
     "expected Responses max_output_tokens to be context-clamped"
 
+def testOpenAICodexResponsesAuthAndUrlHelpers : IO Unit := do
+  match LeanAgent.AI.Api.OpenAICodexResponses.extractAccountId fakeOpenAICodexJwt with
+  | .ok accountId => assertTrue (accountId == "acct_test") "expected Codex account id"
+  | .error err => fail s!"expected account id: {err}"
+  assertTrue
+    (LeanAgent.AI.Api.OpenAICodexResponses.codexResponsesUrl
+      "https://chatgpt.com/backend-api" ==
+        "https://chatgpt.com/backend-api/codex/responses")
+    "expected default Codex URL suffix"
+  assertTrue
+    (LeanAgent.AI.Api.OpenAICodexResponses.codexResponsesUrl
+      "https://chatgpt.com/backend-api/codex" ==
+        "https://chatgpt.com/backend-api/codex/responses")
+    "expected Codex URL from /codex base"
+  assertTrue
+    (LeanAgent.AI.Api.OpenAICodexResponses.codexResponsesUrl
+      "https://chatgpt.com/backend-api/codex/responses" ==
+        "https://chatgpt.com/backend-api/codex/responses")
+    "expected Codex URL to preserve explicit endpoint"
+
+def testOpenAICodexResponsesRequestPayload : IO Unit := do
+  let context : LeanAgent.AI.Context :=
+    { systemPrompt := some "codex system"
+      messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      tools :=
+        #[ { name := "read"
+             description := "Read a file"
+             parameters := LeanAgent.Json.obj [("type", LeanAgent.Json.str "object")]
+           }
+         ]
+    }
+  let model :=
+    (LeanAgent.Models.openAICodexModel "gpt-5.5" "GPT-5.5" 5.0 30.0 0.5 0.0 272000 128000).toResponsesModel
+  let payload := LeanAgent.AI.Api.OpenAICodexResponses.requestToJsonWithOptions
+    model
+    context
+    { sessionId := some "codex-session"
+      temperature := some 0.2
+      serviceTier := some "priority"
+      reasoningEffort := some (.level .minimal)
+    }
+  assertTrue (jsonStringField? payload "model" == some "gpt-5.5") "expected Codex model id"
+  assertTrue (LeanAgent.Json.optVal? payload "store" == some (LeanAgent.Json.bool false)) "expected store=false"
+  assertTrue (LeanAgent.Json.optVal? payload "stream" == some (LeanAgent.Json.bool true)) "expected stream=true"
+  assertTrue (jsonStringField? payload "instructions" == some "codex system") "expected instructions field"
+  assertTrue (jsonStringField? payload "prompt_cache_key" == some "codex-session") "expected prompt cache key"
+  assertTrue (jsonStringField? payload "tool_choice" == some "auto") "expected auto tool choice"
+  assertTrue
+    (LeanAgent.Json.optVal? payload "parallel_tool_calls" == some (LeanAgent.Json.bool true))
+    "expected parallel tool calls"
+  match LeanAgent.Json.optVal? payload "text" with
+  | some text => assertTrue (jsonStringField? text "verbosity" == some "low") "expected low verbosity"
+  | none => fail "expected text options"
+  match jsonArrayField? payload "include" with
+  | some includeItems =>
+      assertTrue (includeItems == #[LeanAgent.Json.str "reasoning.encrypted_content"])
+        "expected encrypted reasoning include"
+  | none => fail "expected include array"
+  match LeanAgent.Json.optVal? payload "reasoning" with
+  | some reasoning =>
+      assertTrue (jsonStringField? reasoning "effort" == some "low") "expected mapped minimal effort"
+      assertTrue (jsonStringField? reasoning "summary" == some "auto") "expected default reasoning summary"
+  | none => fail "expected Codex reasoning object"
+  match jsonArrayField? payload "input" with
+  | some input =>
+      assertTrue (input.size == 1) "expected system prompt to stay out of Codex input"
+  | none => fail "expected Codex input"
+  match jsonArrayField? payload "tools" with
+  | some tools =>
+      match tools[0]? with
+      | some tool =>
+          assertTrue (LeanAgent.Json.optVal? tool "strict" == none)
+            "expected Codex tools to omit strict when Pi passes null"
+      | none => fail "expected one Codex tool"
+  | none => fail "expected Codex tools"
+
 def assertAzureBaseUrl (input expected : String) : IO Unit :=
   match LeanAgent.AI.Api.AzureOpenAIResponses.normalizeAzureBaseUrl input with
   | .ok actual => assertTrue (actual == expected) s!"expected Azure base URL {expected}, got {actual}"
@@ -2640,6 +2719,7 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
   let expectedProviders :=
     #[ LeanAgent.Models.deepSeekProviderId
      , LeanAgent.Models.openAIProviderId
+     , LeanAgent.Models.openAICodexProviderId
      , LeanAgent.Models.azureOpenAIResponsesProviderId
      , LeanAgent.Models.openRouterProviderId
      , LeanAgent.Models.groqProviderId
@@ -2675,6 +2755,7 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
   let rendered := LeanAgent.Models.renderCatalog catalog
   assertTrue (rendered.contains "openai/gpt-4.1-mini") "expected OpenAI Responses default model"
   assertTrue (rendered.contains "openai/gpt-5.5-pro") "expected generated OpenAI Responses model set"
+  assertTrue (rendered.contains "openai-codex/gpt-5.5") "expected OpenAI Codex model"
   assertTrue (rendered.contains "azure-openai-responses/gpt-4o-mini")
     "expected Azure OpenAI Responses model"
   assertTrue (rendered.contains "openrouter/openai/gpt-oss-120b") "expected OpenRouter model"
@@ -2715,13 +2796,21 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
 def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
   let collection ← LeanAgent.Models.createDefaultModels
   let providers ← collection.getProviders
-  assertTrue (providers.size == 13) "expected default provider family"
+  assertTrue (providers.size == 14) "expected default provider family"
   match ← collection.getModel? LeanAgent.Models.openAIProviderId LeanAgent.Models.openAIDefaultModel with
   | some model =>
       assertTrue (model.api == "openai-responses") "expected OpenAI Responses API"
       assertTrue (model.baseUrl == LeanAgent.Models.openAIBaseUrl) "expected OpenAI Responses base URL"
       assertTrue (model.input.contains "image") "expected OpenAI image input metadata"
   | none => fail "expected OpenAI Responses model in default runtime collection"
+  match ← collection.getModel? LeanAgent.Models.openAICodexProviderId LeanAgent.Models.openAICodexDefaultModel with
+  | some model =>
+      assertTrue (model.api == LeanAgent.AI.Api.OpenAICodexResponses.api)
+        "expected OpenAI Codex Responses API"
+      assertTrue (model.baseUrl == LeanAgent.Models.openAICodexBaseUrl)
+        "expected OpenAI Codex base URL"
+      assertTrue (model.input.contains "image") "expected OpenAI Codex image input metadata"
+  | none => fail "expected OpenAI Codex model in default runtime collection"
   match ← collection.getModel?
       LeanAgent.Models.azureOpenAIResponsesProviderId
       LeanAgent.Models.azureOpenAIResponsesDefaultModel with
@@ -2787,9 +2876,41 @@ def assertProviderFactoryMatchesInfo (mkProvider : IO LeanAgent.Models.Provider)
       | none => fail s!"expected provider auth for {info.id}"
   | none => fail s!"expected api-key auth for {info.id}"
 
+def assertOpenAICodexProviderFactoryMatchesInfo : IO Unit := do
+  let provider ← LeanAgent.AI.Providers.OpenAICodex.provider
+  let info := LeanAgent.Models.openAICodexProviderInfo
+  assertTrue (provider.id == info.id) "expected OpenAI Codex provider id"
+  assertTrue (provider.name == info.name) "expected OpenAI Codex provider name"
+  let models ← provider.getModels
+  assertTrue (models == info.models) "expected OpenAI Codex provider models"
+  match provider.auth.oauth with
+  | some _oauth =>
+      let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+      let _ ← store.modify LeanAgent.Models.openAICodexProviderId fun _ =>
+        pure
+          (some
+            (.oauth
+              { access := fakeOpenAICodexJwt
+                refresh := "refresh-token"
+                expires := 2000
+              }))
+      let ctx : LeanAgent.AI.Auth.AuthContext :=
+        { env := fun _ => pure none
+          fileExists := fun _ => pure false
+          nowMs := pure 1000
+        }
+      match ← LeanAgent.AI.Auth.resolveProviderAuth provider.id provider.auth store ctx with
+      | some result =>
+          assertTrue (result.auth.apiKey == some fakeOpenAICodexJwt)
+            "expected OpenAI Codex OAuth access token auth"
+          assertTrue (result.source == some "OAuth") "expected OpenAI Codex OAuth source"
+      | none => fail "expected OpenAI Codex OAuth auth"
+  | none => fail "expected OpenAI Codex OAuth auth handler"
+
 def testOpenAICompatibleProviderFactoriesMatchCatalog : IO Unit := do
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.DeepSeek.provider LeanAgent.Models.deepSeekProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.OpenAI.provider LeanAgent.Models.openAIProviderInfo
+  assertOpenAICodexProviderFactoryMatchesInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.AzureOpenAIResponses.provider LeanAgent.Models.azureOpenAIResponsesProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.OpenRouter.provider LeanAgent.Models.openRouterProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Groq.provider LeanAgent.Models.groqProviderInfo
@@ -3615,6 +3736,8 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
     "expected all providers to include DeepSeek catalog provider"
   assertTrue (providerIds.contains LeanAgent.Models.anthropicProviderId)
     "expected all providers to include Anthropic catalog provider"
+  assertTrue (providerIds.contains LeanAgent.Models.openAICodexProviderId)
+    "expected all providers to include OpenAI Codex catalog provider"
   assertTrue (providerIds.contains LeanAgent.Models.azureOpenAIResponsesProviderId)
     "expected all providers to include Azure OpenAI Responses catalog provider"
   assertTrue (providerIds.contains LeanAgent.Models.googleProviderId)
@@ -3646,6 +3769,13 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
       assertTrue (model.api == "azure-openai-responses") "expected Azure OpenAI Responses builtin model"
   | none => fail "expected Azure OpenAI Responses builtin model lookup"
   match LeanAgent.AI.Providers.All.getBuiltinModel?
+    LeanAgent.Models.openAICodexProviderId
+    LeanAgent.Models.openAICodexDefaultModel with
+  | some model =>
+      assertTrue (model.api == LeanAgent.AI.Api.OpenAICodexResponses.api)
+        "expected OpenAI Codex builtin model"
+  | none => fail "expected OpenAI Codex builtin model lookup"
+  match LeanAgent.AI.Providers.All.getBuiltinModel?
     LeanAgent.Models.googleProviderId
     LeanAgent.Models.googleDefaultModel with
   | some model =>
@@ -3671,7 +3801,7 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
   | none => fail "expected Cloudflare AI Gateway builtin model lookup"
   let collection ← LeanAgent.AI.Providers.All.builtinModels none fakeCloudflareAuthContext
   let providers ← collection.getProviders
-  assertTrue (providers.size == 15) "expected implemented builtin text providers"
+  assertTrue (providers.size == 16) "expected implemented builtin text providers"
   match ← collection.getProvider? LeanAgent.AI.Providers.CloudflareWorkersAI.providerId with
   | some _ => pure ()
   | none => fail "expected Workers AI provider in builtin collection"
@@ -4886,6 +5016,42 @@ def httpServerScript : String :=
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
     , "            return"
+    , "        if self.path == '/codex-provider/codex/responses':"
+    , "            request = json.loads(body)"
+    , "            text_options = request.get('text') or {}"
+    , "            reasoning = request.get('reasoning') or {}"
+    , "            include = request.get('include') or []"
+    , "            ok = ("
+    , "                request.get('model') == 'gpt-5.5' and"
+    , "                request.get('store') is False and"
+    , "                request.get('stream') is True and"
+    , "                request.get('instructions') == 'codex system' and"
+    , "                text_options.get('verbosity') == 'low' and"
+    , "                include == ['reasoning.encrypted_content'] and"
+    , "                request.get('prompt_cache_key') == 'codex-session' and"
+    , "                request.get('tool_choice') == 'auto' and"
+    , "                request.get('parallel_tool_calls') is True and"
+    , "                reasoning.get('effort') == 'low' and"
+    , "                self.headers.get('chatgpt-account-id') == 'acct_test' and"
+    , "                self.headers.get('originator') == 'pi' and"
+    , "                self.headers.get('OpenAI-Beta') == 'responses=experimental' and"
+    , "                self.headers.get('session-id') == 'codex-session' and"
+    , "                self.headers.get('x-client-request-id') == 'codex-session' and"
+    , "                self.headers.get('Accept') == 'text/event-stream'"
+    , "            )"
+    , "            text = 'codex-ok' if ok else 'codex-bad'"
+    , "            payload = ("
+    , "                'data: ' + json.dumps({'type': 'response.output_item.added', 'output_index': 0, 'item': {'type': 'message', 'id': 'msg_codex_http', 'content': []}}) + '\\n\\n' +"
+    , "                'data: ' + json.dumps({'type': 'response.output_text.delta', 'output_index': 0, 'delta': text}) + '\\n\\n' +"
+    , "                'data: ' + json.dumps({'type': 'response.output_item.done', 'output_index': 0, 'item': {'type': 'message', 'id': 'msg_codex_http', 'content': [{'type': 'output_text', 'text': text}]}}) + '\\n\\n' +"
+    , "                'data: ' + json.dumps({'type': 'response.done', 'response': {'id': 'resp_codex_http', 'status': 'completed', 'usage': {'input_tokens': 4, 'output_tokens': 2, 'total_tokens': 6}}}) + '\\n\\n'"
+    , "            ).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'text/event-stream')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/responses-stream/responses':"
     , "            request = json.loads(body)"
     , "            text = 'streamed' if request.get('stream') is True else 'not-streaming'"
@@ -5494,6 +5660,69 @@ def testOpenAIProviderFactoryDispatchesResponsesRuntime : IO Unit := do
     assertTrue (stream.result.usage.cost.input == 4.0) "expected OpenAI provider input cost"
     assertTrue (stream.result.usage.cost.output == 4.0) "expected OpenAI provider output cost"
 
+def testOpenAICodexProviderDispatchesSSEWithStoredOAuth : IO Unit := do
+  let port := 18097
+  withHttpServer port do
+    let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+    let _ ← store.modify LeanAgent.Models.openAICodexProviderId fun _ =>
+      pure
+        (some
+          (.oauth
+            { access := fakeOpenAICodexJwt
+              refresh := "refresh-token"
+              expires := 2000
+            }))
+    let ctx : LeanAgent.AI.Auth.AuthContext :=
+      { env := fun _ => pure none
+        fileExists := fun _ => pure false
+        nowMs := pure 1000
+      }
+    let collection ← LeanAgent.Models.createModels (some store) ctx
+    collection.setProvider (← LeanAgent.AI.Providers.OpenAICodex.provider)
+    let model :=
+      { LeanAgent.Models.openAICodexModel "gpt-5.5" "GPT-5.5" 5.0 30.0 0.5 0.0 272000 128000 with
+        baseUrl := s!"http://127.0.0.1:{port}/codex-provider"
+      }
+    let context : LeanAgent.AI.Context :=
+      { systemPrompt := some "codex system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+    let stream ← collection.streamSimple
+      model
+      context
+      { sessionId := some "codex-session", reasoning := some .minimal }
+    assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "codex-ok")
+      "expected OpenAI Codex provider to dispatch SSE runtime with stored OAuth"
+    assertTrue (stream.result.api == LeanAgent.AI.Api.OpenAICodexResponses.api)
+      "expected Codex runtime api"
+    assertTrue (stream.result.provider == LeanAgent.Models.openAICodexProviderId)
+      "expected Codex runtime provider"
+    assertTrue (stream.result.usage.input == 4) "expected Codex input usage"
+    assertTrue (stream.result.usage.output == 2) "expected Codex output usage"
+
+def testCompatOpenAICodexResponsesBuiltinDispatch : IO Unit := do
+  let port := 18098
+  withHttpServer port do
+    let model :=
+      { LeanAgent.Models.openAICodexModel "gpt-5.5" "GPT-5.5" 5.0 30.0 0.5 0.0 272000 128000 with
+        baseUrl := s!"http://127.0.0.1:{port}/codex-provider"
+      }
+    let context : LeanAgent.AI.Context :=
+      { systemPrompt := some "codex system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+    let stream ← LeanAgent.AI.Compat.Aliases.streamSimpleOpenAICodexResponses
+      model
+      context
+      { apiKey := some fakeOpenAICodexJwt
+        sessionId := some "codex-session"
+        reasoning := some .minimal
+      }
+    assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "codex-ok")
+      "expected compat OpenAI Codex Responses alias to dispatch"
+    assertTrue (stream.result.api == LeanAgent.AI.Api.OpenAICodexResponses.api)
+      "expected compat Codex runtime api"
+
 def testOpenAIResponsesCompleteWithOptionsLocal : IO Unit := do
   let port := 18088
   withHttpServer port do
@@ -5921,6 +6150,8 @@ def main : IO UInt32 := do
     testOpenAIResponsesRequestPayload
     testOpenAIResponsesRequestUsesThinkingLevelMap
     testOpenAIResponsesRequestClampsMaxTokens
+    testOpenAICodexResponsesAuthAndUrlHelpers
+    testOpenAICodexResponsesRequestPayload
     testAzureOpenAIResponsesBaseUrlNormalization
     testAzureOpenAIResponsesConfigAndDeployment
     testAzureOpenAIResponsesRequestPayload
@@ -6046,6 +6277,7 @@ def main : IO UInt32 := do
     testOpenRouterImagesMissingApiKeyReturnsError
     testOpenAIResponsesDispatchesThroughModelsCollection
     testOpenAIProviderFactoryDispatchesResponsesRuntime
+    testOpenAICodexProviderDispatchesSSEWithStoredOAuth
     testOpenAIResponsesCompleteWithOptionsLocal
     testOpenAIResponsesPayloadAndResponseHooks
     testOpenAIResponsesSendsCopilotDynamicHeaders
@@ -6056,6 +6288,7 @@ def main : IO UInt32 := do
     testGoogleVertexStreamWithOptionsLocal
     testMistralConversationsStreamWithOptionsLocal
     testCompatAzureOpenAIResponsesBuiltinDispatch
+    testCompatOpenAICodexResponsesBuiltinDispatch
     testOpenAICompletionsProviderErrorDiagnostics
     IO.println "lean-agent tests passed"
     pure 0

@@ -7,6 +7,7 @@ import LeanAgent.AI.Api.Lazy
 import LeanAgent.AI.Api.MistralConversations
 import LeanAgent.AI.Api.Cloudflare
 import LeanAgent.AI.Api.OpenAICompletions
+import LeanAgent.AI.Api.OpenAICodexResponses
 import LeanAgent.AI.Api.OpenAIPromptCache
 import LeanAgent.AI.Api.OpenAIResponses
 import LeanAgent.AI.Api.OpenAIResponsesShared
@@ -40,6 +41,7 @@ import LeanAgent.AI.Providers.GoogleVertex
 import LeanAgent.AI.Providers.Groq
 import LeanAgent.AI.Providers.Mistral
 import LeanAgent.AI.Providers.OpenAI
+import LeanAgent.AI.Providers.OpenAICodex
 import LeanAgent.AI.Providers.OpenRouterImages
 import LeanAgent.AI.Providers.OpenRouter
 import LeanAgent.AI.Providers.Together

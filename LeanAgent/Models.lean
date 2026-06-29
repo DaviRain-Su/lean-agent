@@ -7,6 +7,7 @@ import LeanAgent.AI.Api.GoogleVertex
 import LeanAgent.AI.Api.Lazy
 import LeanAgent.AI.Api.MistralConversations
 import LeanAgent.AI.Api.OpenAICompletions
+import LeanAgent.AI.Api.OpenAICodexResponses
 import LeanAgent.AI.Api.OpenAIResponses
 import LeanAgent.AI.Api.SimpleOptions
 import LeanAgent.AI.EventStream
@@ -25,6 +26,10 @@ def openAIKeyEnv : String := "OPENAI_API_KEY"
 def openAIModelEnv : String := "OPENAI_MODEL"
 def openAIDefaultModel : String := "gpt-4.1-mini"
 def openAIBaseUrl : String := "https://api.openai.com/v1"
+
+def openAICodexProviderId : String := "openai-codex"
+def openAICodexDefaultModel : String := "gpt-5.5"
+def openAICodexBaseUrl : String := LeanAgent.AI.Api.OpenAICodexResponses.defaultBaseUrl
 
 def azureOpenAIResponsesProviderId : String := "azure-openai-responses"
 def azureOpenAIResponsesApiKeyEnv : String := "AZURE_OPENAI_API_KEY"
@@ -265,6 +270,36 @@ def openAIResponsesModels : Array ModelInfo :=
     openAIModel "o4-mini" "o4-mini" 1.1 4.4 0.275 0.0 200000 100000 true #[] #["text", "image"],
     openAIModel "o4-mini-deep-research" "o4-mini-deep-research" 2.0 8.0 0.5 0.0 200000 100000 true #[] #["text", "image"]
   ]
+
+def openAICodexThinkingLevelMap : Array LeanAgent.AI.ThinkingLevelMapEntry :=
+  #[ { level := .level .xhigh, mapped := some "xhigh" }
+   , { level := .level .minimal, mapped := some "low" }
+   ]
+
+def openAICodexModel
+    (id name : String)
+    (inputCost outputCost cacheReadCost cacheWriteCost : Float)
+    (contextWindow maxTokens : Nat)
+    (input : Array String := #["text", "image"]) : ModelInfo :=
+  { id := id
+    name := name
+    provider := openAICodexProviderId
+    api := LeanAgent.AI.Api.OpenAICodexResponses.api
+    baseUrl := openAICodexBaseUrl
+    cost := cost inputCost outputCost cacheReadCost cacheWriteCost
+    contextWindow := contextWindow
+    maxTokens := maxTokens
+    reasoning := true
+    thinkingLevelMap := openAICodexThinkingLevelMap
+    input := input
+  }
+
+def openAICodexModels : Array ModelInfo :=
+  #[ openAICodexModel "gpt-5.3-codex-spark" "GPT-5.3 Codex Spark" 1.75 14.0 0.175 0.0 128000 128000 #["text"]
+   , openAICodexModel "gpt-5.4" "GPT-5.4" 2.5 15.0 0.25 0.0 272000 128000
+   , openAICodexModel "gpt-5.4-mini" "GPT-5.4 mini" 0.75 4.5 0.075 0.0 272000 128000
+   , openAICodexModel "gpt-5.5" "GPT-5.5" 5.0 30.0 0.5 0.0 272000 128000
+   ]
 
 def openRouterCompat : ModelCompat :=
   { thinkingFormat := some "openrouter" }
@@ -730,7 +765,8 @@ structure ProviderInfo where
 deriving Repr, BEq
 
 def ProviderInfo.authEnvs (provider : ProviderInfo) : Array String :=
-  if provider.apiKeyEnvs.isEmpty then #[provider.apiKeyEnv] else provider.apiKeyEnvs
+  let envs := if provider.apiKeyEnvs.isEmpty then #[provider.apiKeyEnv] else provider.apiKeyEnvs
+  envs.filter fun env => !env.trimAscii.isEmpty
 
 def ProviderInfo.model? (provider : ProviderInfo) (modelId : String) : Option ModelInfo :=
   provider.models.find? (fun model => model.id == modelId)
@@ -756,6 +792,15 @@ def openAIProviderInfo : ProviderInfo :=
     modelEnv := some openAIModelEnv
     defaultModel := openAIDefaultModel
     models := openAIResponsesModels
+  }
+
+def openAICodexProviderInfo : ProviderInfo :=
+  { id := openAICodexProviderId
+    name := "OpenAI Codex"
+    baseUrl := openAICodexBaseUrl
+    apiKeyEnv := ""
+    defaultModel := openAICodexDefaultModel
+    models := openAICodexModels
   }
 
 def azureOpenAIResponsesProviderInfo : ProviderInfo :=
@@ -866,6 +911,7 @@ def defaultCatalog : ProviderCatalog :=
   { providers :=
     #[ deepSeekProviderInfo
      , openAIProviderInfo
+     , openAICodexProviderInfo
      , azureOpenAIResponsesProviderInfo
      , openRouterProviderInfo
      , groqProviderInfo
@@ -1270,6 +1316,23 @@ def openAIResponsesStreams : ProviderStreams :=
         (LeanAgent.AI.Api.OpenAIResponses.optionsFromSimple options)
   }
 
+def openAICodexResponsesStreams : ProviderStreams :=
+  { streamSimple := fun model context options => do
+      let options := clampSimpleOptionsToContext model context options
+      match options.apiKey with
+      | none => throw (modelsError .auth s!"missing OAuth access token for provider {model.provider}")
+      | some apiKey =>
+          let config : LeanAgent.AI.Api.OpenAICodexResponses.OpenAICodexResponsesConfig :=
+            { apiKey := apiKey
+              baseUrl := model.baseUrl
+            }
+          LeanAgent.AI.Api.OpenAICodexResponses.completeStreamWithOptions
+            config
+            model.toResponsesModel
+            context
+            (LeanAgent.AI.Api.OpenAICodexResponses.optionsFromSimple options)
+  }
+
 def azureOpenAIResponsesStreams : ProviderStreams :=
   { streamSimple := fun model context options => do
       let options := clampSimpleOptionsToContext model context options
@@ -1598,9 +1661,19 @@ def googleVertexApiKeyAuth : LeanAgent.AI.Auth.ApiKeyAuth :=
                 pure none
   }
 
+def openAICodexOAuthAuth : LeanAgent.AI.Auth.OAuthAuth :=
+  { name := "OpenAI (ChatGPT Plus/Pro)"
+    refresh := fun _ =>
+      throw (IO.userError "OpenAI Codex OAuth refresh is not implemented")
+    toAuth := fun credential =>
+      pure { apiKey := some credential.access }
+  }
+
 def authForProviderInfo (info : ProviderInfo) : LeanAgent.AI.Auth.ProviderAuth :=
   if info.id == googleVertexProviderId then
     { apiKey := some googleVertexApiKeyAuth }
+  else if info.id == openAICodexProviderId then
+    { oauth := some openAICodexOAuthAuth }
   else
     { apiKey := some (LeanAgent.AI.Auth.envApiKeyAuth (info.name ++ " API key") info.authEnvs) }
 
@@ -1614,6 +1687,7 @@ def createCatalogProvider (info : ProviderInfo) : IO Provider :=
       apis :=
         #[ { api := "openai-completions", streams := openAICompatibleStreams }
          , { api := "openai-responses", streams := openAIResponsesStreams }
+         , { api := LeanAgent.AI.Api.OpenAICodexResponses.api, streams := openAICodexResponsesStreams }
          , { api := LeanAgent.AI.Api.AnthropicMessages.api, streams := anthropicMessagesStreams }
          , { api := LeanAgent.AI.Api.GoogleGenerativeAI.api, streams := googleGenerativeAIStreams }
          , { api := LeanAgent.AI.Api.GoogleVertex.api, streams := googleVertexStreams }
