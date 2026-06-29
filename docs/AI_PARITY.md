@@ -152,7 +152,7 @@ before expanding provider behavior.
 | `api/openai-prompt-cache.ts` | `LeanAgent.AI.Api.OpenAIPromptCache` | partial | Prompt cache key clamping and Chat Completions payload fields exist, including `cacheRetention=none`, `long`, and `PI_CACHE_RETENTION=long`. Session affinity headers and provider-specific long-cache suppression are missing. |
 | `api/openrouter-images.ts` | `LeanAgent.AI.Api.OpenRouterImages` | missing | Image generation phase. |
 | `api/openrouter-images.lazy.ts` | `LeanAgent.AI.Api.OpenRouterImages` | deferred | Lazy wrapper. |
-| `api/transform-messages.ts` | `LeanAgent.AI.Api.TransformMessages` | missing | Cross-provider handoff and model conversion. |
+| `api/transform-messages.ts` | `LeanAgent.AI.Api.TransformMessages` | partial | Provider-agnostic conversion covers non-vision image placeholders, cross-model thinking/text signature downgrade, foreign tool thought-signature removal, callback-driven tool-call id normalization with tool-result remapping, skipped errored/aborted assistant turns, and synthetic no-result tool results for orphaned calls. Provider-specific normalizers and live cross-provider handoff matrix are still missing. |
 
 ## Provider Factories
 

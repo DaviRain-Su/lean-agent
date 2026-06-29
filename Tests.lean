@@ -456,6 +456,185 @@ def testOpenAICompletionsParsesStreamingThinking : IO Unit := do
         "expected thinking block"
   | .error err => fail s!"streaming thinking parse failed: {err}"
 
+def transformTarget : LeanAgent.AI.Api.TransformMessages.TargetModel :=
+  { id := "claude-sonnet-4.6"
+    provider := "github-copilot"
+    api := "anthropic-messages"
+    input := #["text"]
+  }
+
+def anthropicToolCallId
+    (id : String)
+    (_target : LeanAgent.AI.Api.TransformMessages.TargetModel)
+    (_source : LeanAgent.AI.AssistantMessage) : String :=
+  LeanAgent.AI.Api.TransformMessages.sanitizeToolCallId id
+
+def testTransformMessagesCrossModelHandoff : IO Unit := do
+  let assistant : LeanAgent.AI.AssistantMessage :=
+    { content :=
+        #[ .thinking { thinking := "private reasoning", thinkingSignature := some "sig" }
+         , .thinking { thinking := "encrypted", redacted := true }
+         , .text { text := "answer", textSignature := some "text-sig" }
+         , .toolCall
+            { id := "call_123|fc_123"
+              name := "bash"
+              arguments := LeanAgent.Json.obj [("command", LeanAgent.Json.str "pwd")]
+              thoughtSignature := some "encrypted-tool-thought"
+            }
+         ]
+      api := "openai-responses"
+      provider := "github-copilot"
+      model := "gpt-5"
+      stopReason := .toolUse
+      timestamp := 2
+    }
+  let messages : Array LeanAgent.AI.Message :=
+    #[ .user { content := #[LeanAgent.AI.text "run a command"], timestamp := 1 }
+     , .assistant assistant
+     , .toolResult
+        { toolCallId := "call_123|fc_123"
+          toolName := "bash"
+          content := #[LeanAgent.AI.text "output"]
+          isError := false
+          timestamp := 3
+        }
+     ]
+  let result := LeanAgent.AI.Api.TransformMessages.transformMessages messages transformTarget
+    { normalizeToolCallId? := some anthropicToolCallId }
+  assertTrue (result.size == 3) "expected no synthetic result when normalized tool result is present"
+  match result[1]? with
+  | some (LeanAgent.AI.Message.assistant transformed) =>
+      assertTrue
+        (transformed.content.any fun
+          | .text content => content.text == "private reasoning"
+          | _ => false)
+        "expected cross-model thinking to become text"
+      assertTrue
+        (!transformed.content.any fun
+          | .thinking _ => true
+          | _ => false)
+        "expected cross-model thinking blocks to be removed"
+      assertTrue
+        (transformed.content.any fun
+          | .text content => content.text == "answer" && content.textSignature.isNone
+          | _ => false)
+        "expected cross-model text signatures to be dropped"
+      match (LeanAgent.AI.contentToolCalls transformed.content)[0]? with
+      | some call =>
+          assertTrue (call.id == "call_123_fc_123") "expected normalized tool id"
+          assertTrue call.thoughtSignature.isNone "expected foreign thought signature to be removed"
+      | none => fail "expected transformed tool call"
+  | _ => fail "expected transformed assistant"
+  match result[2]? with
+  | some (LeanAgent.AI.Message.toolResult toolResult) =>
+      assertTrue (toolResult.toolCallId == "call_123_fc_123") "expected tool result id to follow normalized call id"
+  | _ => fail "expected transformed tool result"
+
+def testTransformMessagesAddsSyntheticToolResults : IO Unit := do
+  let assistant : LeanAgent.AI.AssistantMessage :=
+    { content :=
+        #[ .toolCall { id := "call_1|fc_1", name := "read", arguments := LeanAgent.Json.obj [] }
+         , .toolCall { id := "call_2|fc_2", name := "bash", arguments := LeanAgent.Json.obj [] }
+         ]
+      api := "openai-responses"
+      provider := "github-copilot"
+      model := "gpt-5"
+      stopReason := .toolUse
+      timestamp := 2
+    }
+  let messages : Array LeanAgent.AI.Message :=
+    #[ .user { content := #[LeanAgent.AI.text "run commands"], timestamp := 1 }
+     , .assistant assistant
+     , .toolResult
+        { toolCallId := "call_1|fc_1"
+          toolName := "read"
+          content := #[LeanAgent.AI.text "done"]
+          isError := false
+          timestamp := 3
+        }
+     ]
+  let result := LeanAgent.AI.Api.TransformMessages.transformMessages messages transformTarget
+    { normalizeToolCallId? := some anthropicToolCallId
+      syntheticTimestamp := 999
+    }
+  let synthetic :=
+    result.filter fun message =>
+      match message with
+      | .toolResult toolResult => toolResult.isError
+      | _ => false
+  assertTrue (synthetic.size == 1) "expected exactly one synthetic tool result"
+  match synthetic[0]? with
+  | some (LeanAgent.AI.Message.toolResult toolResult) =>
+      assertTrue (toolResult.toolCallId == "call_2_fc_2") "expected synthetic result for missing normalized id"
+      assertTrue (toolResult.toolName == "bash") "expected synthetic result tool name"
+      assertTrue (toolResult.timestamp == 999) "expected configured synthetic timestamp"
+      assertTrue (LeanAgent.AI.contentPlainText toolResult.content == "No result provided")
+        "expected synthetic no-result text"
+  | _ => fail "expected synthetic tool result"
+
+def testTransformMessagesDowngradesUnsupportedImages : IO Unit := do
+  let messages : Array LeanAgent.AI.Message :=
+    #[ .user
+        { content :=
+            #[ LeanAgent.AI.image "a" "image/png"
+             , LeanAgent.AI.image "b" "image/png"
+             , LeanAgent.AI.text "describe"
+             , LeanAgent.AI.image "c" "image/png"
+             ]
+          timestamp := 1
+        }
+     , .toolResult
+        { toolCallId := "call-1"
+          toolName := "read"
+          content := #[LeanAgent.AI.image "tool" "image/png"]
+          isError := false
+          timestamp := 2
+        }
+     ]
+  let result := LeanAgent.AI.Api.TransformMessages.transformMessages messages transformTarget
+  match result[0]? with
+  | some (LeanAgent.AI.Message.user user) =>
+      assertTrue (user.content.size == 3) "expected adjacent user images to coalesce into one placeholder"
+      assertTrue
+        (LeanAgent.AI.contentPlainText user.content ==
+          "(image omitted: model does not support images)\ndescribe\n(image omitted: model does not support images)")
+        "expected user image placeholders"
+  | _ => fail "expected transformed user message"
+  match result[1]? with
+  | some (LeanAgent.AI.Message.toolResult toolResult) =>
+      assertTrue
+        (LeanAgent.AI.contentPlainText toolResult.content ==
+          "(tool image omitted: model does not support images)")
+        "expected tool image placeholder"
+  | _ => fail "expected transformed tool result"
+
+def testTransformMessagesSkipsErroredAssistant : IO Unit := do
+  let errored : LeanAgent.AI.AssistantMessage :=
+    { content := #[.toolCall { id := "call-error", name := "read", arguments := LeanAgent.Json.obj [] }]
+      api := "openai-responses"
+      provider := "github-copilot"
+      model := "gpt-5"
+      stopReason := .error
+      errorMessage := some "aborted by provider"
+      timestamp := 2
+    }
+  let result := LeanAgent.AI.Api.TransformMessages.transformMessages
+    #[ .user { content := #[LeanAgent.AI.text "read"], timestamp := 1 }
+     , .assistant errored
+     , .user { content := #[LeanAgent.AI.text "continue"], timestamp := 3 }
+     ]
+    transformTarget
+  assertTrue
+    (!result.any fun
+      | .assistant _ => true
+      | _ => false)
+    "expected errored assistant to be skipped"
+  assertTrue
+    (!result.any fun
+      | .toolResult _ => true
+      | _ => false)
+    "expected skipped errored assistant not to create synthetic results"
+
 def testDiagnosticsExtractsProviderError : IO Unit := do
   let body := "{\"error\":{\"message\":\"rate limit exceeded\",\"type\":\"rate_limit_error\",\"code\":\"rate_limit\"}}"
   let info := LeanAgent.AI.Util.Diagnostics.providerErrorInfoFromBody body
@@ -1758,6 +1937,10 @@ def main : IO UInt32 := do
     testOpenAICompletionsParsesStreamingText
     testOpenAICompletionsParsesStreamingToolCall
     testOpenAICompletionsParsesStreamingThinking
+    testTransformMessagesCrossModelHandoff
+    testTransformMessagesAddsSyntheticToolResults
+    testTransformMessagesDowngradesUnsupportedImages
+    testTransformMessagesSkipsErroredAssistant
     testDiagnosticsExtractsProviderError
     testOpenAICompletionsParsesUsage
     testShortHashMatchesPi

@@ -1,6 +1,7 @@
 import LeanAgent.AI.Auth
 import LeanAgent.AI.Api.OpenAICompletions
 import LeanAgent.AI.Api.OpenAIPromptCache
+import LeanAgent.AI.Api.TransformMessages
 import LeanAgent.AI.EventStream
 import LeanAgent.AI.Providers.Faux
 import LeanAgent.AI.Schema
