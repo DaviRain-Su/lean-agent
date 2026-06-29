@@ -3314,6 +3314,38 @@ def testValidationChecksSchemaBounds : IO Unit := do
   assertValidationFails stringSchema (LeanAgent.Json.str "a")
   assertValidationFails stringSchema (LeanAgent.Json.str "abcde")
 
+  let identifierPatternSchema :=
+    LeanAgent.Json.obj
+      [ ("type", LeanAgent.Json.str "string")
+      , ("pattern", LeanAgent.Json.str "^[A-Za-z_][A-Za-z0-9_-]*$")
+      ]
+  assertValidationValue identifierPatternSchema
+    (LeanAgent.Json.str "tool_1-alpha")
+    (LeanAgent.Json.str "tool_1-alpha")
+  assertValidationFails identifierPatternSchema (LeanAgent.Json.str "1tool")
+  assertValidationFails identifierPatternSchema (LeanAgent.Json.str "bad space")
+
+  let digitsPatternSchema :=
+    LeanAgent.Json.obj
+      [ ("type", LeanAgent.Json.str "string")
+      , ("pattern", LeanAgent.Json.str "\\d+")
+      ]
+  assertValidationValue digitsPatternSchema
+    (LeanAgent.Json.str "abc123")
+    (LeanAgent.Json.str "abc123")
+  assertValidationFails digitsPatternSchema (LeanAgent.Json.str "abc")
+
+  let filePatternSchema :=
+    LeanAgent.Json.obj
+      [ ("type", LeanAgent.Json.str "string")
+      , ("pattern", LeanAgent.Json.str "^file-\\d{2,4}\\.json$")
+      ]
+  assertValidationValue filePatternSchema
+    (LeanAgent.Json.str "file-123.json")
+    (LeanAgent.Json.str "file-123.json")
+  assertValidationFails filePatternSchema (LeanAgent.Json.str "file-1.json")
+  assertValidationFails filePatternSchema (LeanAgent.Json.str "file-12345.json")
+
   let arraySchema :=
     LeanAgent.Json.obj
       [ ("type", LeanAgent.Json.str "array")
@@ -5955,6 +5987,79 @@ def testImagesCollectionAppliesAuthAndOptions : IO Unit := do
   assertTrue (LeanAgent.AI.Auth.providerEnvGet? env "AUTH_ENV" == some "auth") "expected auth env"
   assertTrue (LeanAgent.AI.Auth.providerEnvGet? env "REQ_ENV" == some "request") "expected request env"
 
+def testImagesCollectionAppliesOAuthAuth : IO Unit := do
+  let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+  let _ ← store.modify "fake-images" fun _ =>
+    pure
+      (some
+        (.oauth
+          { access := "image-oauth-token"
+            refresh := "image-refresh"
+            expires := 2000
+            extra := #[("baseUrl", LeanAgent.Json.str "https://image-oauth.test")]
+          }))
+  let refreshCalls ← IO.mkRef 0
+  let oauthAuth : LeanAgent.AI.Auth.OAuthAuth :=
+    { name := "Image OAuth"
+      refresh := fun credential => do
+        refreshCalls.modify (· + 1)
+        pure { credential with access := credential.access ++ "-refreshed", expires := 5000 }
+      toAuth := fun credential => do
+        pure
+          { apiKey := some credential.access
+            baseUrl := oauthExtraString? credential "baseUrl"
+          }
+    }
+  let provider ← LeanAgent.AI.Images.createImagesProvider
+    { id := "fake-images"
+      name := some "Fake Images OAuth"
+      auth := { apiKey := none, oauth := some oauthAuth }
+      models := #[fakeImagesModel]
+      api :=
+        { generateImages := fun _model _context _options => do
+            let timestamp ← IO.monoMsNow
+            pure
+              { api := fakeImagesModel.api
+                provider := fakeImagesModel.provider
+                model := fakeImagesModel.id
+                output := #[LeanAgent.AI.text "oauth-image-result"]
+                timestamp := timestamp
+              }
+        }
+    }
+  let collection :=
+    { (← LeanAgent.AI.Images.createImagesModels (some store) (fakeAuthContextWithNow 1000)) with
+      providersRef := ← IO.mkRef #[provider]
+    }
+  match ← collection.getAuth fakeImagesModel with
+  | some result =>
+      assertTrue (result.auth.apiKey == some "image-oauth-token") "expected image OAuth access token"
+      assertTrue (result.auth.baseUrl == some "https://image-oauth.test") "expected image OAuth base URL"
+      assertTrue (result.source == some "OAuth") "expected image OAuth source"
+  | none => fail "expected image OAuth auth result"
+  assertTrue ((← refreshCalls.get) == 0) "fresh image OAuth credential should not refresh"
+
+  let _ ← store.modify "fake-images" fun _ =>
+    pure
+      (some
+        (.oauth
+          { access := "expired-image-token"
+            refresh := "image-refresh-1"
+            expires := 999
+          }))
+  let collectionExpired :=
+    { (← LeanAgent.AI.Images.createImagesModels (some store) (fakeAuthContextWithNow 1000)) with
+      providersRef := ← IO.mkRef
+        #[{ provider with auth := { apiKey := none, oauth := some oauthAuth } }]
+    }
+  match ← collectionExpired.getAuth fakeImagesModel with
+  | some result =>
+      assertTrue (result.auth.apiKey == some "expired-image-token-refreshed")
+        "expected refreshed image OAuth access token"
+      assertTrue (result.source == some "OAuth") "expected refreshed image OAuth source"
+  | none => fail "expected refreshed image OAuth auth result"
+  assertTrue ((← refreshCalls.get) == 1) "expired image OAuth credential should refresh once"
+
 def testImagesCollectionUnknownProviderReturnsError : IO Unit := do
   let collection ← LeanAgent.AI.Images.createImagesModels
   let result ← collection.generateImages fakeImagesModel { input := #[LeanAgent.AI.text "draw"] }
@@ -8539,6 +8644,7 @@ def main : IO UInt32 := do
     testImageModelCatalogOpenRouter
     testImagesCollectionProviderCrudAndRefresh
     testImagesCollectionAppliesAuthAndOptions
+    testImagesCollectionAppliesOAuthAuth
     testImagesCollectionUnknownProviderReturnsError
     testImagesCollectionAbortSignalReturnsAborted
     testOpenRouterImagesAbortSignalReturnsAborted
