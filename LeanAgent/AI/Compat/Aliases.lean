@@ -26,6 +26,11 @@ abbrev OpenAICodexResponsesStream :=
     LeanAgent.AI.Api.OpenAICodexResponses.OpenAICodexResponsesOptions →
       IO LeanAgent.AI.AssistantMessageEventStream
 
+abbrev OpenAICompletionsStream :=
+  LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
+    LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsOptions →
+      IO LeanAgent.AI.AssistantMessageEventStream
+
 abbrev AnthropicMessagesStream :=
   LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
     LeanAgent.AI.Api.AnthropicMessages.AnthropicMessagesOptions →
@@ -172,6 +177,69 @@ def streamOpenAICodexResponsesWithOptions : OpenAICodexResponsesStream :=
           context
           options
 
+def withEnvApiKeyForOpenAICompletions
+    (model : LeanAgent.Models.ModelInfo)
+    (options : LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsOptions) :
+    IO LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsOptions := do
+  let simple ← LeanAgent.AI.Compat.withEnvApiKey model options.toSimpleStreamOptions
+  pure { options with apiKey := simple.apiKey }
+
+def withModelCompatForOpenAICompletions
+    (model : LeanAgent.Models.ModelInfo)
+    (options : LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsOptions) :
+    LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsOptions :=
+  let reasoningValue :=
+    match options.reasoningEffortValue with
+    | some value => some value
+    | none =>
+        match options.reasoningEffort with
+        | some effort =>
+            some (LeanAgent.Models.thinkingLevelPayloadValueD model (.level effort) effort.toString)
+        | none =>
+            match options.reasoning with
+            | some effort =>
+                some (LeanAgent.Models.thinkingLevelPayloadValueD model (.level effort) effort.toString)
+            | none => none
+  let offValue :=
+    match options.offReasoningEffortValue with
+    | some value => some value
+    | none =>
+        if model.reasoning && reasoningValue.isNone then
+          LeanAgent.Models.offThinkingLevelPayloadValue? model
+        else
+          none
+  { options with
+    reasoningEffortValue := reasoningValue
+    offReasoningEffortValue := offValue
+    supportsReasoningEffort := model.compat.supportsReasoningEffort
+    maxTokensField := model.compat.maxTokensField
+    supportsLongCacheRetention := model.compat.supportsLongCacheRetention
+    sendSessionAffinityHeaders := model.compat.sendSessionAffinityHeaders
+  }
+
+def streamOpenAICompletionsWithOptions : OpenAICompletionsStream :=
+  fun model context options => do
+    LeanAgent.AI.Compat.ensureApiMatches
+      { api := "openai-completions"
+        streams := LeanAgent.Models.openAICompatibleStreams
+      }
+      model
+    let options := withModelCompatForOpenAICompletions model options
+    let options ← withEnvApiKeyForOpenAICompletions model options
+    let apiKey ← LeanAgent.Models.requireApiKeyOrHeaderAuth model.provider options.toSimpleStreamOptions
+    let config : LeanAgent.AI.Api.OpenAICompletions.OpenAICompatibleConfig :=
+      { apiKey := apiKey
+        baseUrl := model.baseUrl
+      }
+    let request := LeanAgent.Models.contextToProviderRequest model context
+    let stream ← LeanAgent.AI.Api.OpenAICompletions.streamWithOptions
+      config
+      request
+      model.api
+      model.provider
+      options
+    pure (LeanAgent.Models.applyUsageCostToStream model stream)
+
 def withEnvApiKeyForMistral
     (model : LeanAgent.Models.ModelInfo)
     (options : LeanAgent.AI.Api.MistralConversations.MistralOptions) :
@@ -299,11 +367,11 @@ def streamOpenAICodexResponses : OpenAICodexResponsesStream :=
 def streamSimpleOpenAICodexResponses : AliasStream :=
   streamForApi "openai-codex-responses"
 
-def streamOpenAICompletions : AliasStream :=
-  streamForApi "openai-completions"
+def streamOpenAICompletions : OpenAICompletionsStream :=
+  streamOpenAICompletionsWithOptions
 
 def streamSimpleOpenAICompletions : AliasStream :=
-  streamOpenAICompletions
+  streamForApi "openai-completions"
 
 def streamOpenAIResponses : OpenAIResponsesStream :=
   streamOpenAIResponsesWithOptions

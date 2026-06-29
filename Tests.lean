@@ -6038,6 +6038,25 @@ def httpServerScript : String :=
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
     , "            return"
+    , "        if self.path == '/openai-typed/chat/completions':"
+    , "            request = json.loads(body)"
+    , "            tool_choice = request.get('tool_choice')"
+    , "            if isinstance(tool_choice, dict):"
+    , "                tool_choice_text = tool_choice.get('function', {}).get('name') or ''"
+    , "            else:"
+    , "                tool_choice_text = tool_choice or ''"
+    , "            text = '|'.join([request.get('model') or '', str(request.get('stream')), str((request.get('stream_options') or {}).get('include_usage')), str(request.get('max_completion_tokens') or ''), str(request.get('max_tokens') or ''), request.get('reasoning_effort') or '', request.get('prompt_cache_key') or '', request.get('prompt_cache_retention') or '', tool_choice_text, self.headers.get('Authorization') or '', self.headers.get('session_id') or '', self.headers.get('x-session-affinity') or '', self.headers.get('X-Trace') or ''])"
+    , "            payload = ("
+    , "                'data: ' + json.dumps({'id': 'chatcmpl_openai_typed_http', 'model': request.get('model') or '', 'choices': [{'delta': {'content': text[:32]}, 'finish_reason': None}], 'usage': {'prompt_tokens': 5, 'prompt_tokens_details': {'cached_tokens': 2}}}) + '\\n\\n' +"
+    , "                'data: ' + json.dumps({'choices': [{'delta': {'content': text[32:]}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 5, 'completion_tokens': 3, 'total_tokens': 8, 'prompt_tokens_details': {'cached_tokens': 2}}}) + '\\n\\n' +"
+    , "                'data: [DONE]\\n\\n'"
+    , "            ).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'text/event-stream')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/cloudflare-openai/acct-env/gateway-env/chat/completions':"
     , "            request = json.loads(body)"
     , "            text = '|'.join([self.headers.get('cf-aig-authorization') or '', self.headers.get('Authorization') or '', request.get('model') or ''])"
@@ -6553,6 +6572,51 @@ def testOpenAICompletionsStreamWithOptionsLocal : IO Unit := do
     assertTrue stream.isComplete "expected completed streaming response"
     assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "streamed") "expected streamed response text"
     assertTrue (stream.result.usage.totalTokens == 6) "expected streaming usage"
+
+def testCompatOpenAICompletionsTypedLegacyAliasLocal : IO Unit := do
+  let port := 18108
+  withHttpServer port do
+    let tool : LeanAgent.AI.Tool :=
+      { name := "lookup"
+        description := "Lookup a value"
+        parameters := LeanAgent.Json.obj [("type", LeanAgent.Json.str "object")]
+      }
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := "typed-model"
+        name := "Typed OpenAI-compatible"
+        provider := "typed-openai"
+        api := "openai-completions"
+        baseUrl := s!"http://127.0.0.1:{port}/openai-typed"
+        contextWindow := 100000
+        maxTokens := 2048
+        reasoning := true
+        input := #["text"]
+        compat :=
+          { maxTokensField := "max_completion_tokens"
+            sendSessionAffinityHeaders := true
+          }
+        thinkingLevelMap := #[{ level := .level .xhigh, mapped := some "max" }]
+      }
+    let stream ← LeanAgent.AI.Compat.Aliases.streamOpenAICompletions
+      model
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+        tools := #[tool]
+      }
+      { apiKey := some "typed-key"
+        maxTokens := some 321
+        reasoningEffort := some .xhigh
+        cacheRetention := some .long
+        sessionId := some "session-typed"
+        toolChoice := some (.function "lookup")
+        headers := #[("X-Trace", some "trace-openai")]
+      }
+    assertTrue stream.isComplete "expected compat OpenAI Completions typed legacy alias stream"
+    assertTrue
+      (LeanAgent.AI.contentPlainText stream.result.content ==
+        "typed-model|True|True|321||max|session-typed|24h|lookup|Bearer typed-key|session-typed|session-typed|trace-openai")
+      "expected typed OpenAI Completions alias to preserve compat-mapped options"
+    assertTrue (stream.result.usage.cacheRead == 2) "expected typed OpenAI Completions cache usage"
 
 def testOpenAICompatibleStreamsUsesStreamingRuntime : IO Unit := do
   let port := 18087
@@ -7690,6 +7754,7 @@ def main : IO UInt32 := do
     testOpenAICompletionsSendsCustomHeaders
     testOpenAICompletionsPayloadAndResponseHooks
     testOpenAICompletionsStreamWithOptionsLocal
+    testCompatOpenAICompletionsTypedLegacyAliasLocal
     testOpenAICompatibleStreamsUsesStreamingRuntime
     testOpenAICompatibleStreamsApplyModelCost
     testOpenAICompatibleStreamsClampMaxTokens
