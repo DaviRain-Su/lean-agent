@@ -3175,6 +3175,45 @@ def testJsonParseStreamingDropsDanglingSegments : IO Unit := do
       | .error _ => fail "expected nested object"
   | none => fail "expected nested object field"
 
+def testJsonParseTruncatesPartialLiterals : IO Unit := do
+  let partialTrue := LeanAgent.AI.Util.JsonParse.parseStreamingJson "{\"active\":tru"
+  assertTrue
+    (LeanAgent.Json.optVal? partialTrue "active" == none)
+    "expected partial boolean to be truncated away"
+
+  let partialNum := LeanAgent.AI.Util.JsonParse.parseStreamingJson "{\"count\":12."
+  assertTrue
+    (LeanAgent.Json.optVal? partialNum "count" == none)
+    "expected trailing-dot number to be truncated"
+
+  let completeNum := LeanAgent.AI.Util.JsonParse.parseStreamingJson "{\"count\":12"
+  assertTrue
+    (LeanAgent.Json.optVal? completeNum "count" == some (LeanAgent.Json.nat 12))
+    "expected unclosed number to parse"
+
+def testJsonParseTryHarderMultiplePasses : IO Unit := do
+  let deep := LeanAgent.AI.Util.JsonParse.parseStreamingJson "{\"a\":{\"b\":{\"c\":\"d"
+  match LeanAgent.Json.optVal? deep "a" with
+  | some aObj =>
+      match LeanAgent.Json.optVal? aObj "b" with
+      | some bObj =>
+          assertTrue
+            (LeanAgent.Json.optVal? bObj "c" == some (LeanAgent.Json.str "d"))
+            "expected deeply nested truncated string to parse"
+      | none => fail "expected nested b object"
+  | none => fail "expected nested a object"
+
+  let bareString := LeanAgent.AI.Util.JsonParse.parseStreamingJson "\"hello"
+  assertTrue (bareString == LeanAgent.Json.str "hello") "expected bare string to complete"
+
+  let partialArray := LeanAgent.AI.Util.JsonParse.parseStreamingJson "[1,2,3"
+  match partialArray.getArr? with
+  | .ok items =>
+      assertTrue (items.size == 3) "expected three array items"
+      assertTrue (items[0]? == some (LeanAgent.Json.nat 1)) "expected first item"
+      assertTrue (items[2]? == some (LeanAgent.Json.nat 3)) "expected third item"
+  | .error err => fail s!"expected complete partial array: {err}"
+
 def validationToolForValue (schema : Lean.Json) : LeanAgent.AI.Tool :=
   { name := "echo"
     description := "Echo tool"
@@ -8360,6 +8399,8 @@ def main : IO UInt32 := do
     testJsonParseRepairsMalformedStrings
     testJsonParseStreamingPartialObject
     testJsonParseStreamingDropsDanglingSegments
+    testJsonParseTruncatesPartialLiterals
+    testJsonParseTryHarderMultiplePasses
     testSchemaStringEnum
     testValidationCoercesPlainJsonSchemas
     testValidationRejectsInvalidCoercions

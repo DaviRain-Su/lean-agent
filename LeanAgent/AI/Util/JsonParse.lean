@@ -133,6 +133,35 @@ def stripDanglingField (value : String) : String :=
       (danglingFieldPrefixLoop beforeColon.toList "" none false false).getD value
   | _ => value
 
+def isAsciiDigit (char : Char) : Bool :=
+  '0' <= char && char <= '9'
+
+def isDigitOrSign (char : Char) : Bool :=
+  isAsciiDigit char || char == '-' || char == '+' || char == '.'
+
+/-- If the trimmed value ends with a partial literal token (incomplete number,
+    boolean, or null), truncate those trailing characters so the JSON parser
+    can still recover a valid result.  Returns the cleaned string. -/
+def truncatePartialLiteral (value : String) : String :=
+  let trimmed := trimRightAscii value
+  let chars := trimmed.toList
+  if chars.isEmpty then
+    value
+  else
+    let rec scanBack (remaining : List Char) (acc : List Char) : String :=
+      match remaining with
+      | [] => String.ofList acc.reverse
+      | char :: rest =>
+          if isDigitOrSign char then
+            scanBack rest (char :: acc)
+          else if char == 'n' || char == 'f' || char == 't' || char == 'u' || char == 'l' || char == 'r' || char == 'e' then
+            scanBack rest (char :: acc)
+          else if char.isAlphanum then
+            scanBack rest (char :: acc)
+          else
+            String.ofList (rest ++ acc).reverse
+    scanBack chars.reverse []
+
 def preparePartialJson (json : String) : String :=
   stripTrailingComma (stripDanglingField (stripTrailingComma json))
 
@@ -169,6 +198,29 @@ def completePartialJson (json : String) : String :=
   let suffix := (if inString then "\"" else "") ++ String.ofList stack
   json ++ suffix
 
+/-- Multiple repair + completion passes, gradually stripping trailing cruft each
+    time, to handle deeply incomplete JSON that one pass alone cannot fix. -/
+partial def tryHarderStreamingParse (original : String) : Lean.Json :=
+  if original.trimAscii.isEmpty then
+    LeanAgent.Json.obj []
+  else
+    let rec attempt (remaining : Nat) (current : String) : Lean.Json :=
+      if remaining == 0 then
+        LeanAgent.Json.obj []
+      else
+        let repaired := repairJson current
+        match Lean.Json.parse repaired with
+        | .ok parsed => parsed
+        | .error _ =>
+            let cleaned := truncatePartialLiteral repaired
+            let prepared := preparePartialJson cleaned
+            let completed := completePartialJson prepared
+            if completed == current then
+              LeanAgent.Json.obj []
+            else
+              attempt (remaining - 1) completed
+    attempt 4 (completePartialJson (preparePartialJson (repairJson original)))
+
 def parseStreamingJson (partialJson : String) : Lean.Json :=
   if partialJson.trimAscii.isEmpty then
     LeanAgent.Json.obj []
@@ -176,10 +228,15 @@ def parseStreamingJson (partialJson : String) : Lean.Json :=
     match parseJsonWithRepair partialJson with
     | .ok parsed => parsed
     | .error _ =>
-        let completed := completePartialJson (preparePartialJson (repairJson partialJson))
-        match Lean.Json.parse completed with
-        | .ok parsed => parsed
-        | .error _ => LeanAgent.Json.obj []
+        match tryHarderStreamingParse partialJson with
+        | parsed =>
+            if parsed == LeanAgent.Json.obj [] then
+              let completed := completePartialJson (preparePartialJson (repairJson partialJson))
+              match Lean.Json.parse completed with
+              | .ok parsed => parsed
+              | .error _ => LeanAgent.Json.obj []
+            else
+              parsed
 
 def parseStreamingJson? : Option String → Lean.Json
   | none => LeanAgent.Json.obj []
