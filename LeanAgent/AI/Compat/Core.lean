@@ -51,6 +51,9 @@ def getApiProvider? (api : String) : IO (Option ApiProvider) := do
   pure (providers.findSome? fun entry =>
     if entry.provider.api == api then some entry.provider else none)
 
+def getApiProvider (api : String) : IO (Option ApiProvider) :=
+  getApiProvider? api
+
 def getRegisteredApiProvider? (api : String) : IO (Option RegisteredApiProvider) := do
   let providers ← apiProviderRegistry.get
   pure (providers.findSome? fun entry =>
@@ -204,6 +207,10 @@ def registerImagesApiProvider
 def getImagesApiProvider? (api : LeanAgent.AI.ImagesApi) :
     IO (Option LeanAgent.AI.Images.ImagesApiProvider) :=
   LeanAgent.AI.Images.getImagesApiProvider? api
+
+def getImagesApiProvider (api : LeanAgent.AI.ImagesApi) :
+    IO (Option LeanAgent.AI.Images.ImagesApiProvider) :=
+  getImagesApiProvider? api
 
 def getImagesApiProviders : IO (Array LeanAgent.AI.Images.ImagesApiProvider) :=
   LeanAgent.AI.Images.getImagesApiProviders

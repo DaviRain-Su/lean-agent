@@ -19,8 +19,10 @@ def main : IO Unit := do
     throw (IO.userError "missing image model surface after LeanAgent.AI.Compat import")
   LeanAgent.AI.Compat.clearImagesApiProviders
   LeanAgent.AI.Compat.registerBuiltInImagesApiProviders
-  if (← LeanAgent.AI.Compat.getImagesApiProvider? LeanAgent.AI.Api.OpenRouterImages.api).isNone then
+  if (← LeanAgent.AI.Compat.getImagesApiProvider LeanAgent.AI.Api.OpenRouterImages.api).isNone then
     throw (IO.userError "missing built-in image re-registration hook after LeanAgent.AI.Compat import")
+  if (← LeanAgent.AI.Compat.getApiProvider "openai-responses").isNone then
+    throw (IO.userError "missing compat getApiProvider root export after LeanAgent.AI.Compat import")
   let _ : LeanAgent.Models.ProviderStreams :=
     LeanAgent.AI.Compat.anthropicMessagesApi
   let _ : LeanAgent.Models.ProviderStreams :=
