@@ -189,7 +189,7 @@ def overlayEnvAuthContext (base : AuthContext) (env : ProviderEnv) : AuthContext
   }
 
 def expandHomePath (path : String) : IO System.FilePath := do
-  if path.startsWith "~/" then
+  if path.startsWith "~" then
     match ← IO.getEnv "HOME" with
     | some home => pure (System.FilePath.mk (home ++ path.drop 1))
     | none => pure (System.FilePath.mk path)
