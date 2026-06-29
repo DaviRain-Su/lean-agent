@@ -82,6 +82,7 @@ import LeanAgent.AI.Util.Retry
 import LeanAgent.AI.Util.SSE
 import LeanAgent.AI.Util.SanitizeUnicode
 import LeanAgent.CodingTools
+import LeanAgent.Agent
 import LeanAgent.Core
 import LeanAgent.Http
 import LeanAgent.Json

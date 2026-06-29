@@ -2,11 +2,13 @@ import Lean
 
 namespace LeanAgent
 
+@[deprecated "Use LeanAgent.Agent.Types.ToolCall (LeanAgent.AI.Types.ToolCall) instead"]
 structure ToolCall where
   id : String
   name : String
   arguments : Lean.Json
 
+@[deprecated "Use LeanAgent.Agent.Types.AgentToolResult instead"]
 structure AgentToolResult where
   toolCallId : String
   name : String
@@ -20,6 +22,7 @@ Legacy message shape used by the current agent loop and session JSONL format.
 Pi-compatible AI code should use `LeanAgent.AI.Message`; conversion helpers live
 in `LeanAgent.AI.Types` while the runtime migration is staged.
 -/
+@[deprecated "Use LeanAgent.Agent.Types.AgentMessage instead"]
 inductive AgentMessage where
   | user (content : String)
   | assistant (content : String) (toolCalls : Array ToolCall)
@@ -30,18 +33,21 @@ def AgentMessage.role : AgentMessage → String
   | .assistant _ _ => "assistant"
   | .toolResult _ _ _ _ => "tool"
 
+@[deprecated "Use LeanAgent.Agent.Types.AgentTool instead"]
 structure AgentTool where
   name : String
   description : String
   inputSchema : Lean.Json
   execute : ToolCall → IO AgentToolResult
 
+@[deprecated "Use LeanAgent.AI.Context instead"]
 structure ProviderRequest where
   model : String
   system : String
   messages : Array AgentMessage
   tools : Array AgentTool
 
+@[deprecated "Use LeanAgent.AI.Usage instead"]
 structure ProviderUsage where
   input : Nat := 0
   output : Nat := 0
@@ -52,15 +58,18 @@ structure ProviderUsage where
   totalTokens : Nat := 0
 deriving BEq
 
+@[deprecated "Use LeanAgent.AI.AssistantMessage instead"]
 structure ProviderResponse where
   content : String := ""
   toolCalls : Array ToolCall := #[]
   finishReason : Option String := none
   usage : Option ProviderUsage := none
 
+@[deprecated "Use LeanAgent.AI.Compat.streamSimple instead"]
 structure ModelProvider where
   complete : ProviderRequest → IO ProviderResponse
 
+@[deprecated "Use LeanAgent.Agent.Types.AgentEvent instead"]
 inductive AgentEvent where
   | agentStart
   | agentEnd
@@ -75,6 +84,7 @@ inductive AgentEvent where
 
 abbrev EventSink := AgentEvent → IO Unit
 
+@[deprecated "Use LeanAgent.Agent.Types.AgentLoopConfig instead"]
 structure AgentLoopConfig where
   provider : ModelProvider
   model : String
