@@ -469,6 +469,23 @@ def anthropicToolCallId
     (_source : LeanAgent.AI.AssistantMessage) : String :=
   LeanAgent.AI.Api.TransformMessages.sanitizeToolCallId id
 
+def responsesCodexModel : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel :=
+  { id := "gpt-5.5"
+    provider := "openai-codex"
+    api := "openai-responses"
+    input := #["text"]
+    reasoning := true
+    supportsDeveloperRole := true
+  }
+
+def jsonStringField? (json : Lean.Json) (key : String) : Option String :=
+  match LeanAgent.Json.optVal? json key with
+  | some (.str value) => some value
+  | _ => none
+
+def responseItemWithType? (items : Array Lean.Json) (itemType : String) : Option Lean.Json :=
+  items.find? fun item => jsonStringField? item "type" == some itemType
+
 def testTransformMessagesCrossModelHandoff : IO Unit := do
   let assistant : LeanAgent.AI.AssistantMessage :=
     { content :=
@@ -634,6 +651,100 @@ def testTransformMessagesSkipsErroredAssistant : IO Unit := do
       | .toolResult _ => true
       | _ => false)
     "expected skipped errored assistant not to create synthetic results"
+
+def testOpenAIResponsesSharedNormalizesForeignToolCallIds : IO Unit := do
+  let rawCallId := "call_4VnzVawQXPB9MgYib7CiQFEY"
+  let rawItemId := "I9b95oN1wD/cHXKTw3PpRkL6KkCtzTJhUxMouMWYwHeTo2j3htzfSk7YPx2vifiIM4g3A8XXyOj8q4Bt6SLUG7gqY1E3ELkrkVQNHglRfUmWj84lqxJY+Puieb3VKyX0FB+83TUzn91cDMF"
+  let rawToolCallId := rawCallId ++ "|" ++ rawItemId
+  let assistant : LeanAgent.AI.AssistantMessage :=
+    { content :=
+        #[ .toolCall
+            { id := rawToolCallId
+              name := "edit"
+              arguments := LeanAgent.Json.obj [("path", LeanAgent.Json.str "src/styles/app.css")]
+            }
+         ]
+      api := "openai-responses"
+      provider := "github-copilot"
+      model := "gpt-5.5"
+      stopReason := .toolUse
+      timestamp := 2
+    }
+  let context : LeanAgent.AI.Context :=
+    { systemPrompt := some "You are concise."
+      messages :=
+        #[ .user { content := #[LeanAgent.AI.text "Use the tool."], timestamp := 1 }
+         , .assistant assistant
+         , .toolResult
+            { toolCallId := rawToolCallId
+              toolName := "edit"
+              content := #[LeanAgent.AI.text "ok"]
+              isError := false
+              timestamp := 3
+            }
+         ]
+    }
+  let input := LeanAgent.AI.Api.OpenAIResponsesShared.convertResponsesMessages responsesCodexModel context
+  match input[0]? with
+  | some systemItem =>
+      assertTrue (jsonStringField? systemItem "role" == some "developer") "expected developer system role"
+      assertTrue (jsonStringField? systemItem "content" == some "You are concise.") "expected system prompt content"
+  | none => fail "expected system item"
+  let expectedItemId := "fc_" ++ LeanAgent.AI.Util.Hash.shortHash rawItemId
+  match responseItemWithType? input "function_call" with
+  | some functionCall =>
+      assertTrue (jsonStringField? functionCall "call_id" == some rawCallId) "expected normalized call id"
+      assertTrue (jsonStringField? functionCall "id" == some expectedItemId) "expected foreign item id hash"
+      assertTrue (expectedItemId.length <= 64) "expected bounded item id"
+      assertTrue (expectedItemId.startsWith "fc_") "expected fc item id prefix"
+  | none => fail "expected function_call item"
+  match responseItemWithType? input "function_call_output" with
+  | some output =>
+      assertTrue (jsonStringField? output "call_id" == some rawCallId) "expected output call id to match call"
+      assertTrue (jsonStringField? output "output" == some "ok") "expected text tool output"
+  | none => fail "expected function_call_output item"
+
+def testOpenAIResponsesSharedOmitsDifferentModelFcItemId : IO Unit := do
+  let assistant : LeanAgent.AI.AssistantMessage :=
+    { content :=
+        #[ .toolCall
+            { id := "call_1|fc_existing"
+              name := "read"
+              arguments := LeanAgent.Json.obj [("path", LeanAgent.Json.str "README.md")]
+            }
+         ]
+      api := "openai-responses"
+      provider := "openai-codex"
+      model := "gpt-5.4"
+      stopReason := .toolUse
+      timestamp := 2
+    }
+  let context : LeanAgent.AI.Context :=
+    { messages :=
+        #[ .user { content := #[LeanAgent.AI.text "read"], timestamp := 1 }
+         , .assistant assistant
+         ]
+    }
+  let input := LeanAgent.AI.Api.OpenAIResponsesShared.convertResponsesMessages responsesCodexModel context
+  match responseItemWithType? input "function_call" with
+  | some functionCall =>
+      assertTrue (jsonStringField? functionCall "call_id" == some "call_1") "expected call id"
+      assertTrue (LeanAgent.Json.optVal? functionCall "id" == none) "expected different-model fc item id to be omitted"
+  | none => fail "expected function_call item"
+
+def testOpenAIResponsesSharedConvertsTools : IO Unit := do
+  let tool : LeanAgent.AI.Tool :=
+    { name := "read"
+      description := "Read a file"
+      parameters := LeanAgent.Json.obj [("type", LeanAgent.Json.str "object")]
+    }
+  let tools := LeanAgent.AI.Api.OpenAIResponsesShared.convertResponsesTools #[tool] (some true)
+  match tools[0]? with
+  | some encoded =>
+      assertTrue (jsonStringField? encoded "type" == some "function") "expected function tool"
+      assertTrue (jsonStringField? encoded "name" == some "read") "expected tool name"
+      assertTrue (LeanAgent.Json.optVal? encoded "strict" == some (LeanAgent.Json.bool true)) "expected strict flag"
+  | none => fail "expected encoded tool"
 
 def testDiagnosticsExtractsProviderError : IO Unit := do
   let body := "{\"error\":{\"message\":\"rate limit exceeded\",\"type\":\"rate_limit_error\",\"code\":\"rate_limit\"}}"
@@ -1941,6 +2052,9 @@ def main : IO UInt32 := do
     testTransformMessagesAddsSyntheticToolResults
     testTransformMessagesDowngradesUnsupportedImages
     testTransformMessagesSkipsErroredAssistant
+    testOpenAIResponsesSharedNormalizesForeignToolCallIds
+    testOpenAIResponsesSharedOmitsDifferentModelFcItemId
+    testOpenAIResponsesSharedConvertsTools
     testDiagnosticsExtractsProviderError
     testOpenAICompletionsParsesUsage
     testShortHashMatchesPi
