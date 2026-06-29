@@ -1,6 +1,7 @@
 import Lean
 import LeanAgent.AI.Types
 import LeanAgent.Json
+import Std.Time
 
 namespace LeanAgent.AI.Auth
 
@@ -18,8 +19,16 @@ structure ApiKeyCredential where
   env : ProviderEnv := #[]
 deriving BEq
 
+structure OAuthCredential where
+  access : String
+  refresh : String
+  expires : Nat
+  extra : Array (String × Lean.Json) := #[]
+deriving BEq
+
 inductive Credential where
   | apiKey (credential : ApiKeyCredential)
+  | oauth (credential : OAuthCredential)
 deriving BEq
 
 def providerEnvToJson (env : ProviderEnv) : Lean.Json :=
@@ -42,8 +51,21 @@ def apiKeyCredentialToJson (credential : ApiKeyCredential) : Lean.Json :=
       ++ (if credential.env.isEmpty then [] else [("env", providerEnvToJson credential.env)])
   LeanAgent.Json.obj fields
 
+def isOAuthCredentialReservedField (name : String) : Bool :=
+  name == "type" || name == "access" || name == "refresh" || name == "expires"
+
+def oauthCredentialToJson (credential : OAuthCredential) : Lean.Json :=
+  let extra := credential.extra.toList.filter fun (name, _) => !isOAuthCredentialReservedField name
+  LeanAgent.Json.obj
+    ([ ("type", LeanAgent.Json.str "oauth")
+     , ("access", LeanAgent.Json.str credential.access)
+     , ("refresh", LeanAgent.Json.str credential.refresh)
+     , ("expires", LeanAgent.Json.nat credential.expires)
+     ] ++ extra)
+
 def credentialToJson : Credential → Lean.Json
   | .apiKey credential => apiKeyCredentialToJson credential
+  | .oauth credential => oauthCredentialToJson credential
 
 def apiKeyCredentialFromJson (json : Lean.Json) : Except String ApiKeyCredential := do
   let key ← LeanAgent.Json.optionalString json "key"
@@ -53,14 +75,37 @@ def apiKeyCredentialFromJson (json : Lean.Json) : Except String ApiKeyCredential
     | none => pure #[]
   pure { key, env }
 
+def requiredNat (json : Lean.Json) (key : String) : Except String Nat := do
+  match LeanAgent.Json.optionalNat json key with
+  | .ok (some value) => pure value
+  | .ok none => throw s!"property not found: {key}"
+  | .error err => throw err
+
+def oauthCredentialFromJson (json : Lean.Json) : Except String OAuthCredential := do
+  let access ← LeanAgent.Json.requiredString json "access"
+  let refresh ← LeanAgent.Json.requiredString json "refresh"
+  let expires ← requiredNat json "expires"
+  let obj ← json.getObj?
+  let mut extra := #[]
+  for (name, value) in Std.TreeMap.Raw.toList obj do
+    if !isOAuthCredentialReservedField name then
+      extra := extra.push (name, value)
+  pure { access, refresh, expires, extra }
+
 def credentialFromJson (json : Lean.Json) : Except String Credential := do
   match ← (← json.getObjVal? "type").getStr? with
   | "api_key" => pure (.apiKey (← apiKeyCredentialFromJson json))
+  | "oauth" => pure (.oauth (← oauthCredentialFromJson json))
   | other => throw s!"unsupported credential type: {other}"
+
+def epochMsNow : IO Nat := do
+  let timestamp ← Std.Time.Timestamp.now
+  pure timestamp.toMillisecondsSinceUnixEpoch.val.toNat
 
 structure AuthContext where
   env : String → IO (Option String)
   fileExists : String → IO Bool
+  nowMs : IO Nat := epochMsNow
 
 structure AuthResult where
   auth : ModelAuth
@@ -77,8 +122,15 @@ structure ApiKeyAuth where
   name : String
   resolve : AuthContext → Option ApiKeyCredential → Option String → IO (Option AuthResult)
 
+structure OAuthAuth where
+  name : String
+  login : Option (IO OAuthCredential) := none
+  refresh : OAuthCredential → IO OAuthCredential
+  toAuth : OAuthCredential → IO ModelAuth
+
 structure ProviderAuth where
   apiKey : Option ApiKeyAuth := none
+  oauth : Option OAuthAuth := none
 
 structure AuthOverrides where
   apiKey : Option String := none
@@ -105,6 +157,7 @@ def overlayEnvAuthContext (base : AuthContext) (env : ProviderEnv) : AuthContext
       | some value => pure (some value)
       | none => base.env name
     fileExists := base.fileExists
+    nowMs := base.nowMs
   }
 
 def expandHomePath (path : String) : IO System.FilePath := do
@@ -125,6 +178,7 @@ def defaultProviderAuthContext : AuthContext :=
     fileExists := fun path => do
       let resolved ← expandHomePath path
       resolved.pathExists
+    nowMs := epochMsNow
   }
 
 def resolveEnvApiKey (ctx : AuthContext) (envVars : Array String) : IO (Option (String × String)) := do
@@ -165,6 +219,31 @@ def resolveApiKey
     (modelBaseUrl : Option String := none) : IO (Option AuthResult) :=
   apiKeyAuth.resolve ctx credential modelBaseUrl
 
+def oauthCredentialIsExpired (ctx : AuthContext) (credential : OAuthCredential) : IO Bool := do
+  let now ← ctx.nowMs
+  pure (now >= credential.expires)
+
+def resolveStoredOAuth
+    (ctx : AuthContext)
+    (credentials : CredentialStore)
+    (providerId : String)
+    (oauth : OAuthAuth)
+    (stored : OAuthCredential) : IO (Option AuthResult) := do
+  let mut credential := stored
+  if ← oauthCredentialIsExpired ctx credential then
+    let post ← credentials.modify providerId fun current => do
+      match current with
+      | some (.oauth currentOAuth) =>
+          if ← oauthCredentialIsExpired ctx currentOAuth then
+            pure (some (.oauth (← oauth.refresh currentOAuth)))
+          else
+            pure none
+      | _ => pure none
+    match post with
+    | some (.oauth refreshed) => credential := refreshed
+    | _ => return none
+  pure (some { auth := (← oauth.toAuth credential), source := some "OAuth" })
+
 def readCredential (credentials : CredentialStore) (providerId : String) : IO (Option Credential) :=
   credentials.read providerId
 
@@ -194,6 +273,10 @@ def resolveProviderAuth
                 else
                   { credential with env := providerEnvMerge credential.env overrides.env }
               resolveApiKey requestCtx apiKeyAuth credential modelBaseUrl
+          | none => pure none
+      | some (.oauth credential) =>
+          match auth.oauth with
+          | some oauth => resolveStoredOAuth requestCtx credentials providerId oauth credential
           | none => pure none
       | none =>
           match auth.apiKey with

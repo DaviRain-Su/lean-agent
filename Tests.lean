@@ -1746,6 +1746,30 @@ def fakeAuthContext : LeanAgent.AI.Auth.AuthContext :=
 def fakeProviderAuth : LeanAgent.AI.Auth.ProviderAuth :=
   { apiKey := some (LeanAgent.AI.Auth.envApiKeyAuth "Fake API key" #["FAKE_API_KEY"]) }
 
+def fakeAuthContextWithNow (now : Nat) : LeanAgent.AI.Auth.AuthContext :=
+  { fakeAuthContext with nowMs := pure now }
+
+def oauthExtraString? (credential : LeanAgent.AI.Auth.OAuthCredential) (name : String) : Option String :=
+  credential.extra.findSome? fun (field, value) =>
+    if field == name then value.getStr?.toOption else none
+
+def fakeOAuthAuth (refreshCalls : IO.Ref Nat) : LeanAgent.AI.Auth.OAuthAuth :=
+  { name := "Fake OAuth"
+    refresh := fun credential => do
+      refreshCalls.modify (· + 1)
+      pure
+        { credential with
+          access := "refreshed-token"
+          refresh := "refresh-2"
+          expires := 2000
+        }
+    toAuth := fun credential => do
+      pure
+        { apiKey := some credential.access
+          baseUrl := oauthExtraString? credential "baseUrl"
+        }
+  }
+
 def fakeCloudflareAuthContext : LeanAgent.AI.Auth.AuthContext :=
   { env := fun name =>
       pure
@@ -1797,7 +1821,7 @@ def testFileCredentialStoreRoundTrip : IO Unit :=
         assertTrue
           (LeanAgent.AI.Auth.providerEnvGet? credential.env "ACCOUNT_ID" == some "acct")
           "expected saved credential env"
-    | none => fail "expected saved file credential"
+    | _ => fail "expected saved API-key file credential"
     assertTrue (← path.pathExists) "expected credential file to be created"
     let raw ← IO.FS.readFile path
     assertTrue (raw.contains "api_key") "expected serialized API-key credential type"
@@ -1809,14 +1833,14 @@ def testFileCredentialStoreRoundTrip : IO Unit :=
         assertTrue
           (LeanAgent.AI.Auth.providerEnvGet? credential.env "ACCOUNT_ID" == some "acct")
           "expected reloaded credential env"
-    | none => fail "expected reloaded file credential"
+    | _ => fail "expected reloaded API-key file credential"
     let unchanged ← reloaded.modify "fake" fun current => do
       assertTrue current.isSome "expected current credential in modify callback"
       pure none
     match unchanged with
     | some (.apiKey credential) =>
         assertTrue (credential.key == some "stored-secret") "expected modify none to preserve credential"
-    | none => fail "expected modify none to return current credential"
+    | _ => fail "expected modify none to return current API-key credential"
     reloaded.delete "fake"
     let afterDelete ← LeanAgent.AI.Auth.FileCredentialStore.mk path
     assertTrue ((← afterDelete.read "fake").isNone) "expected deleted file credential"
@@ -1824,7 +1848,7 @@ def testFileCredentialStoreRoundTrip : IO Unit :=
 def testFileCredentialStoreRejectsUnsupportedCredentialType : IO Unit :=
   IO.FS.withTempDir fun root => do
     let path := root / "auth.json"
-    IO.FS.writeFile path "{\"fake\":{\"type\":\"oauth\",\"access\":\"token\"}}"
+    IO.FS.writeFile path "{\"fake\":{\"type\":\"saml\",\"access\":\"token\"}}"
     let store ← LeanAgent.AI.Auth.FileCredentialStore.mk path
     let failed ←
       try
@@ -1832,10 +1856,37 @@ def testFileCredentialStoreRejectsUnsupportedCredentialType : IO Unit :=
         pure false
       catch err =>
         assertTrue
-          (err.toString.contains "unsupported credential type: oauth")
+          (err.toString.contains "unsupported credential type: saml")
           "expected unsupported credential type error"
         pure true
     assertTrue failed "unsupported credential type should fail"
+
+def testFileCredentialStoreOAuthRoundTrip : IO Unit :=
+  IO.FS.withTempDir fun root => do
+    let path := root / "auth.json"
+    let store ← LeanAgent.AI.Auth.FileCredentialStore.mk path
+    let _ ← store.modify "fake" fun _ =>
+      pure
+        (some
+          (.oauth
+            { access := "oauth-access"
+              refresh := "oauth-refresh"
+              expires := 1234
+              extra := #[("baseUrl", LeanAgent.Json.str "https://oauth.test")]
+            }))
+    let raw ← IO.FS.readFile path
+    assertTrue (raw.contains "oauth") "expected serialized OAuth credential type"
+    assertTrue (raw.contains "baseUrl") "expected serialized OAuth extra field"
+    let reloaded ← LeanAgent.AI.Auth.FileCredentialStore.mk path
+    match ← reloaded.read "fake" with
+    | some (.oauth credential) =>
+        assertTrue (credential.access == "oauth-access") "expected reloaded OAuth access token"
+        assertTrue (credential.refresh == "oauth-refresh") "expected reloaded OAuth refresh token"
+        assertTrue (credential.expires == 1234) "expected reloaded OAuth expiry"
+        assertTrue
+          (oauthExtraString? credential "baseUrl" == some "https://oauth.test")
+          "expected reloaded OAuth extra field"
+    | _ => fail "expected reloaded OAuth credential"
 
 def testModelsAuthFileCredentialStore : IO Unit :=
   IO.FS.withTempDir fun root => do
@@ -1847,6 +1898,68 @@ def testModelsAuthFileCredentialStore : IO Unit :=
         assertTrue (result.auth.apiKey == some "file-secret") "expected file credential to win"
         assertTrue (result.source == some "stored credential") "expected file credential source"
     | none => fail "expected auth result from file credential"
+
+def testModelsAuthOAuthValidCredential : IO Unit := do
+  let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+  let _ ← store.modify "fake" fun _ =>
+    pure
+      (some
+        (.oauth
+          { access := "oauth-access"
+            refresh := "oauth-refresh"
+            expires := 2000
+            extra := #[("baseUrl", LeanAgent.Json.str "https://oauth.test")]
+          }))
+  let refreshCalls ← IO.mkRef 0
+  let auth := { fakeProviderAuth with oauth := some (fakeOAuthAuth refreshCalls) }
+  match ← LeanAgent.AI.Auth.resolveProviderAuth "fake" auth store (fakeAuthContextWithNow 1000) with
+  | some result =>
+      assertTrue (result.auth.apiKey == some "oauth-access") "expected OAuth access token auth"
+      assertTrue (result.auth.baseUrl == some "https://oauth.test") "expected OAuth-derived base URL"
+      assertTrue (result.source == some "OAuth") "expected OAuth source"
+  | none => fail "expected auth result from OAuth credential"
+  assertTrue ((← refreshCalls.get) == 0) "fresh OAuth credential should not refresh"
+
+def testModelsAuthOAuthExpiredCredentialRefreshes : IO Unit := do
+  let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+  let _ ← store.modify "fake" fun _ =>
+    pure
+      (some
+        (.oauth
+          { access := "expired-token"
+            refresh := "refresh-1"
+            expires := 999
+          }))
+  let refreshCalls ← IO.mkRef 0
+  let auth := { fakeProviderAuth with oauth := some (fakeOAuthAuth refreshCalls) }
+  match ← LeanAgent.AI.Auth.resolveProviderAuth "fake" auth store (fakeAuthContextWithNow 1000) with
+  | some result =>
+      assertTrue (result.auth.apiKey == some "refreshed-token") "expected refreshed OAuth access token"
+      assertTrue (result.source == some "OAuth") "expected OAuth source after refresh"
+  | none => fail "expected auth result from refreshed OAuth credential"
+  assertTrue ((← refreshCalls.get) == 1) "expired OAuth credential should refresh once"
+  match ← store.read "fake" with
+  | some (.oauth credential) =>
+      assertTrue (credential.access == "refreshed-token") "expected refreshed credential to be persisted"
+      assertTrue (credential.expires == 2000) "expected refreshed expiry to be persisted"
+  | _ => fail "expected persisted OAuth credential"
+
+def testModelsAuthOAuthCredentialOwnsProvider : IO Unit := do
+  let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+  let _ ← store.modify "fake" fun _ =>
+    pure
+      (some
+        (.oauth
+          { access := "oauth-access"
+            refresh := "oauth-refresh"
+            expires := 2000
+          }))
+  let result ← LeanAgent.AI.Auth.resolveProviderAuth
+    "fake"
+    fakeProviderAuth
+    store
+    (fakeAuthContextWithNow 1000)
+  assertTrue result.isNone "stored OAuth credential without OAuth handler should not fall back to env"
 
 def headerValueOpt? (headers : Array (String × Option String)) (name : String) : Option (Option String) :=
   headers.findSome? fun (headerName, value) =>
@@ -3941,7 +4054,11 @@ def main : IO UInt32 := do
     testModelsAuthStoredCredentialWins
     testFileCredentialStoreRoundTrip
     testFileCredentialStoreRejectsUnsupportedCredentialType
+    testFileCredentialStoreOAuthRoundTrip
     testModelsAuthFileCredentialStore
+    testModelsAuthOAuthValidCredential
+    testModelsAuthOAuthExpiredCredentialRefreshes
+    testModelsAuthOAuthCredentialOwnsProvider
     testCloudflareWorkersAIAuthResolution
     testCloudflareAIGatewayAuthResolution
     testCloudflareStoredCredentialResolution
