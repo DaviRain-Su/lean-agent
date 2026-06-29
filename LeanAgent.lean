@@ -1,5 +1,6 @@
 import LeanAgent.AI.Auth
 import LeanAgent.AI.Api.GitHubCopilotHeaders
+import LeanAgent.AI.Api.BedrockConverseStream
 import LeanAgent.AI.Api.GoogleGenerativeAI
 import LeanAgent.AI.Api.GoogleShared
 import LeanAgent.AI.Api.GoogleVertex
@@ -27,6 +28,7 @@ import LeanAgent.AI.OAuth.PKCE
 import LeanAgent.AI.OAuth.Page
 import LeanAgent.AI.Api.AnthropicMessages
 import LeanAgent.AI.Providers.All
+import LeanAgent.AI.Providers.AmazonBedrock
 import LeanAgent.AI.Providers.Anthropic
 import LeanAgent.AI.Providers.AzureOpenAIResponses
 import LeanAgent.AI.Providers.Cerebras

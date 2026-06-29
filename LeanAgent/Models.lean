@@ -2,6 +2,7 @@ import LeanAgent.Core
 import LeanAgent.AI.Auth
 import LeanAgent.AI.Api.AnthropicMessages
 import LeanAgent.AI.Api.AzureOpenAIResponses
+import LeanAgent.AI.Api.BedrockConverseStream
 import LeanAgent.AI.Api.GoogleGenerativeAI
 import LeanAgent.AI.Api.GoogleVertex
 import LeanAgent.AI.Api.Lazy
@@ -86,6 +87,19 @@ def mistralProviderId : String := "mistral"
 def mistralApiKeyEnv : String := "MISTRAL_API_KEY"
 def mistralDefaultModel : String := "devstral-medium-latest"
 def mistralBaseUrl : String := LeanAgent.AI.Api.MistralConversations.defaultBaseUrl
+
+def amazonBedrockProviderId : String := "amazon-bedrock"
+def amazonBedrockDefaultModel : String := "us.anthropic.claude-opus-4-6-v1"
+def amazonBedrockBaseUrl : String := LeanAgent.AI.Api.BedrockConverseStream.defaultBaseUrl
+def amazonBedrockAuthEnvs : Array String :=
+  #[ "AWS_BEARER_TOKEN_BEDROCK"
+   , "AWS_PROFILE"
+   , "AWS_ACCESS_KEY_ID"
+   , "AWS_SECRET_ACCESS_KEY"
+   , "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"
+   , "AWS_CONTAINER_CREDENTIALS_FULL_URI"
+   , "AWS_WEB_IDENTITY_TOKEN_FILE"
+   ]
 
 structure ModelCompat where
   supportsStore : Bool := true
@@ -673,6 +687,124 @@ def mistralModels : Array ModelInfo :=
    , mistralModel "pixtral-large-latest" "Pixtral Large (latest)" 2.0 6.0 0.2 0.0 128000 128000 false textImageInput
    ]
 
+def bedrockModel
+    (id name : String)
+    (inputCost outputCost cacheReadCost cacheWriteCost : Float)
+    (contextWindow maxTokens : Nat)
+    (reasoning : Bool := false)
+    (input : Array String := #["text"]) : ModelInfo :=
+  { id := id
+    name := name
+    provider := amazonBedrockProviderId
+    api := LeanAgent.AI.Api.BedrockConverseStream.api
+    baseUrl := amazonBedrockBaseUrl
+    reasoning := reasoning
+    input := input
+    cost := cost inputCost outputCost cacheReadCost cacheWriteCost
+    contextWindow := contextWindow
+    maxTokens := maxTokens
+  }
+
+def amazonBedrockModels : Array ModelInfo :=
+  #[ bedrockModel "amazon.nova-2-lite-v1:0" "Nova 2 Lite" 0.33 2.75 0.0 0.0 128000 4096 true #["text", "image"]
+   , bedrockModel "amazon.nova-lite-v1:0" "Nova Lite" 0.06 0.24 0.015 0.0 300000 8192 false #["text", "image"]
+   , bedrockModel "amazon.nova-micro-v1:0" "Nova Micro" 0.035 0.14 0.00875 0.0 128000 8192 false #["text"]
+   , bedrockModel "amazon.nova-pro-v1:0" "Nova Pro" 0.8 3.2 0.2 0.0 300000 8192 false #["text", "image"]
+   , bedrockModel "anthropic.claude-haiku-4-5-20251001-v1:0" "Claude Haiku 4.5" 1.0 5.0 0.1 1.25 200000 64000 true #["text", "image"]
+   , bedrockModel "anthropic.claude-opus-4-1-20250805-v1:0" "Claude Opus 4.1" 15.0 75.0 1.5 18.75 200000 32000 true #["text", "image"]
+   , bedrockModel "anthropic.claude-opus-4-5-20251101-v1:0" "Claude Opus 4.5" 5.0 25.0 0.5 6.25 200000 64000 true #["text", "image"]
+   , bedrockModel "anthropic.claude-opus-4-6-v1" "Claude Opus 4.6" 5.0 25.0 0.5 6.25 1000000 128000 true #["text", "image"]
+   , bedrockModel "anthropic.claude-opus-4-7" "Claude Opus 4.7" 5.0 25.0 0.5 6.25 1000000 128000 true #["text", "image"]
+   , bedrockModel "anthropic.claude-opus-4-8" "Claude Opus 4.8" 5.0 25.0 0.5 6.25 1000000 128000 true #["text", "image"]
+   , bedrockModel "anthropic.claude-sonnet-4-5-20250929-v1:0" "Claude Sonnet 4.5" 3.0 15.0 0.3 3.75 200000 64000 true #["text", "image"]
+   , bedrockModel "anthropic.claude-sonnet-4-6" "Claude Sonnet 4.6" 3.0 15.0 0.3 3.75 1000000 64000 true #["text", "image"]
+   , bedrockModel "au.anthropic.claude-haiku-4-5-20251001-v1:0" "Claude Haiku 4.5 (AU)" 1.0 5.0 0.1 1.25 200000 64000 true #["text", "image"]
+   , bedrockModel "au.anthropic.claude-opus-4-6-v1" "AU Anthropic Claude Opus 4.6" 16.5 82.5 0.5 6.25 1000000 128000 true #["text", "image"]
+   , bedrockModel "au.anthropic.claude-opus-4-8" "Claude Opus 4.8 (AU)" 5.0 25.0 0.5 6.25 1000000 128000 true #["text", "image"]
+   , bedrockModel "au.anthropic.claude-sonnet-4-5-20250929-v1:0" "Claude Sonnet 4.5 (AU)" 3.0 15.0 0.3 3.75 200000 64000 true #["text", "image"]
+   , bedrockModel "au.anthropic.claude-sonnet-4-6" "AU Anthropic Claude Sonnet 4.6" 3.3 16.5 0.33 4.125 1000000 128000 true #["text", "image"]
+   , bedrockModel "deepseek.r1-v1:0" "DeepSeek-R1" 1.35 5.4 0.0 0.0 128000 32768 true #["text"]
+   , bedrockModel "deepseek.v3-v1:0" "DeepSeek-V3.1" 0.58 1.68 0.0 0.0 163840 81920 true #["text"]
+   , bedrockModel "deepseek.v3.2" "DeepSeek-V3.2" 0.62 1.85 0.0 0.0 163840 81920 true #["text"]
+   , bedrockModel "eu.anthropic.claude-fable-5" "Claude Fable 5 (EU)" 11.0 55.0 1.1 13.75 1000000 128000 true #["text", "image"]
+   , bedrockModel "eu.anthropic.claude-haiku-4-5-20251001-v1:0" "Claude Haiku 4.5 (EU)" 1.0 5.0 0.1 1.25 200000 64000 true #["text", "image"]
+   , bedrockModel "eu.anthropic.claude-opus-4-5-20251101-v1:0" "Claude Opus 4.5 (EU)" 5.0 25.0 0.5 6.25 200000 64000 true #["text", "image"]
+   , bedrockModel "eu.anthropic.claude-opus-4-6-v1" "Claude Opus 4.6 (EU)" 5.5 27.5 0.5 6.25 1000000 128000 true #["text", "image"]
+   , bedrockModel "eu.anthropic.claude-opus-4-7" "Claude Opus 4.7 (EU)" 5.5 27.5 0.55 6.875 1000000 128000 true #["text", "image"]
+   , bedrockModel "eu.anthropic.claude-opus-4-8" "Claude Opus 4.8 (EU)" 5.5 27.5 0.55 6.875 1000000 128000 true #["text", "image"]
+   , bedrockModel "eu.anthropic.claude-sonnet-4-5-20250929-v1:0" "Claude Sonnet 4.5 (EU)" 3.3 16.5 0.33 4.125 200000 64000 true #["text", "image"]
+   , bedrockModel "eu.anthropic.claude-sonnet-4-6" "Claude Sonnet 4.6 (EU)" 3.3 16.5 0.33 4.125 1000000 64000 true #["text", "image"]
+   , bedrockModel "global.anthropic.claude-fable-5" "Claude Fable 5 (Global)" 10.0 50.0 1.0 12.5 1000000 128000 true #["text", "image"]
+   , bedrockModel "global.anthropic.claude-haiku-4-5-20251001-v1:0" "Claude Haiku 4.5 (Global)" 1.0 5.0 0.1 1.25 200000 64000 true #["text", "image"]
+   , bedrockModel "global.anthropic.claude-opus-4-5-20251101-v1:0" "Claude Opus 4.5 (Global)" 5.0 25.0 0.5 6.25 200000 64000 true #["text", "image"]
+   , bedrockModel "global.anthropic.claude-opus-4-6-v1" "Claude Opus 4.6 (Global)" 5.0 25.0 0.5 6.25 1000000 128000 true #["text", "image"]
+   , bedrockModel "global.anthropic.claude-opus-4-7" "Claude Opus 4.7 (Global)" 5.0 25.0 0.5 6.25 1000000 128000 true #["text", "image"]
+   , bedrockModel "global.anthropic.claude-opus-4-8" "Claude Opus 4.8 (Global)" 5.0 25.0 0.5 6.25 1000000 128000 true #["text", "image"]
+   , bedrockModel "global.anthropic.claude-sonnet-4-5-20250929-v1:0" "Claude Sonnet 4.5 (Global)" 3.0 15.0 0.3 3.75 200000 64000 true #["text", "image"]
+   , bedrockModel "global.anthropic.claude-sonnet-4-6" "Claude Sonnet 4.6 (Global)" 3.0 15.0 0.3 3.75 1000000 64000 true #["text", "image"]
+   , bedrockModel "google.gemma-3-27b-it" "Google Gemma 3 27B Instruct" 0.12 0.2 0.0 0.0 202752 8192 false #["text", "image"]
+   , bedrockModel "google.gemma-3-4b-it" "Gemma 3 4B IT" 0.04 0.08 0.0 0.0 128000 4096 false #["text", "image"]
+   , bedrockModel "jp.anthropic.claude-opus-4-7" "Claude Opus 4.7 (JP)" 5.0 25.0 0.5 6.25 1000000 128000 true #["text", "image"]
+   , bedrockModel "jp.anthropic.claude-opus-4-8" "Claude Opus 4.8 (JP)" 5.0 25.0 0.5 6.25 1000000 128000 true #["text", "image"]
+   , bedrockModel "jp.anthropic.claude-sonnet-4-5-20250929-v1:0" "Claude Sonnet 4.5 (JP)" 3.0 15.0 0.3 3.75 200000 64000 true #["text", "image"]
+   , bedrockModel "jp.anthropic.claude-sonnet-4-6" "Claude Sonnet 4.6 (JP)" 3.0 15.0 0.3 3.75 1000000 64000 true #["text", "image"]
+   , bedrockModel "meta.llama3-1-70b-instruct-v1:0" "Llama 3.1 70B Instruct" 0.72 0.72 0.0 0.0 128000 4096 false #["text"]
+   , bedrockModel "meta.llama3-1-8b-instruct-v1:0" "Llama 3.1 8B Instruct" 0.22 0.22 0.0 0.0 128000 4096 false #["text"]
+   , bedrockModel "meta.llama3-3-70b-instruct-v1:0" "Llama 3.3 70B Instruct" 0.72 0.72 0.0 0.0 128000 4096 false #["text"]
+   , bedrockModel "meta.llama4-maverick-17b-instruct-v1:0" "Llama 4 Maverick 17B Instruct" 0.24 0.97 0.0 0.0 1000000 16384 false #["text", "image"]
+   , bedrockModel "meta.llama4-scout-17b-instruct-v1:0" "Llama 4 Scout 17B Instruct" 0.17 0.66 0.0 0.0 3500000 16384 false #["text", "image"]
+   , bedrockModel "minimax.minimax-m2" "MiniMax M2" 0.3 1.2 0.0 0.0 204608 128000 true #["text"]
+   , bedrockModel "minimax.minimax-m2.1" "MiniMax M2.1" 0.3 1.2 0.0 0.0 204800 131072 true #["text"]
+   , bedrockModel "minimax.minimax-m2.5" "MiniMax M2.5" 0.3 1.2 0.0 0.0 196608 98304 true #["text"]
+   , bedrockModel "mistral.devstral-2-123b" "Devstral 2 123B" 0.4 2.0 0.0 0.0 256000 8192 false #["text"]
+   , bedrockModel "mistral.magistral-small-2509" "Magistral Small 1.2" 0.5 1.5 0.0 0.0 128000 40000 true #["text", "image"]
+   , bedrockModel "mistral.ministral-3-14b-instruct" "Ministral 14B 3.0" 0.2 0.2 0.0 0.0 128000 4096 false #["text"]
+   , bedrockModel "mistral.ministral-3-3b-instruct" "Ministral 3 3B" 0.1 0.1 0.0 0.0 256000 8192 false #["text", "image"]
+   , bedrockModel "mistral.ministral-3-8b-instruct" "Ministral 3 8B" 0.15 0.15 0.0 0.0 128000 4096 false #["text"]
+   , bedrockModel "mistral.mistral-large-3-675b-instruct" "Mistral Large 3" 0.5 1.5 0.0 0.0 256000 8192 false #["text", "image"]
+   , bedrockModel "mistral.pixtral-large-2502-v1:0" "Pixtral Large (25.02)" 2.0 6.0 0.0 0.0 128000 8192 false #["text", "image"]
+   , bedrockModel "mistral.voxtral-mini-3b-2507" "Voxtral Mini 3B 2507" 0.04 0.04 0.0 0.0 128000 4096 false #["text"]
+   , bedrockModel "mistral.voxtral-small-24b-2507" "Voxtral Small 24B 2507" 0.15 0.35 0.0 0.0 32000 8192 false #["text"]
+   , bedrockModel "moonshot.kimi-k2-thinking" "Kimi K2 Thinking" 0.6 2.5 0.0 0.0 262143 16000 true #["text"]
+   , bedrockModel "moonshotai.kimi-k2.5" "Kimi K2.5" 0.6 3.0 0.0 0.0 262143 16000 true #["text", "image"]
+   , bedrockModel "nvidia.nemotron-nano-12b-v2" "NVIDIA Nemotron Nano 12B v2 VL BF16" 0.2 0.6 0.0 0.0 128000 4096 false #["text", "image"]
+   , bedrockModel "nvidia.nemotron-nano-3-30b" "NVIDIA Nemotron Nano 3 30B" 0.06 0.24 0.0 0.0 128000 4096 true #["text"]
+   , bedrockModel "nvidia.nemotron-nano-9b-v2" "NVIDIA Nemotron Nano 9B v2" 0.06 0.23 0.0 0.0 128000 4096 false #["text"]
+   , bedrockModel "nvidia.nemotron-super-3-120b" "NVIDIA Nemotron 3 Super 120B A12B" 0.15 0.65 0.0 0.0 262144 131072 true #["text"]
+   , bedrockModel "openai.gpt-5.4" "GPT-5.4" 2.75 16.5 0.275 0.0 272000 128000 true #["text", "image"]
+   , bedrockModel "openai.gpt-5.5" "GPT-5.5" 5.5 33.0 0.55 0.0 272000 128000 true #["text", "image"]
+   , bedrockModel "openai.gpt-oss-120b" "gpt-oss-120b" 0.15 0.6 0.0 0.0 128000 16384 true #["text"]
+   , bedrockModel "openai.gpt-oss-120b-1:0" "gpt-oss-120b" 0.15 0.6 0.0 0.0 128000 16384 true #["text"]
+   , bedrockModel "openai.gpt-oss-20b" "gpt-oss-20b" 0.07 0.3 0.0 0.0 128000 16384 true #["text"]
+   , bedrockModel "openai.gpt-oss-20b-1:0" "gpt-oss-20b" 0.07 0.3 0.0 0.0 128000 16384 true #["text"]
+   , bedrockModel "openai.gpt-oss-safeguard-120b" "GPT OSS Safeguard 120B" 0.15 0.6 0.0 0.0 128000 16384 false #["text"]
+   , bedrockModel "openai.gpt-oss-safeguard-20b" "GPT OSS Safeguard 20B" 0.07 0.2 0.0 0.0 128000 16384 false #["text"]
+   , bedrockModel "qwen.qwen3-235b-a22b-2507-v1:0" "Qwen3 235B A22B 2507" 0.22 0.88 0.0 0.0 262144 131072 false #["text"]
+   , bedrockModel "qwen.qwen3-32b-v1:0" "Qwen3 32B (dense)" 0.15 0.6 0.0 0.0 16384 16384 true #["text"]
+   , bedrockModel "qwen.qwen3-coder-30b-a3b-v1:0" "Qwen3 Coder 30B A3B Instruct" 0.15 0.6 0.0 0.0 262144 131072 false #["text"]
+   , bedrockModel "qwen.qwen3-coder-480b-a35b-v1:0" "Qwen3 Coder 480B A35B Instruct" 0.22 1.8 0.0 0.0 131072 65536 false #["text"]
+   , bedrockModel "qwen.qwen3-coder-next" "Qwen3 Coder Next" 0.22 1.8 0.0 0.0 131072 65536 true #["text"]
+   , bedrockModel "qwen.qwen3-next-80b-a3b" "Qwen/Qwen3-Next-80B-A3B-Instruct" 0.14 1.4 0.0 0.0 262000 262000 false #["text"]
+   , bedrockModel "qwen.qwen3-vl-235b-a22b" "Qwen/Qwen3-VL-235B-A22B-Instruct" 0.3 1.5 0.0 0.0 262000 262000 false #["text", "image"]
+   , bedrockModel "us.anthropic.claude-fable-5" "Claude Fable 5 (US)" 10.0 50.0 1.0 12.5 1000000 128000 true #["text", "image"]
+   , bedrockModel "us.anthropic.claude-haiku-4-5-20251001-v1:0" "Claude Haiku 4.5 (US)" 1.0 5.0 0.1 1.25 200000 64000 true #["text", "image"]
+   , bedrockModel "us.anthropic.claude-opus-4-1-20250805-v1:0" "Claude Opus 4.1 (US)" 15.0 75.0 1.5 18.75 200000 32000 true #["text", "image"]
+   , bedrockModel "us.anthropic.claude-opus-4-5-20251101-v1:0" "Claude Opus 4.5 (US)" 5.0 25.0 0.5 6.25 200000 64000 true #["text", "image"]
+   , bedrockModel "us.anthropic.claude-opus-4-6-v1" "Claude Opus 4.6 (US)" 5.0 25.0 0.5 6.25 1000000 128000 true #["text", "image"]
+   , bedrockModel "us.anthropic.claude-opus-4-7" "Claude Opus 4.7 (US)" 5.0 25.0 0.5 6.25 1000000 128000 true #["text", "image"]
+   , bedrockModel "us.anthropic.claude-opus-4-8" "Claude Opus 4.8 (US)" 5.0 25.0 0.5 6.25 1000000 128000 true #["text", "image"]
+   , bedrockModel "us.anthropic.claude-sonnet-4-5-20250929-v1:0" "Claude Sonnet 4.5 (US)" 3.0 15.0 0.3 3.75 200000 64000 true #["text", "image"]
+   , bedrockModel "us.anthropic.claude-sonnet-4-6" "Claude Sonnet 4.6 (US)" 3.0 15.0 0.3 3.75 1000000 64000 true #["text", "image"]
+   , bedrockModel "us.deepseek.r1-v1:0" "DeepSeek-R1 (US)" 1.35 5.4 0.0 0.0 128000 32768 true #["text"]
+   , bedrockModel "us.meta.llama4-maverick-17b-instruct-v1:0" "Llama 4 Maverick 17B Instruct (US)" 0.24 0.97 0.0 0.0 1000000 16384 false #["text", "image"]
+   , bedrockModel "us.meta.llama4-scout-17b-instruct-v1:0" "Llama 4 Scout 17B Instruct (US)" 0.17 0.66 0.0 0.0 3500000 16384 false #["text", "image"]
+   , bedrockModel "writer.palmyra-x4-v1:0" "Palmyra X4" 2.5 10.0 0.0 0.0 122880 8192 true #["text"]
+   , bedrockModel "writer.palmyra-x5-v1:0" "Palmyra X5" 0.6 6.0 0.0 0.0 1040000 8192 true #["text"]
+   , bedrockModel "zai.glm-4.7" "GLM-4.7" 0.6 2.2 0.0 0.0 204800 131072 true #["text"]
+   , bedrockModel "zai.glm-4.7-flash" "GLM-4.7-Flash" 0.07 0.4 0.0 0.0 200000 131072 true #["text"]
+   , bedrockModel "zai.glm-5" "GLM-5" 1.0 3.2 0.0 0.0 202752 101376 true #["text"]
+   ]
+
 def azureModel
     (id name : String)
     (inputCost outputCost cacheReadCost cacheWriteCost : Float)
@@ -903,6 +1035,16 @@ def mistralProviderInfo : ProviderInfo :=
     models := mistralModels
   }
 
+def amazonBedrockProviderInfo : ProviderInfo :=
+  { id := amazonBedrockProviderId
+    name := "Amazon Bedrock"
+    baseUrl := amazonBedrockBaseUrl
+    apiKeyEnv := ""
+    apiKeyEnvs := amazonBedrockAuthEnvs
+    defaultModel := amazonBedrockDefaultModel
+    models := amazonBedrockModels
+  }
+
 structure ProviderCatalog where
   providers : Array ProviderInfo := #[]
 deriving Repr, BEq
@@ -923,6 +1065,7 @@ def defaultCatalog : ProviderCatalog :=
      , googleProviderInfo
      , googleVertexProviderInfo
      , mistralProviderInfo
+     , amazonBedrockProviderInfo
      ]
   }
 
@@ -1612,6 +1755,37 @@ def mistralConversationsStreams : ProviderStreams :=
       pure (applyUsageCostToStream model stream)
   }
 
+def placeholderAuthToken (value : String) : Bool :=
+  value.startsWith "<" && value.endsWith ">"
+
+def bedrockOptionsFromSimple (options : LeanAgent.AI.SimpleStreamOptions) :
+    LeanAgent.AI.Api.BedrockConverseStream.BedrockOptions :=
+  let base := LeanAgent.AI.Api.BedrockConverseStream.optionsFromSimple options
+  let bearerToken :=
+    match options.apiKey with
+    | some key =>
+        let key := key.trimAscii.toString
+        if key.isEmpty || placeholderAuthToken key then none else some key
+    | none => none
+  { base with bearerToken := bearerToken }
+
+def bedrockConverseStreamStreams : ProviderStreams :=
+  { streamSimple := fun model context options => do
+      let options := clampSimpleOptionsToContext model context options
+      let config : LeanAgent.AI.Api.BedrockConverseStream.BedrockConverseStreamConfig :=
+        { baseUrl := model.baseUrl }
+      let stream ← LeanAgent.AI.Api.BedrockConverseStream.completeStreamWithOptions
+        config
+        model.toModelRef
+        model.input
+        model.name
+        model.thinkingLevelMap
+        model.reasoning
+        context
+        (bedrockOptionsFromSimple options)
+      pure (applyUsageCostToStream model stream)
+  }
+
 def googleVertexAdcPath : String := "~/.config/gcloud/application_default_credentials.json"
 
 def googleVertexHasAdcCredentials
@@ -1669,11 +1843,67 @@ def openAICodexOAuthAuth : LeanAgent.AI.Auth.OAuthAuth :=
       pure { apiKey := some credential.access }
   }
 
+def amazonBedrockAmbientAuthSource? (ctx : LeanAgent.AI.Auth.AuthContext) :
+    IO (Option String) := do
+  match ← ctx.env "AWS_BEARER_TOKEN_BEDROCK" with
+  | some _ => pure (some "AWS_BEARER_TOKEN_BEDROCK")
+  | none =>
+      match ← ctx.env "AWS_PROFILE" with
+      | some _ => pure (some "AWS_PROFILE")
+      | none =>
+          let accessKey ← ctx.env "AWS_ACCESS_KEY_ID"
+          let secretKey ← ctx.env "AWS_SECRET_ACCESS_KEY"
+          if accessKey.isSome && secretKey.isSome then
+            pure (some "AWS access keys")
+          else
+            match ← ctx.env "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI" with
+            | some _ => pure (some "ECS task role")
+            | none =>
+                match ← ctx.env "AWS_CONTAINER_CREDENTIALS_FULL_URI" with
+                | some _ => pure (some "ECS task role")
+                | none =>
+                    match ← ctx.env "AWS_WEB_IDENTITY_TOKEN_FILE" with
+                    | some _ => pure (some "web identity token")
+                    | none => pure none
+
+def amazonBedrockApiKeyAuth : LeanAgent.AI.Auth.ApiKeyAuth :=
+  { name := "AWS credentials"
+    resolve := fun ctx credential _modelBaseUrl => do
+      let credentialEnv := credential.map (fun value => value.env) |>.getD #[]
+      match credential.bind (fun value => value.key) with
+      | some key =>
+          if key.trimAscii.toString.isEmpty then
+            pure none
+          else
+            pure
+              (some
+                { auth := { apiKey := some key }
+                  env := credentialEnv
+                  source := some "stored credential"
+                })
+      | none =>
+          let ctx :=
+            match credential with
+            | some value => LeanAgent.AI.Auth.overlayEnvAuthContext ctx value.env
+            | none => ctx
+          match ← amazonBedrockAmbientAuthSource? ctx with
+          | some source =>
+              pure
+                (some
+                  { auth := {}
+                    env := credentialEnv
+                    source := some source
+                  })
+          | none => pure none
+  }
+
 def authForProviderInfo (info : ProviderInfo) : LeanAgent.AI.Auth.ProviderAuth :=
   if info.id == googleVertexProviderId then
     { apiKey := some googleVertexApiKeyAuth }
   else if info.id == openAICodexProviderId then
     { oauth := some openAICodexOAuthAuth }
+  else if info.id == amazonBedrockProviderId then
+    { apiKey := some amazonBedrockApiKeyAuth }
   else
     { apiKey := some (LeanAgent.AI.Auth.envApiKeyAuth (info.name ++ " API key") info.authEnvs) }
 
@@ -1692,6 +1922,7 @@ def createCatalogProvider (info : ProviderInfo) : IO Provider :=
          , { api := LeanAgent.AI.Api.GoogleGenerativeAI.api, streams := googleGenerativeAIStreams }
          , { api := LeanAgent.AI.Api.GoogleVertex.api, streams := googleVertexStreams }
          , { api := LeanAgent.AI.Api.MistralConversations.api, streams := mistralConversationsStreams }
+         , { api := LeanAgent.AI.Api.BedrockConverseStream.api, streams := bedrockConverseStreamStreams }
          ]
     }
 

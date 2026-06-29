@@ -847,11 +847,26 @@ def mistralModelRef : LeanAgent.AI.ModelRef :=
     baseUrl := some LeanAgent.Models.mistralBaseUrl
   }
 
+def bedrockModelRef : LeanAgent.AI.ModelRef :=
+  { id := LeanAgent.Models.amazonBedrockDefaultModel
+    api := LeanAgent.AI.Api.BedrockConverseStream.api
+    provider := LeanAgent.Models.amazonBedrockProviderId
+    baseUrl := some LeanAgent.Models.amazonBedrockBaseUrl
+  }
+
 def jsonArrayField? (json : Lean.Json) (key : String) : Option (Array Lean.Json) :=
   match LeanAgent.Json.optVal? json key with
   | some value =>
       match value.getArr? with
       | .ok arr => some arr
+      | .error _ => none
+  | none => none
+
+def jsonObjectField? (json : Lean.Json) (key : String) : Option Lean.Json :=
+  match LeanAgent.Json.optVal? json key with
+  | some value =>
+      match value.getObj? with
+      | .ok _ => some value
       | .error _ => none
   | none => none
 
@@ -1759,6 +1774,215 @@ def testMistralConversationsParsesStreamingEvents : IO Unit := do
           | _ => false)
         "expected Mistral tool-call delta"
   | .error err => fail s!"expected Mistral streaming parse success: {err}"
+
+def testBedrockConverseRequestPayload : IO Unit := do
+  let assistant : LeanAgent.AI.AssistantMessage :=
+    { content :=
+        #[ .thinking { thinking := "reasoning", thinkingSignature := some "sig" }
+         , .text { text := "plan" }
+         , .toolCall
+            { id := "call_read_item"
+              name := "read"
+              arguments := LeanAgent.Json.obj [("path", LeanAgent.Json.str "README.md")]
+            }
+         ]
+      api := LeanAgent.AI.Api.BedrockConverseStream.api
+      provider := LeanAgent.Models.amazonBedrockProviderId
+      model := LeanAgent.Models.amazonBedrockDefaultModel
+      stopReason := .toolUse
+      timestamp := 2
+    }
+  let context : LeanAgent.AI.Context :=
+    { systemPrompt := some "Be precise."
+      messages :=
+        #[ .user
+            { content := #[LeanAgent.AI.text "hello", LeanAgent.AI.image "aGVsbG8=" "image/png"]
+              timestamp := 1
+            }
+         , .assistant assistant
+         , .toolResult
+            { toolCallId := "call_read_item"
+              toolName := "read"
+              content := #[LeanAgent.AI.text "file contents"]
+              isError := false
+              timestamp := 3
+            }
+         ]
+      tools :=
+        #[ { name := "read"
+             description := "Read a file"
+             parameters := LeanAgent.Json.obj [("type", LeanAgent.Json.str "object")]
+           }
+         ]
+    }
+  let payload := LeanAgent.AI.Api.BedrockConverseStream.requestToJsonWithOptions
+    bedrockModelRef
+    #["text", "image"]
+    "Claude Opus 4.6 (US)"
+    #[]
+    true
+    context
+    { maxTokens := some 4096
+      temperature := some 0.2
+      cacheRetention := some .long
+      toolChoice := some .any
+      reasoning := some .medium
+      thinkingDisplay := some .omitted
+      metadata := some (LeanAgent.Json.obj [("session", LeanAgent.Json.str "s1")])
+    }
+  assertTrue
+    (jsonStringField? payload "modelId" == some LeanAgent.Models.amazonBedrockDefaultModel)
+    "expected Bedrock model id"
+  match jsonArrayField? payload "system" with
+  | some system =>
+      assertTrue (system.size == 2) "expected Bedrock cacheable system prompt"
+      match system[0]?, system[1]? with
+      | some textBlock, some cacheBlock =>
+          assertTrue (jsonStringField? textBlock "text" == some "Be precise.") "expected Bedrock system text"
+          match jsonObjectField? cacheBlock "cachePoint" with
+          | some cachePoint =>
+              assertTrue (jsonStringField? cachePoint "ttl" == some "ONE_HOUR") "expected Bedrock long cache"
+          | none => fail "expected Bedrock cache point"
+      | _, _ => fail "expected Bedrock system blocks"
+  | none => fail "expected Bedrock system array"
+  match jsonObjectField? payload "inferenceConfig" with
+  | some inference =>
+      assertTrue (LeanAgent.Json.optVal? inference "maxTokens" == some (LeanAgent.Json.nat 4096))
+        "expected Bedrock max tokens"
+      assertTrue (LeanAgent.Json.optVal? inference "temperature" == some (LeanAgent.AI.floatJson 0.2))
+        "expected Bedrock temperature"
+  | none => fail "expected Bedrock inference config"
+  match jsonArrayField? payload "messages" with
+  | some messages =>
+      assertTrue (messages.size == 3) "expected Bedrock user, assistant, tool-result messages"
+      match messages[0]? with
+      | some userMessage =>
+          match jsonArrayField? userMessage "content" with
+          | some content =>
+              match content[0]?, content[1]? with
+              | some textPart, some imagePart =>
+                  assertTrue (jsonStringField? textPart "text" == some "hello") "expected Bedrock text part"
+                  match jsonObjectField? imagePart "image" with
+                  | some image => assertTrue (jsonStringField? image "format" == some "png") "expected Bedrock image"
+                  | none => fail "expected Bedrock image part"
+              | _, _ => fail "expected Bedrock text and image"
+          | none => fail "expected Bedrock user content"
+      | none => fail "expected Bedrock user message"
+      match messages[1]? with
+      | some assistantMessage =>
+          match jsonArrayField? assistantMessage "content" with
+          | some content =>
+              match content[0]?, content[1]?, content[2]? with
+              | some thinkingPart, some textPart, some toolPart =>
+                  assertTrue (jsonObjectField? thinkingPart "reasoningContent" |>.isSome)
+                    "expected Bedrock reasoning content"
+                  assertTrue (jsonStringField? textPart "text" == some "plan") "expected Bedrock assistant text"
+                  match jsonObjectField? toolPart "toolUse" with
+                  | some toolUse =>
+                      assertTrue (jsonStringField? toolUse "toolUseId" == some "call_read_item")
+                        "expected normalized Bedrock tool id"
+                  | none => fail "expected Bedrock tool use"
+              | _, _, _ => fail "expected Bedrock assistant blocks"
+          | none => fail "expected Bedrock assistant content"
+      | none => fail "expected Bedrock assistant message"
+      match messages[2]? with
+      | some toolMessage =>
+          match jsonArrayField? toolMessage "content" with
+          | some content =>
+              match content[0]? with
+              | some resultPart =>
+                  match jsonObjectField? resultPart "toolResult" with
+                  | some toolResult =>
+                      assertTrue (jsonStringField? toolResult "toolUseId" == some "call_read_item")
+                        "expected normalized Bedrock tool result id"
+                      assertTrue (jsonStringField? toolResult "status" == some "success")
+                        "expected Bedrock tool result status"
+                  | none => fail "expected Bedrock tool result"
+              | none => fail "expected Bedrock tool result block"
+          | none => fail "expected Bedrock tool result content"
+      | none => fail "expected Bedrock tool result message"
+  | none => fail "expected Bedrock messages"
+  match jsonObjectField? payload "toolConfig" with
+  | some toolConfig =>
+      match jsonObjectField? toolConfig "toolChoice" with
+      | some choice => assertTrue (jsonObjectField? choice "any" |>.isSome) "expected Bedrock any tool choice"
+      | none => fail "expected Bedrock tool choice"
+  | none => fail "expected Bedrock tool config"
+  match jsonObjectField? payload "additionalModelRequestFields" with
+  | some fields =>
+      match jsonObjectField? fields "thinking", jsonObjectField? fields "output_config" with
+      | some thinking, some outputConfig =>
+          assertTrue (jsonStringField? thinking "type" == some "adaptive") "expected adaptive Bedrock thinking"
+          assertTrue (jsonStringField? thinking "display" == some "omitted") "expected Bedrock thinking display"
+          assertTrue (jsonStringField? outputConfig "effort" == some "medium") "expected Bedrock effort"
+      | _, _ => fail "expected Bedrock thinking output fields"
+  | none => fail "expected Bedrock additional request fields"
+  match jsonObjectField? payload "requestMetadata" with
+  | some metadata => assertTrue (jsonStringField? metadata "session" == some "s1") "expected Bedrock metadata"
+  | none => fail "expected Bedrock request metadata"
+
+def testBedrockConverseHelpersAndTransportBoundary : IO Unit := do
+  assertTrue (LeanAgent.AI.Api.BedrockConverseStream.mapStopReason (some "END_TURN") == .stop)
+    "expected Bedrock END_TURN stop"
+  assertTrue (LeanAgent.AI.Api.BedrockConverseStream.mapStopReason (some "MAX_TOKENS") == .length)
+    "expected Bedrock MAX_TOKENS length"
+  assertTrue (LeanAgent.AI.Api.BedrockConverseStream.mapStopReason (some "TOOL_USE") == .toolUse)
+    "expected Bedrock TOOL_USE"
+  assertTrue (LeanAgent.AI.Api.BedrockConverseStream.mapStopReason (some "OTHER") == .error)
+    "expected Bedrock unknown stop reason error"
+  assertTrue
+    (LeanAgent.AI.Api.BedrockConverseStream.standardEndpointRegion?
+      "https://bedrock-runtime.us-west-2.amazonaws.com" == some "us-west-2")
+    "expected Bedrock endpoint region"
+  assertTrue
+    (LeanAgent.AI.Api.BedrockConverseStream.standardEndpointRegion?
+      "https://custom-bedrock.example.com" == none)
+    "expected custom Bedrock endpoint to have no standard region"
+  assertTrue
+    (LeanAgent.AI.Api.BedrockConverseStream.shouldUseExplicitEndpoint
+      "https://bedrock-runtime.us-east-1.amazonaws.com" none false)
+    "expected standard endpoint to be explicit without configured region/profile"
+  assertTrue
+    (!LeanAgent.AI.Api.BedrockConverseStream.shouldUseExplicitEndpoint
+      "https://bedrock-runtime.us-east-1.amazonaws.com" (some "us-west-2") false)
+    "expected configured region to avoid explicit endpoint"
+  let headers := LeanAgent.AI.Api.BedrockConverseStream.requestHeaders
+    { headers := #[("X-Config", "yes")] }
+    { headers :=
+        #[ ("Authorization", some "bad")
+         , ("x-amz-date", some "bad")
+         , ("X-Trace", some "trace-1")
+         ]
+    }
+  assertTrue (headerValueCaseInsensitive? headers "X-Config" == some "yes")
+    "expected Bedrock config header"
+  assertTrue (headerValueCaseInsensitive? headers "X-Trace" == some "trace-1")
+    "expected Bedrock custom header"
+  assertTrue (headerValueCaseInsensitive? headers "Authorization" == none)
+    "expected Bedrock reserved auth header to be filtered"
+  let sawPayload ← IO.mkRef false
+  let failed ←
+    try
+      let _ ← LeanAgent.AI.Api.BedrockConverseStream.completeStreamWithOptions
+        { baseUrl := LeanAgent.Models.amazonBedrockBaseUrl }
+        bedrockModelRef
+        #["text", "image"]
+        "Claude Opus 4.6 (US)"
+        #[]
+        true
+        { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }] }
+        { onPayload := some (fun payload model => do
+            sawPayload.set true
+            assertTrue (jsonStringField? payload "modelId" == some model.id)
+              "expected Bedrock payload hook model id"
+            pure none)
+        }
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains "AWS SigV4") "expected Bedrock transport boundary error"
+      pure true
+  assertTrue failed "expected Bedrock transport to fail explicitly"
+  assertTrue (← sawPayload.get) "expected Bedrock payload hook before transport boundary"
 
 def testGitHubCopilotDynamicHeaders : IO Unit := do
   let userOnly : Array LeanAgent.AI.Message :=
@@ -2731,6 +2955,7 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
      , LeanAgent.Models.googleProviderId
      , LeanAgent.Models.googleVertexProviderId
      , LeanAgent.Models.mistralProviderId
+     , LeanAgent.Models.amazonBedrockProviderId
      ]
   for providerId in expectedProviders do
     match LeanAgent.Models.ProviderCatalog.provider? catalog providerId with
@@ -2764,6 +2989,9 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
   assertTrue (rendered.contains "google/gemini-2.5-flash") "expected Google Gemini model"
   assertTrue (rendered.contains "google-vertex/gemini-2.5-flash") "expected Google Vertex model"
   assertTrue (rendered.contains "mistral/devstral-medium-latest") "expected Mistral model"
+  assertTrue (rendered.contains "amazon-bedrock/us.anthropic.claude-opus-4-6-v1")
+    "expected Amazon Bedrock model"
+  assertTrue (LeanAgent.Models.amazonBedrockModels.size == 97) "expected generated Bedrock model catalog"
   match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.anthropicOAuthTokenEnv with
   | some provider =>
       assertTrue (provider.id == LeanAgent.Models.anthropicProviderId) "expected Anthropic OAuth token env"
@@ -2792,11 +3020,17 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
       assertTrue (provider.defaultModel == LeanAgent.Models.mistralDefaultModel)
         "expected Mistral default model"
   | none => fail "expected Mistral provider by env"
+  match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog "AWS_PROFILE" with
+  | some provider =>
+      assertTrue (provider.id == LeanAgent.Models.amazonBedrockProviderId) "expected Bedrock provider by AWS env"
+      assertTrue (provider.defaultModel == LeanAgent.Models.amazonBedrockDefaultModel)
+        "expected Bedrock default model"
+  | none => fail "expected Bedrock provider by AWS env"
 
 def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
   let collection ← LeanAgent.Models.createDefaultModels
   let providers ← collection.getProviders
-  assertTrue (providers.size == 14) "expected default provider family"
+  assertTrue (providers.size == 15) "expected default provider family"
   match ← collection.getModel? LeanAgent.Models.openAIProviderId LeanAgent.Models.openAIDefaultModel with
   | some model =>
       assertTrue (model.api == "openai-responses") "expected OpenAI Responses API"
@@ -2853,6 +3087,13 @@ def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
       assertTrue (model.baseUrl == LeanAgent.Models.mistralBaseUrl) "expected Mistral base URL"
       assertTrue (model.maxTokens == 262144) "expected Mistral default max tokens"
   | none => fail "expected Mistral model in default runtime collection"
+  match ← collection.getModel? LeanAgent.Models.amazonBedrockProviderId LeanAgent.Models.amazonBedrockDefaultModel with
+  | some model =>
+      assertTrue (model.api == LeanAgent.AI.Api.BedrockConverseStream.api) "expected Bedrock Converse API"
+      assertTrue (model.baseUrl == LeanAgent.Models.amazonBedrockBaseUrl) "expected Bedrock base URL"
+      assertTrue (model.maxTokens == 128000) "expected Bedrock default max tokens"
+      assertTrue (model.input.contains "image") "expected Bedrock image input metadata"
+  | none => fail "expected Bedrock model in default runtime collection"
 
 def assertProviderFactoryMatchesInfo (mkProvider : IO LeanAgent.Models.Provider)
     (info : LeanAgent.Models.ProviderInfo) : IO Unit := do
@@ -2907,6 +3148,38 @@ def assertOpenAICodexProviderFactoryMatchesInfo : IO Unit := do
       | none => fail "expected OpenAI Codex OAuth auth"
   | none => fail "expected OpenAI Codex OAuth auth handler"
 
+def assertAmazonBedrockProviderFactoryMatchesInfo : IO Unit := do
+  let provider ← LeanAgent.AI.Providers.AmazonBedrock.provider
+  let info := LeanAgent.Models.amazonBedrockProviderInfo
+  assertTrue (provider.id == info.id) "expected Bedrock provider id"
+  assertTrue (provider.name == info.name) "expected Bedrock provider name"
+  let models ← provider.getModels
+  assertTrue (models == info.models) "expected Bedrock provider models"
+  match provider.auth.apiKey with
+  | some apiKeyAuth =>
+      let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+      let ambientCtx : LeanAgent.AI.Auth.AuthContext :=
+        { env := fun name => pure (if name == "AWS_PROFILE" then some "dev" else none)
+          fileExists := fun _ => pure false
+        }
+      match ← LeanAgent.AI.Auth.resolveProviderAuth provider.id { apiKey := some apiKeyAuth } store ambientCtx with
+      | some result =>
+          assertTrue result.auth.apiKey.isNone "expected ambient Bedrock auth to avoid bearer key"
+          assertTrue (result.source == some "AWS_PROFILE") "expected Bedrock AWS_PROFILE source"
+      | none => fail "expected Bedrock ambient auth"
+      let _ ← store.modify LeanAgent.Models.amazonBedrockProviderId fun _ =>
+        pure (some (.apiKey { key := some "bedrock-bearer" }))
+      let emptyCtx : LeanAgent.AI.Auth.AuthContext :=
+        { env := fun _ => pure none
+          fileExists := fun _ => pure false
+        }
+      match ← LeanAgent.AI.Auth.resolveProviderAuth provider.id { apiKey := some apiKeyAuth } store emptyCtx with
+      | some result =>
+          assertTrue (result.auth.apiKey == some "bedrock-bearer") "expected stored Bedrock bearer token"
+          assertTrue (result.source == some "stored credential") "expected stored Bedrock source"
+      | none => fail "expected stored Bedrock auth"
+  | none => fail "expected Bedrock API key auth handler"
+
 def testOpenAICompatibleProviderFactoriesMatchCatalog : IO Unit := do
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.DeepSeek.provider LeanAgent.Models.deepSeekProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.OpenAI.provider LeanAgent.Models.openAIProviderInfo
@@ -2922,6 +3195,7 @@ def testOpenAICompatibleProviderFactoriesMatchCatalog : IO Unit := do
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Google.provider LeanAgent.Models.googleProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.GoogleVertex.provider LeanAgent.Models.googleVertexProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Mistral.provider LeanAgent.Models.mistralProviderInfo
+  assertAmazonBedrockProviderFactoryMatchesInfo
 
 def testLegacySelectionRejectsAnthropicProvider : IO Unit := do
   match ← LeanAgent.Models.resolveSelection { apiKeyEnv := some LeanAgent.Models.anthropicApiKeyEnv } with
@@ -3746,6 +4020,8 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
     "expected all providers to include Google Vertex catalog provider"
   assertTrue (providerIds.contains LeanAgent.Models.mistralProviderId)
     "expected all providers to include Mistral catalog provider"
+  assertTrue (providerIds.contains LeanAgent.Models.amazonBedrockProviderId)
+    "expected all providers to include Amazon Bedrock catalog provider"
   assertTrue (providerIds.contains LeanAgent.AI.Providers.CloudflareWorkersAI.providerId)
     "expected all providers to include Cloudflare Workers AI"
   assertTrue (providerIds.contains LeanAgent.AI.Providers.CloudflareAIGateway.providerId)
@@ -3794,6 +4070,12 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
       assertTrue (model.api == LeanAgent.AI.Api.MistralConversations.api) "expected Mistral builtin model"
   | none => fail "expected Mistral builtin model lookup"
   match LeanAgent.AI.Providers.All.getBuiltinModel?
+    LeanAgent.Models.amazonBedrockProviderId
+    LeanAgent.Models.amazonBedrockDefaultModel with
+  | some model =>
+      assertTrue (model.api == LeanAgent.AI.Api.BedrockConverseStream.api) "expected Bedrock builtin model"
+  | none => fail "expected Bedrock builtin model lookup"
+  match LeanAgent.AI.Providers.All.getBuiltinModel?
     LeanAgent.AI.Providers.CloudflareAIGateway.providerId
     "gpt-4o-mini" with
   | some model =>
@@ -3801,7 +4083,7 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
   | none => fail "expected Cloudflare AI Gateway builtin model lookup"
   let collection ← LeanAgent.AI.Providers.All.builtinModels none fakeCloudflareAuthContext
   let providers ← collection.getProviders
-  assertTrue (providers.size == 16) "expected implemented builtin text providers"
+  assertTrue (providers.size == 17) "expected implemented builtin text providers"
   match ← collection.getProvider? LeanAgent.AI.Providers.CloudflareWorkersAI.providerId with
   | some _ => pure ()
   | none => fail "expected Workers AI provider in builtin collection"
@@ -6146,6 +6428,8 @@ def main : IO UInt32 := do
     testMistralReasoningAndPromptCacheOptions
     testMistralConversationsParsesResponse
     testMistralConversationsParsesStreamingEvents
+    testBedrockConverseRequestPayload
+    testBedrockConverseHelpersAndTransportBoundary
     testGitHubCopilotDynamicHeaders
     testOpenAIResponsesRequestPayload
     testOpenAIResponsesRequestUsesThinkingLevelMap

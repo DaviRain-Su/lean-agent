@@ -15,6 +15,12 @@ def streamAnthropic : AliasStream :=
 def streamSimpleAnthropic : AliasStream :=
   streamAnthropic
 
+def streamBedrockConverseStream : AliasStream :=
+  streamForApi "bedrock-converse-stream"
+
+def streamSimpleBedrockConverseStream : AliasStream :=
+  streamBedrockConverseStream
+
 def streamAzureOpenAIResponses : AliasStream :=
   streamForApi "azure-openai-responses"
 
