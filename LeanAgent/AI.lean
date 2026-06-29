@@ -23,4 +23,4 @@ import LeanAgent.AI.Util.JsonParse
 import LeanAgent.AI.Util.Overflow
 import LeanAgent.AI.Util.Retry
 import LeanAgent.AI.Validation
-import LeanAgent.Models.Core
+import LeanAgent.Models

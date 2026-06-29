@@ -22,6 +22,9 @@ def main : IO Unit := do
     }
   let _ ← LeanAgent.AI.SessionResources.registerSessionResourceCleanup (fun _ => pure ())
   let collection ← LeanAgent.Models.createModels
+  let staticProvider? := LeanAgent.Models.defaultCatalog.provider? LeanAgent.Models.openAIProviderId
+  if staticProvider?.isNone then
+    throw (IO.userError "missing static model catalog surface after LeanAgent.AI import")
   let provider ←
     LeanAgent.Models.createProvider
       { id := "test"
