@@ -1707,6 +1707,59 @@ def testModelsCollectionDispatchesWithAuth : IO Unit := do
   assertTrue (LeanAgent.AI.contentPlainText message.content == "runtime-ok") "expected runtime stream result"
   assertTrue ((← seenApiKey.get) == some "env-secret") "expected collection to inject auth"
 
+def testCompatApiRegistryDispatchesAndUnregisters : IO Unit := do
+  LeanAgent.AI.Compat.resetApiProviders
+  let seenApiKey ← IO.mkRef (none : Option String)
+  LeanAgent.AI.Compat.registerApiProvider
+    { api := fakeRuntimeModel.api, streams := fakeRuntimeStreams seenApiKey }
+    (some "compat-test")
+  match ← LeanAgent.AI.Compat.getApiProvider? fakeRuntimeModel.api with
+  | some provider => assertTrue (provider.api == fakeRuntimeModel.api) "expected compat provider lookup"
+  | none => fail "expected compat provider"
+  let message ← LeanAgent.AI.Compat.completeSimple
+    fakeRuntimeModel
+    { systemPrompt := some "system"
+      messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 0 }]
+    }
+    { apiKey := some "request-key" }
+  assertTrue (LeanAgent.AI.contentPlainText message.content == "runtime-ok") "expected compat dispatch result"
+  assertTrue ((← seenApiKey.get) == some "request-key") "expected compat dispatch to pass request api key"
+  LeanAgent.AI.Compat.unregisterApiProviders "compat-test"
+  assertTrue ((← LeanAgent.AI.Compat.getApiProvider? fakeRuntimeModel.api).isNone)
+    "expected compat source unregister"
+  LeanAgent.AI.Compat.resetApiProviders
+
+def testCompatInjectsEnvApiKeyForKnownProviders : IO Unit := do
+  LeanAgent.AI.Compat.resetApiProviders
+  let seenApiKey ← IO.mkRef (none : Option String)
+  LeanAgent.AI.Compat.registerApiProvider
+    { api := "openai-completions", streams := fakeRuntimeStreams seenApiKey }
+    (some "compat-openai-override")
+  let model :=
+    { fakeRuntimeModel with
+      id := "compat-openai"
+      provider := LeanAgent.Models.openAIProviderId
+      api := "openai-completions"
+    }
+  let _ ← LeanAgent.AI.Compat.completeSimple
+    model
+    { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 0 }] }
+    { env := #[(LeanAgent.Models.openAIKeyEnv, "env-openai-key")] }
+  assertTrue ((← seenApiKey.get) == some "env-openai-key") "expected compat env API key injection"
+  LeanAgent.AI.Compat.resetApiProviders
+
+def testCompatMissingProviderReturnsError : IO Unit := do
+  LeanAgent.AI.Compat.clearApiProviders
+  let failed ←
+    try
+      let _ ← LeanAgent.AI.Compat.completeSimple fakeRuntimeModel {}
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains "No API provider registered") "expected missing compat provider error"
+      pure true
+  assertTrue failed "expected compat dispatch to fail without provider"
+  LeanAgent.AI.Compat.resetApiProviders
+
 def assertLazyErrorStream
     (stream : LeanAgent.AI.AssistantMessageEventStream)
     (expectedMessage : String) : IO Unit := do
@@ -2928,6 +2981,9 @@ def main : IO UInt32 := do
     testModelsAuthEnvApiKeyResolution
     testModelsAuthStoredCredentialWins
     testModelsCollectionDispatchesWithAuth
+    testCompatApiRegistryDispatchesAndUnregisters
+    testCompatInjectsEnvApiKeyForKnownProviders
+    testCompatMissingProviderReturnsError
     testModelsCreateProviderMissingApiReturnsLazyErrorStream
     testModelsCreateProviderSetupFailureReturnsLazyErrorStream
     testModelsLazyProviderStreamsLoadFailureReturnsErrorStream
