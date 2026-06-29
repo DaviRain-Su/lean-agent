@@ -984,6 +984,7 @@ def testAnthropicMessagesRequestPayload : IO Unit := do
       temperature := some 0.2
       thinkingEnabled := some true
       thinkingBudgetTokens := some 2048
+      cacheRetention := some .long
       toolChoice := some .any
       metadata := some (LeanAgent.Json.obj [("user_id", LeanAgent.Json.str "user-1")])
     }
@@ -998,7 +999,15 @@ def testAnthropicMessagesRequestPayload : IO Unit := do
   match jsonArrayField? payload "system" with
   | some system =>
       match system[0]? with
-      | some block => assertTrue (jsonStringField? block "text" == some "Be precise.") "expected system text"
+      | some block =>
+          assertTrue (jsonStringField? block "text" == some "Be precise.") "expected system text"
+          match jsonObjectField? block "cache_control" with
+          | some cacheControl =>
+              assertTrue (jsonStringField? cacheControl "type" == some "ephemeral")
+                "expected Anthropic system cache control"
+              assertTrue (jsonStringField? cacheControl "ttl" == some "1h")
+                "expected Anthropic long system cache ttl"
+          | none => fail "expected Anthropic system cache_control"
       | none => fail "expected system block"
   | none => fail "expected Anthropic system array"
   match LeanAgent.Json.optVal? payload "thinking" with
@@ -1032,6 +1041,11 @@ def testAnthropicMessagesRequestPayload : IO Unit := do
                     "expected Anthropic tool_result"
                   assertTrue (jsonStringField? toolResult "tool_use_id" == some "call_read_item")
                     "expected normalized tool result id"
+                  match jsonObjectField? toolResult "cache_control" with
+                  | some cacheControl =>
+                      assertTrue (jsonStringField? cacheControl "ttl" == some "1h")
+                        "expected Anthropic last user block cache ttl"
+                  | none => fail "expected Anthropic last user block cache_control"
               | none => fail "expected tool_result content"
           | none => fail "expected tool result content array"
       | none => fail "expected tool result message"
@@ -1039,7 +1053,13 @@ def testAnthropicMessagesRequestPayload : IO Unit := do
   match jsonArrayField? payload "tools" with
   | some tools =>
       match tools[0]? with
-      | some tool => assertTrue (jsonStringField? tool "name" == some "read") "expected Anthropic tool"
+      | some tool =>
+          assertTrue (jsonStringField? tool "name" == some "read") "expected Anthropic tool"
+          match jsonObjectField? tool "cache_control" with
+          | some cacheControl =>
+              assertTrue (jsonStringField? cacheControl "ttl" == some "1h")
+                "expected Anthropic tool cache ttl"
+          | none => fail "expected Anthropic tool cache_control"
       | none => fail "expected Anthropic tool"
   | none => fail "expected Anthropic tools"
   match LeanAgent.Json.optVal? payload "tool_choice" with
@@ -1048,6 +1068,21 @@ def testAnthropicMessagesRequestPayload : IO Unit := do
   match LeanAgent.Json.optVal? payload "metadata" with
   | some metadata => assertTrue (jsonStringField? metadata "user_id" == some "user-1") "expected metadata user_id"
   | none => fail "expected metadata"
+  let noCachePayload := LeanAgent.AI.Api.AnthropicMessages.requestToJsonWithOptions
+    anthropicModelRef
+    #["text", "image"]
+    64000
+    true
+    context
+    { cacheRetention := some .none }
+  match jsonArrayField? noCachePayload "system" with
+  | some system =>
+      match system[0]? with
+      | some block =>
+          assertTrue (jsonObjectField? block "cache_control" == none)
+            "expected cacheRetention none to omit Anthropic system cache_control"
+      | none => fail "expected no-cache system block"
+  | none => fail "expected no-cache system array"
 
 def testAnthropicMessagesCompatOptions : IO Unit := do
   let model : LeanAgent.Models.ModelInfo :=

@@ -2320,6 +2320,7 @@ def anthropicMessagesOptionsFromSimple
     { LeanAgent.AI.Api.AnthropicMessages.optionsFromSimple options with
       supportsTemperature := model.compat.supportsTemperature
       sendSessionAffinityHeaders := model.compat.sendSessionAffinityHeaders
+      supportsLongCacheRetention := model.compat.supportsLongCacheRetention
     }
   match options.reasoning with
   | none =>

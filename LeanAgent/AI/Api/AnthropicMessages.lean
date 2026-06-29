@@ -42,6 +42,7 @@ structure AnthropicMessagesOptions extends LeanAgent.AI.SimpleStreamOptions wher
   thinkingDisplay : Option String := none
   supportsTemperature : Bool := true
   sendSessionAffinityHeaders : Bool := false
+  supportsLongCacheRetention : Bool := true
 
 def optionsFromSimple (options : LeanAgent.AI.SimpleStreamOptions) : AnthropicMessagesOptions :=
   { temperature := options.temperature
@@ -111,11 +112,22 @@ def normalizeToolCallId
     (_message : LeanAgent.AI.AssistantMessage) : String :=
   LeanAgent.AI.Api.TransformMessages.sanitizeToolCallId id
 
-def textBlock (text : String) : Lean.Json :=
+def jsonObjectUpsert (json : Lean.Json) (key : String) (value : Lean.Json) : Lean.Json :=
+  match json with
+  | .obj fields =>
+      LeanAgent.Json.obj ((fields.toList.filter fun (name, _) => name != key) ++ [(key, value)])
+  | _ => json
+
+def cacheControlFields (cacheControl? : Option Lean.Json) : List (String × Lean.Json) :=
+  match cacheControl? with
+  | some cacheControl => [("cache_control", cacheControl)]
+  | none => []
+
+def textBlock (text : String) (cacheControl? : Option Lean.Json := none) : Lean.Json :=
   LeanAgent.Json.obj
-    [ ("type", LeanAgent.Json.str "text")
-    , ("text", LeanAgent.Json.str text)
-    ]
+    ([ ("type", LeanAgent.Json.str "text")
+     , ("text", LeanAgent.Json.str text)
+     ] ++ cacheControlFields cacheControl?)
 
 def imageBlock (image : LeanAgent.AI.ImageContent) : Lean.Json :=
   LeanAgent.Json.obj
@@ -245,24 +257,53 @@ partial def convertMessagesAux
           , ("content", LeanAgent.Json.arr toolResults)
           ]))
 
+def addCacheControlToLastUserBlock (message : Lean.Json) (cacheControl : Lean.Json) : Lean.Json :=
+  match LeanAgent.Json.optVal? message "role", LeanAgent.Json.optVal? message "content" with
+  | some (Lean.Json.str "user"), some (Lean.Json.arr blocks) =>
+      if blocks.isEmpty then
+        message
+      else
+        let updatedBlocks := blocks.mapIdx fun index block =>
+          if index + 1 == blocks.size then
+            jsonObjectUpsert block "cache_control" cacheControl
+          else
+            block
+        jsonObjectUpsert message "content" (LeanAgent.Json.arr updatedBlocks)
+  | some (Lean.Json.str "user"), some (Lean.Json.str content) =>
+      jsonObjectUpsert message "content" (LeanAgent.Json.arr #[textBlock content (some cacheControl)])
+  | _, _ => message
+
+def addCacheControlToLastUserMessage
+    (messages : Array Lean.Json)
+    (cacheControl? : Option Lean.Json) : Array Lean.Json :=
+  match cacheControl? with
+  | none => messages
+  | some cacheControl =>
+      messages.mapIdx fun index message =>
+        if index + 1 == messages.size then
+          addCacheControlToLastUserBlock message cacheControl
+        else
+          message
+
 def convertMessages
     (model : LeanAgent.AI.ModelRef)
     (input : Array String)
-    (context : LeanAgent.AI.Context) : Array Lean.Json :=
+    (context : LeanAgent.AI.Context)
+    (cacheControl? : Option Lean.Json := none) : Array Lean.Json :=
   let transformed :=
     LeanAgent.AI.Api.TransformMessages.transformMessages
       context.messages
       (targetModel model input)
       { normalizeToolCallId? := some normalizeToolCallId }
-  convertMessagesAux transformed.toList
+  addCacheControlToLastUserMessage (convertMessagesAux transformed.toList) cacheControl?
 
-def systemFields (context : LeanAgent.AI.Context) : List (String × Lean.Json) :=
+def systemFields (context : LeanAgent.AI.Context) (cacheControl? : Option Lean.Json := none) : List (String × Lean.Json) :=
   match context.systemPrompt with
   | some prompt =>
       if prompt.trimAscii.toString.isEmpty then
         []
       else
-        [("system", LeanAgent.Json.arr #[textBlock prompt])]
+        [("system", LeanAgent.Json.arr #[textBlock prompt cacheControl?])]
   | none => []
 
 def toolToJson (tool : LeanAgent.AI.Tool) : Lean.Json :=
@@ -279,8 +320,20 @@ def toolToJson (tool : LeanAgent.AI.Tool) : Lean.Json :=
           ])
     ]
 
-def toolFields (tools : Array LeanAgent.AI.Tool) : List (String × Lean.Json) :=
-  if tools.isEmpty then [] else [("tools", LeanAgent.Json.arr (tools.map toolToJson))]
+def toolFields (tools : Array LeanAgent.AI.Tool) (cacheControl? : Option Lean.Json := none) : List (String × Lean.Json) :=
+  if tools.isEmpty then
+    []
+  else
+    let toolJson := tools.mapIdx fun index tool =>
+      let json := toolToJson tool
+      match cacheControl? with
+      | some cacheControl =>
+          if index + 1 == tools.size then
+            jsonObjectUpsert json "cache_control" cacheControl
+          else
+            json
+      | none => json
+    [("tools", LeanAgent.Json.arr toolJson)]
 
 def ToolChoice.toJson : ToolChoice → Lean.Json
   | .auto => LeanAgent.Json.obj [("type", LeanAgent.Json.str "auto")]
@@ -346,6 +399,30 @@ def metadataFields (metadata? : Option Lean.Json) : List (String × Lean.Json) :
           [("metadata", LeanAgent.Json.obj [("user_id", LeanAgent.Json.str userId)])]
       | _ => []
 
+def cacheRetentionFromEnv? (env : Array (String × String)) : Option LeanAgent.AI.CacheRetention :=
+  env.findSome? fun (name, value) =>
+    if name == "PI_CACHE_RETENTION" && value == "long" then
+      some .long
+    else
+      none
+
+def resolveCacheRetention (options : AnthropicMessagesOptions) : LeanAgent.AI.CacheRetention :=
+  match options.cacheRetention with
+  | some retention => retention
+  | none => (cacheRetentionFromEnv? options.env).getD .short
+
+def cacheControl? (options : AnthropicMessagesOptions) : Option Lean.Json :=
+  let retention := resolveCacheRetention options
+  if retention == .none then
+    none
+  else
+    let ttlFields :=
+      if retention == .long && options.supportsLongCacheRetention then
+        [("ttl", LeanAgent.Json.str "1h")]
+      else
+        []
+    some (LeanAgent.Json.obj ([("type", LeanAgent.Json.str "ephemeral")] ++ ttlFields))
+
 def requestToJsonWithOptions
     (model : LeanAgent.AI.ModelRef)
     (input : Array String)
@@ -354,14 +431,15 @@ def requestToJsonWithOptions
     (context : LeanAgent.AI.Context)
     (options : AnthropicMessagesOptions := {})
     (stream : Bool := false) : Lean.Json :=
+  let cacheControl := cacheControl? options
   LeanAgent.Json.obj
     ([ ("model", LeanAgent.Json.str model.id)
-     , ("messages", LeanAgent.Json.arr (convertMessages model input context))
+     , ("messages", LeanAgent.Json.arr (convertMessages model input context cacheControl))
      , ("stream", LeanAgent.Json.bool stream)
-     ] ++ systemFields context
+     ] ++ systemFields context cacheControl
        ++ requestOptionFields modelMaxTokens options
        ++ thinkingFields reasoning options
-       ++ toolFields context.tools
+       ++ toolFields context.tools cacheControl
        ++ toolChoiceFields options
        ++ metadataFields options.metadata)
 
