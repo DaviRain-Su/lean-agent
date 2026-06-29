@@ -630,6 +630,127 @@ def testJsonParseStreamingPartialObject : IO Unit := do
         "expected repaired tool arguments"
   | .error err => fail s!"expected repaired tool arguments: {err}"
 
+def validationToolForValue (schema : Lean.Json) : LeanAgent.AI.Tool :=
+  { name := "echo"
+    description := "Echo tool"
+    parameters :=
+      LeanAgent.Json.obj
+        [ ("type", LeanAgent.Json.str "object")
+        , ("properties", LeanAgent.Json.obj [("value", schema)])
+        , ("required", LeanAgent.Json.arr #[LeanAgent.Json.str "value"])
+        ]
+  }
+
+def validationToolCall (value : Lean.Json) : LeanAgent.AI.ToolCall :=
+  { id := "tool-1"
+    name := "echo"
+    arguments := LeanAgent.Json.obj [("value", value)]
+  }
+
+def assertValidationValue (schema input expected : Lean.Json) : IO Unit := do
+  match LeanAgent.AI.Validation.validateToolArguments
+      (validationToolForValue schema)
+      (validationToolCall input) with
+  | .ok args =>
+      assertTrue
+        (LeanAgent.Json.optVal? args "value" == some expected)
+        s!"expected coerced validation value {expected.compress}, got {args.compress}"
+  | .error err => fail s!"expected validation success: {err}"
+
+def assertValidationFails (schema input : Lean.Json) : IO Unit := do
+  match LeanAgent.AI.Validation.validateToolArguments
+      (validationToolForValue schema)
+      (validationToolCall input) with
+  | .ok args => fail s!"expected validation failure, got {args.compress}"
+  | .error err => assertTrue (err.contains "Validation failed") "expected validation failure message"
+
+def testSchemaStringEnum : IO Unit := do
+  let schema := LeanAgent.AI.Schema.stringEnum #["add", "subtract"] (some "operation") (some "add")
+  assertTrue (LeanAgent.Json.optVal? schema "type" == some (LeanAgent.Json.str "string"))
+    "expected string enum type"
+  assertTrue (LeanAgent.Json.optVal? schema "description" == some (LeanAgent.Json.str "operation"))
+    "expected string enum description"
+  assertTrue
+    (LeanAgent.AI.Schema.validateJson schema (LeanAgent.Json.str "add") |>.isOk)
+    "expected enum value to validate"
+  match LeanAgent.AI.Schema.validateJson schema (LeanAgent.Json.str "multiply") with
+  | .ok _ => fail "expected non-enum value to fail"
+  | .error _ => pure ()
+
+def testValidationCoercesPlainJsonSchemas : IO Unit := do
+  assertValidationValue (LeanAgent.Json.obj [("type", LeanAgent.Json.str "number")])
+    (LeanAgent.Json.str "42") (LeanAgent.Json.nat 42)
+  assertValidationValue (LeanAgent.Json.obj [("type", LeanAgent.Json.str "number")])
+    (Lean.Json.bool true) (LeanAgent.Json.nat 1)
+  assertValidationValue (LeanAgent.Json.obj [("type", LeanAgent.Json.str "number")])
+    Lean.Json.null (LeanAgent.Json.nat 0)
+  assertValidationValue (LeanAgent.Json.obj [("type", LeanAgent.Json.str "integer")])
+    (LeanAgent.Json.str "42") (LeanAgent.Json.nat 42)
+  assertValidationValue (LeanAgent.Json.obj [("type", LeanAgent.Json.str "integer")])
+    (LeanAgent.Json.str "-2") (Lean.Json.num (Lean.JsonNumber.fromInt (-2)))
+  assertValidationValue (LeanAgent.Json.obj [("type", LeanAgent.Json.str "boolean")])
+    (LeanAgent.Json.str "true") (Lean.Json.bool true)
+  assertValidationValue (LeanAgent.Json.obj [("type", LeanAgent.Json.str "boolean")])
+    (LeanAgent.Json.nat 0) (Lean.Json.bool false)
+  assertValidationValue (LeanAgent.Json.obj [("type", LeanAgent.Json.str "string")])
+    Lean.Json.null (LeanAgent.Json.str "")
+  assertValidationValue (LeanAgent.Json.obj [("type", LeanAgent.Json.str "string")])
+    (Lean.Json.bool true) (LeanAgent.Json.str "true")
+  assertValidationValue (LeanAgent.Json.obj [("type", LeanAgent.Json.str "null")])
+    (LeanAgent.Json.str "") Lean.Json.null
+  assertValidationValue
+    (LeanAgent.Json.obj
+      [("type", LeanAgent.Json.arr #[LeanAgent.Json.str "number", LeanAgent.Json.str "string"])])
+    (LeanAgent.Json.str "1")
+    (LeanAgent.Json.str "1")
+  assertValidationValue
+    (LeanAgent.Json.obj
+      [("type", LeanAgent.Json.arr #[LeanAgent.Json.str "boolean", LeanAgent.Json.str "number"])])
+    (LeanAgent.Json.str "1")
+    (LeanAgent.Json.nat 1)
+
+def testValidationRejectsInvalidCoercions : IO Unit := do
+  assertValidationFails (LeanAgent.Json.obj [("type", LeanAgent.Json.str "boolean")])
+    (LeanAgent.Json.str "1")
+  assertValidationFails (LeanAgent.Json.obj [("type", LeanAgent.Json.str "boolean")])
+    (LeanAgent.Json.str "0")
+  assertValidationFails (LeanAgent.Json.obj [("type", LeanAgent.Json.str "null")])
+    (LeanAgent.Json.str "null")
+  assertValidationFails (LeanAgent.Json.obj [("type", LeanAgent.Json.str "integer")])
+    (LeanAgent.Json.str "42.1")
+
+def testValidationToolLookupAndRequired : IO Unit := do
+  let tool : LeanAgent.AI.Tool :=
+    { name := "read"
+      description := "Read a file"
+      parameters :=
+        LeanAgent.Json.obj
+          [ ("type", LeanAgent.Json.str "object")
+          , ("properties", LeanAgent.Json.obj [("path", LeanAgent.Json.obj [("type", LeanAgent.Json.str "string")])])
+          , ("required", LeanAgent.Json.arr #[LeanAgent.Json.str "path"])
+          , ("additionalProperties", Lean.Json.bool false)
+          ]
+    }
+  let call : LeanAgent.AI.ToolCall :=
+    { id := "call-1"
+      name := "read"
+      arguments := LeanAgent.Json.obj [("path", Lean.Json.null)]
+    }
+  match LeanAgent.AI.Validation.validateToolCall #[tool] call with
+  | .ok args =>
+      assertTrue (LeanAgent.Json.optVal? args "path" == some (LeanAgent.Json.str ""))
+        "expected tool call path coercion"
+  | .error err => fail s!"expected tool validation success: {err}"
+  let missing : LeanAgent.AI.ToolCall := { call with arguments := LeanAgent.Json.obj [] }
+  match LeanAgent.AI.Validation.validateToolCall #[tool] missing with
+  | .ok args => fail s!"expected missing required path to fail: {args.compress}"
+  | .error err =>
+      assertTrue (err.contains "path") "expected required path in validation error"
+  let unknown : LeanAgent.AI.ToolCall := { call with name := "write" }
+  match LeanAgent.AI.Validation.validateToolCall #[tool] unknown with
+  | .ok _ => fail "expected unknown tool failure"
+  | .error err => assertTrue (err.contains "Tool \"write\" not found") "expected unknown tool message"
+
 def overflowAssistantMessage
     (stopReason : LeanAgent.AI.StopReason)
     (errorMessage : Option String := none)
@@ -1439,6 +1560,10 @@ def main : IO UInt32 := do
     testProxyRejectsUnsupportedProtocol
     testJsonParseRepairsMalformedStrings
     testJsonParseStreamingPartialObject
+    testSchemaStringEnum
+    testValidationCoercesPlainJsonSchemas
+    testValidationRejectsInvalidCoercions
+    testValidationToolLookupAndRequired
     testOverflowClassifiesProviderErrors
     testOverflowClassifiesContextWindowSignals
     testRetryClassifiesAssistantErrors

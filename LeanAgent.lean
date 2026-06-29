@@ -2,7 +2,9 @@ import LeanAgent.AI.Auth
 import LeanAgent.AI.Api.OpenAICompletions
 import LeanAgent.AI.Api.OpenAIPromptCache
 import LeanAgent.AI.EventStream
+import LeanAgent.AI.Schema
 import LeanAgent.AI.Types
+import LeanAgent.AI.Validation
 import LeanAgent.AI.Util.Diagnostics
 import LeanAgent.AI.Util.Estimate
 import LeanAgent.AI.Util.Hash

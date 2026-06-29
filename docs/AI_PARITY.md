@@ -89,7 +89,7 @@ before expanding provider behavior.
 | API/provider identifiers | `LeanAgent.AI.Types` | implemented | Central string aliases exist for text and image APIs/providers. |
 | Text/image content blocks | `LeanAgent.AI.Types` | implemented | Text, thinking, image, and tool-call content blocks exist with JSON helpers. |
 | User/assistant/tool result messages | `LeanAgent.AI.Types` | partial | Pi-style messages exist with JSON helpers. Runtime migration from `Core.AgentMessage` is not complete. |
-| Tool schema and tool call content | `LeanAgent.AI.Types` | partial | Tool call exists, but schema validation/typebox parity is missing. |
+| Tool schema and tool call content | `LeanAgent.AI.Types`, `LeanAgent.AI.Schema`, `LeanAgent.AI.Validation` | partial | Tool call exists, with JSON Schema subset validation/coercion. Full TypeBox/AJV parity is missing. |
 | Assistant stream events | `LeanAgent.AI.Types`, `LeanAgent.AI.EventStream`, `LeanAgent.AI.Util.SSE`, `LeanAgent.Loop` | partial | Event data types, stream/result container, SSE parser, OpenAI streaming response parser, and agent-loop bridge exist. Async iteration and native callback-style live provider streaming are still missing. |
 | Usage and cost | `LeanAgent.AI.Types`, `LeanAgent.Core`, `LeanAgent.AI.Api.OpenAICompletions` | partial | Usage/cost types, JSON helpers, legacy provider usage bridge, and OpenAI-compatible token parsing exist. Model-price cost calculation is not wired into provider responses. |
 | Stop reasons and errors | `LeanAgent.AI.Types`, `LeanAgent.AI.Util.Diagnostics`, `LeanAgent.Http` | partial | Stop reason types, assistant diagnostics, provider error extraction, and transport response header capture exist. Error stacks and provider `onResponse`/diagnostic header surfacing are incomplete. |
@@ -217,8 +217,8 @@ should be generated or checked in as Lean data.
 | `utils/provider-env.ts` | `LeanAgent.AI.Util.ProviderEnv` | implemented | Scoped provider env lookup, ambient env fallback, empty-value suppression, and merge semantics exist. Bun-specific `/proc/self/environ` fallback is not applicable to Lean. |
 | `utils/retry.ts` | `LeanAgent.AI.Util.Retry` | partial | Retryable assistant/provider error classification, non-retryable quota guard, delay cap, and OpenAI-compatible request retry policy exist. Full Pi regex coverage and cross-provider retry integration are incomplete. |
 | `utils/sanitize-unicode.ts` | `LeanAgent.AI.Util.SanitizeUnicode` | missing | Unicode surrogate handling. |
-| `utils/typebox-helpers.ts` | `LeanAgent.AI.Schema` | missing | Lean equivalent likely JSON schema helpers. |
-| `utils/validation.ts` | `LeanAgent.AI.Validation` | missing | Tool argument and response validation. |
+| `utils/typebox-helpers.ts` | `LeanAgent.AI.Schema` | partial | `stringEnum` helper exists for provider-compatible string enum schemas. Full TypeBox helper surface is not implemented. |
+| `utils/validation.ts` | `LeanAgent.AI.Validation`, `LeanAgent.AI.Schema` | partial | Tool lookup, argument validation, JSON Schema primitive coercion, required/object/array/enum checks, and formatted validation errors exist. Full TypeBox compiler/AJV behavior, symbol metadata, and all JSON Schema keywords are incomplete. |
 
 ## Images
 
@@ -242,7 +242,7 @@ Initial Lean parity should port tests in this order:
 | `env-api-keys.test.ts`, `compat-env.test.ts` | auth/env tests | partial | Env API-key and stored credential precedence are covered. Full provider env map and compat env tests are missing. |
 | `stream.test.ts`, `empty.test.ts`, `abort.test.ts` | event stream tests | missing | Establishes stream contract. |
 | `openai-completions-*.test.ts` | OpenAI completions tests | partial | Payload tests cover empty tools, tool history, tool choice, max tokens, temperature, reasoning effort, prompt cache key/retention, streaming payload/SSE parsing, buffered streaming runtime dispatch, request/response headers, usage parsing, provider HTTP diagnostics, repaired tool arguments, and legacy assistant tool-call omission. Network provider matrix and true live-stream timing tests are missing. |
-| `retry.test.ts`, `diagnostics.test.ts`, `estimate.test.ts`, `overflow.test.ts`, `validation.test.ts`, `unicode-surrogate.test.ts` | util tests | partial | Retry classifier/policy, diagnostics extraction/round-trip, estimate utilities, proxy env resolution, JSON repair/streaming fallback, overflow detection, and OpenAI transient HTTP retry are covered. Validation and unicode surrogate tests are missing. |
+| `retry.test.ts`, `diagnostics.test.ts`, `estimate.test.ts`, `overflow.test.ts`, `validation.test.ts`, `unicode-surrogate.test.ts` | util tests | partial | Retry classifier/policy, diagnostics extraction/round-trip, estimate utilities, proxy env resolution, JSON repair/streaming fallback, JSON Schema validation/coercion, overflow detection, and OpenAI transient HTTP retry are covered. Unicode surrogate tests are missing. |
 | `faux-provider.test.ts` | faux provider tests | missing | Needed for deterministic agent tests. |
 | `images*.test.ts`, `openrouter-images.test.ts` | image tests | missing | Separate image phase. |
 | Anthropic/Google/Mistral/Bedrock/Azure/Codex tests | provider protocol tests | missing | After core OpenAI-compatible path is stable. |
