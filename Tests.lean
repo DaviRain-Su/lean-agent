@@ -1733,6 +1733,38 @@ def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
       assertTrue (model.baseUrl == LeanAgent.Models.fireworksBaseUrl) "expected Fireworks OpenAI-compatible base URL"
   | none => fail "expected Fireworks model in default runtime collection"
 
+def assertProviderFactoryMatchesInfo (mkProvider : IO LeanAgent.Models.Provider)
+    (info : LeanAgent.Models.ProviderInfo) : IO Unit := do
+  let provider ← mkProvider
+  assertTrue (provider.id == info.id) s!"expected provider id {info.id}"
+  assertTrue (provider.name == info.name) s!"expected provider name {info.name}"
+  let models ← provider.getModels
+  assertTrue (models == info.models) s!"expected provider models for {info.id}"
+  match provider.auth.apiKey with
+  | some apiKeyAuth =>
+      let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+      let ctx : LeanAgent.AI.Auth.AuthContext :=
+        { env := fun name =>
+            pure (if name == info.apiKeyEnv then some "factory-key" else none)
+          fileExists := fun _ => pure false
+        }
+      match ← LeanAgent.AI.Auth.resolveProviderAuth info.id { apiKey := some apiKeyAuth } store ctx with
+      | some result =>
+          assertTrue (result.auth.apiKey == some "factory-key") s!"expected auth for {info.id}"
+          assertTrue (result.source == some info.apiKeyEnv) s!"expected auth env source for {info.id}"
+      | none => fail s!"expected provider auth for {info.id}"
+  | none => fail s!"expected api-key auth for {info.id}"
+
+def testOpenAICompatibleProviderFactoriesMatchCatalog : IO Unit := do
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.DeepSeek.provider LeanAgent.Models.deepSeekProviderInfo
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.OpenAI.provider LeanAgent.Models.openAIProviderInfo
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.OpenRouter.provider LeanAgent.Models.openRouterProviderInfo
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Groq.provider LeanAgent.Models.groqProviderInfo
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.XAI.provider LeanAgent.Models.xaiProviderInfo
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Cerebras.provider LeanAgent.Models.cerebrasProviderInfo
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Together.provider LeanAgent.Models.togetherProviderInfo
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Fireworks.provider LeanAgent.Models.fireworksProviderInfo
+
 def fakeAuthContext : LeanAgent.AI.Auth.AuthContext :=
   { env := fun name =>
       pure
@@ -4556,6 +4588,7 @@ def main : IO UInt32 := do
     testModelCatalogDeepSeekDefaults
     testOpenAICompatibleProviderFamilyCatalog
     testDefaultModelsRegistersOpenAICompatibleFamily
+    testOpenAICompatibleProviderFactoriesMatchCatalog
     testModelsAuthEnvApiKeyResolution
     testModelsAuthStoredCredentialWins
     testFileCredentialStoreRoundTrip

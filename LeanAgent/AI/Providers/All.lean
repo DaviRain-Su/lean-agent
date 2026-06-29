@@ -1,7 +1,15 @@
 import LeanAgent.AI.Images
+import LeanAgent.AI.Providers.Cerebras
 import LeanAgent.AI.Providers.CloudflareAIGateway
 import LeanAgent.AI.Providers.CloudflareWorkersAI
+import LeanAgent.AI.Providers.DeepSeek
+import LeanAgent.AI.Providers.Fireworks
+import LeanAgent.AI.Providers.Groq
+import LeanAgent.AI.Providers.OpenAI
 import LeanAgent.AI.Providers.OpenRouterImages
+import LeanAgent.AI.Providers.OpenRouter
+import LeanAgent.AI.Providers.Together
+import LeanAgent.AI.Providers.XAI
 import LeanAgent.Models
 
 namespace LeanAgent.AI.Providers.All
@@ -27,10 +35,16 @@ def getBuiltinModel? (providerId modelId : String) : Option LeanAgent.Models.Mod
   (getBuiltinModels providerId).find? (fun model => model.id == modelId)
 
 def catalogProviders : IO (Array LeanAgent.Models.Provider) := do
-  let mut providers := #[]
-  for info in LeanAgent.Models.defaultCatalog.providers do
-    providers := providers.push (← LeanAgent.Models.createCatalogProvider info)
-  pure providers
+  pure
+    #[ ← LeanAgent.AI.Providers.DeepSeek.provider
+     , ← LeanAgent.AI.Providers.OpenAI.provider
+     , ← LeanAgent.AI.Providers.OpenRouter.provider
+     , ← LeanAgent.AI.Providers.Groq.provider
+     , ← LeanAgent.AI.Providers.XAI.provider
+     , ← LeanAgent.AI.Providers.Cerebras.provider
+     , ← LeanAgent.AI.Providers.Together.provider
+     , ← LeanAgent.AI.Providers.Fireworks.provider
+     ]
 
 def builtinProviders : IO (Array LeanAgent.Models.Provider) := do
   let mut providers ← catalogProviders

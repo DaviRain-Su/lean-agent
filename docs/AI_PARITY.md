@@ -25,7 +25,7 @@ Every row must move through this ledger before it is considered complete.
 | HTTP transport | `LeanAgent.Http`, `LeanAgent.AI.Util.Proxy` | partial | Native libcurl JSON POST, custom request headers, parsed response headers, no-proxy support, and proxy env helper logic exist. Streaming callbacks and explicit proxy injection for non-libcurl transports are missing. |
 | OpenAI-compatible chat completions | `LeanAgent.AI.Api.OpenAICompletions`, `LeanAgent.OpenAI`, `LeanAgent.Models` | partial | Protocol logic now lives under `AI.Api`; legacy `LeanAgent.OpenAI` is a compatibility wrapper. Non-streaming Chat Completions, streaming request path through `streamSimple`, SSE chunk parsing, text/thinking/tool delta event reconstruction, tool calls, empty-tools omission, tool history handling, basic option/header serialization, prompt cache payload fields, usage parsing, model-rate cost calculation through Models runtime, retry policy, provider error diagnostics, header-only auth dispatch, and OpenAI Responses request/stream dispatch exist. Native callback-style live streaming transport, images, and the full compat matrix are missing. |
 | Static model catalog | `LeanAgent.Models` | partial | Starter catalog covers DeepSeek, OpenAI fallback, OpenRouter, Groq, xAI, Cerebras, Together, and Fireworks representative OpenAI-compatible models. Generated full catalog and dynamic refresh are missing. |
-| Provider/model collection | `LeanAgent.Models`, `LeanAgent.AI.Providers.CloudflareWorkersAI`, `LeanAgent.AI.Providers.CloudflareAIGateway` | partial | Runtime provider collection now supports registration, lookup, refresh hooks, auth application, auth-driven base URL/header overrides, simple stream/complete dispatch, default registration for the starter OpenAI-compatible provider family, generic OpenAI Responses dispatch, Azure OpenAI Responses stream dispatch, and Cloudflare Workers AI / AI Gateway provider factories for currently implemented OpenAI-compatible/Responses protocols. OpenAI-compatible and Responses `streamSimple` paths use streaming request formats but still buffer the HTTP response before returning events. Full generated catalog, dynamic providers, Anthropic-backed Gateway models, and callback-style live streaming are missing. |
+| Provider/model collection | `LeanAgent.Models`, `LeanAgent.AI.Providers.*` | partial | Runtime provider collection now supports registration, lookup, refresh hooks, auth application, auth-driven base URL/header overrides, simple stream/complete dispatch, explicit provider factories for the starter OpenAI-compatible provider family, generic OpenAI Responses dispatch, Azure OpenAI Responses stream dispatch, and Cloudflare Workers AI / AI Gateway provider factories for currently implemented OpenAI-compatible/Responses protocols. OpenAI-compatible and Responses `streamSimple` paths use streaming request formats but still buffer the HTTP response before returning events. Full generated catalog, dynamic providers, Anthropic-backed Gateway models, and callback-style live streaming are missing. |
 | Agent-facing messages | `LeanAgent.Core`, `LeanAgent.AI.Types` | partial | Pi-style message/content/usage/diagnostic types and legacy conversions exist. Runtime still uses simplified `Core.AgentMessage`. |
 | Images | `LeanAgent.AI.Types`, `LeanAgent.AI.Images`, `LeanAgent.AI.Images.Registry`, `LeanAgent.AI.Api.OpenRouterImages`, `LeanAgent.AI.Images.Models` | partial | Image content/model/option/result types, global image API registry, API mismatch guard, source unregister/reset with built-in replay, runtime image provider collection, auth application, `generateImages` dispatch, OpenRouter Images provider factory/runtime, and the current Pi OpenRouter image model catalog exist. Shared auth can resolve stored OAuth credentials, but provider-specific OAuth image behavior, abort signals, and live provider matrix tests remain missing. |
 | OAuth/auth store | `LeanAgent.AI.Auth`, `LeanAgent.AI.OAuth`, `LeanAgent.AI.OAuth.GitHubCopilot`, `LeanAgent.AI.OAuth.PKCE`, `LeanAgent.AI.OAuth.Page`, `LeanAgent.AI.EnvApiKeys`, `LeanAgent.AI.Providers.CloudflareAuth` | partial | Env API-key auth, Pi provider env-key map, auth context with injectable wall-clock milliseconds, in-memory and file-backed API-key/OAuth credentials, provider auth resolution, OAuth refresh/toAuth resolution under credential-store modify, lazy OAuth loading, OAuth provider registry, OAuth provider info list, high-level refresh/API-key helpers, device-code polling, callback success/error page rendering, PKCE verifier/challenge generation, GitHub Copilot OAuth domain/base URL/model-filter helpers, model-aware base URL auth resolution, and Cloudflare Workers AI / AI Gateway auth helpers exist. OAuth login providers, callback-server flows, file locks, and typed ModelsError codes are missing. |
@@ -166,17 +166,17 @@ should be generated or checked in as Lean data.
 | Ant Ling | `ant-ling.ts`, `ant-ling.models.ts` | `LeanAgent.AI.Providers.AntLing` | missing |
 | Anthropic | `anthropic.ts`, `anthropic.models.ts` | `LeanAgent.AI.Providers.Anthropic` | missing |
 | Azure OpenAI Responses | `azure-openai-responses.ts`, `azure-openai-responses.models.ts` | `LeanAgent.AI.Api.AzureOpenAIResponses`, future `LeanAgent.AI.Providers.AzureOpenAIResponses` | partial |
-| Cerebras | `cerebras.ts`, `cerebras.models.ts` | `LeanAgent.Models` | partial |
+| Cerebras | `cerebras.ts`, `cerebras.models.ts` | `LeanAgent.AI.Providers.Cerebras`, `LeanAgent.Models` | partial |
 | Cloudflare AI Gateway | `cloudflare-ai-gateway.ts`, `cloudflare-ai-gateway.models.ts` | `LeanAgent.AI.Providers.CloudflareAIGateway`, `LeanAgent.AI.Providers.CloudflareAuth` | partial |
 | Cloudflare Workers AI | `cloudflare-workers-ai.ts`, `cloudflare-workers-ai.models.ts` | `LeanAgent.AI.Providers.CloudflareWorkersAI`, `LeanAgent.AI.Providers.CloudflareAuth` | partial |
 | Cloudflare auth | `cloudflare-auth.ts` | `LeanAgent.AI.Providers.CloudflareAuth` | partial |
-| DeepSeek | `deepseek.ts`, `deepseek.models.ts` | `LeanAgent.Models` | partial |
+| DeepSeek | `deepseek.ts`, `deepseek.models.ts` | `LeanAgent.AI.Providers.DeepSeek`, `LeanAgent.Models` | partial |
 | Faux test provider | `faux.ts` | `LeanAgent.AI.Providers.Faux` | partial |
-| Fireworks | `fireworks.ts`, `fireworks.models.ts` | `LeanAgent.Models` | partial |
+| Fireworks | `fireworks.ts`, `fireworks.models.ts` | `LeanAgent.AI.Providers.Fireworks`, `LeanAgent.Models` | partial |
 | GitHub Copilot | `github-copilot.ts`, `github-copilot.models.ts` | `LeanAgent.AI.Providers.GitHubCopilot`, `LeanAgent.AI.OAuth.GitHubCopilot` | partial |
 | Google | `google.ts`, `google.models.ts` | `LeanAgent.AI.Providers.Google` | missing |
 | Google Vertex | `google-vertex.ts`, `google-vertex.models.ts` | `LeanAgent.AI.Providers.GoogleVertex` | missing |
-| Groq | `groq.ts`, `groq.models.ts` | `LeanAgent.Models` | partial |
+| Groq | `groq.ts`, `groq.models.ts` | `LeanAgent.AI.Providers.Groq`, `LeanAgent.Models` | partial |
 | Hugging Face | `huggingface.ts`, `huggingface.models.ts` | `LeanAgent.AI.Providers.HuggingFace` | missing |
 | Kimi Coding | `kimi-coding.ts`, `kimi-coding.models.ts` | `LeanAgent.AI.Providers.KimiCoding` | missing |
 | MiniMax | `minimax.ts`, `minimax.models.ts` | `LeanAgent.AI.Providers.MiniMax` | missing |
@@ -185,15 +185,15 @@ should be generated or checked in as Lean data.
 | Moonshot AI | `moonshotai.ts`, `moonshotai.models.ts` | `LeanAgent.AI.Providers.MoonshotAI` | missing |
 | Moonshot AI CN | `moonshotai-cn.ts`, `moonshotai-cn.models.ts` | `LeanAgent.AI.Providers.MoonshotAICN` | missing |
 | NVIDIA | `nvidia.ts`, `nvidia.models.ts` | `LeanAgent.AI.Providers.NVIDIA` | missing |
-| OpenAI | `openai.ts`, `openai.models.ts` | `LeanAgent.Models` | partial |
+| OpenAI | `openai.ts`, `openai.models.ts` | `LeanAgent.AI.Providers.OpenAI`, `LeanAgent.Models` | partial |
 | OpenAI Codex | `openai-codex.ts`, `openai-codex.models.ts` | `LeanAgent.AI.Providers.OpenAICodex` | missing |
 | OpenCode | `opencode.ts`, `opencode.models.ts` | `LeanAgent.AI.Providers.OpenCode` | missing |
 | OpenCode Go | `opencode-go.ts`, `opencode-go.models.ts` | `LeanAgent.AI.Providers.OpenCodeGo` | missing |
-| OpenRouter | `openrouter.ts`, `openrouter.models.ts` | `LeanAgent.Models` | partial |
+| OpenRouter | `openrouter.ts`, `openrouter.models.ts` | `LeanAgent.AI.Providers.OpenRouter`, `LeanAgent.Models` | partial |
 | OpenRouter images | `openrouter-images.ts` | `LeanAgent.AI.Providers.OpenRouterImages` | partial |
-| Together | `together.ts`, `together.models.ts` | `LeanAgent.Models` | partial |
+| Together | `together.ts`, `together.models.ts` | `LeanAgent.AI.Providers.Together`, `LeanAgent.Models` | partial |
 | Vercel AI Gateway | `vercel-ai-gateway.ts`, `vercel-ai-gateway.models.ts` | `LeanAgent.AI.Providers.VercelAIGateway` | missing |
-| xAI | `xai.ts`, `xai.models.ts` | `LeanAgent.Models` | partial |
+| xAI | `xai.ts`, `xai.models.ts` | `LeanAgent.AI.Providers.XAI`, `LeanAgent.Models` | partial |
 | Xiaomi | `xiaomi.ts`, `xiaomi.models.ts` | `LeanAgent.AI.Providers.Xiaomi` | missing |
 | Xiaomi Token Plan AMS | `xiaomi-token-plan-ams.ts`, `xiaomi-token-plan-ams.models.ts` | `LeanAgent.AI.Providers.XiaomiTokenPlanAMS` | missing |
 | Xiaomi Token Plan CN | `xiaomi-token-plan-cn.ts`, `xiaomi-token-plan-cn.models.ts` | `LeanAgent.AI.Providers.XiaomiTokenPlanCN` | missing |
@@ -242,7 +242,7 @@ Initial Lean parity should port tests in this order:
 
 | Pi tests | Lean target | Status | Why first |
 | --- | --- | --- | --- |
-| `models-runtime.test.ts`, `providers.test.ts`, `supports-xhigh.test.ts`, `xhigh.test.ts` | model catalog and thinking tests | partial | Protects provider/model registry, cost calculation, thinking-level map helpers, auth-applied base URL overrides, and header-only auth dispatch. |
+| `models-runtime.test.ts`, `providers.test.ts`, `supports-xhigh.test.ts`, `xhigh.test.ts` | model catalog and thinking tests | partial | Protects provider/model registry, explicit OpenAI-compatible provider factories, cost calculation, thinking-level map helpers, auth-applied base URL overrides, and header-only auth dispatch. |
 | `env-api-keys.test.ts`, `compat-env.test.ts`, Cloudflare auth tests | auth/env tests | partial | Env API-key, stored credential precedence, file-backed API-key/OAuth credential roundtrip/integration, OAuth refresh/toAuth resolution, lazy OAuth load-once delegation, OAuth credential ownership without env fallback, OAuth provider registry/high-level helper behavior, device-code polling behavior, callback page rendering/escaping, PKCE verifier/challenge behavior, GitHub Copilot OAuth helper parsing/model rewrite behavior, full provider env map, Anthropic OAuth-token precedence, Bedrock/Vertex ambient markers, Cloudflare Workers AI / AI Gateway auth resolution and factory wiring, compat registry dispatch, request API key pass-through, known-provider env key injection, catalog-outside provider env injection, and legacy alias registry dispatch are covered. OAuth login provider flows remain missing. |
 | `stream.test.ts`, `empty.test.ts`, `abort.test.ts` | event stream tests | partial | Stream result, text/thinking/tool events, partial snapshots, tool delta payloads, and empty-content completion are covered in Lean. Async iterator/backpressure, provider abort behavior, and live timing remain missing. |
 | `openai-completions-*.test.ts` | OpenAI completions tests | partial | Payload tests cover empty tools, tool history, tool choice, max tokens, temperature, reasoning effort, thinking-level payload aliases, prompt cache key/retention, streaming payload/SSE parsing, buffered streaming runtime dispatch, request/response headers, usage parsing, provider HTTP diagnostics, repaired tool arguments, and legacy assistant tool-call omission. Network provider matrix and true live-stream timing tests are missing. |
