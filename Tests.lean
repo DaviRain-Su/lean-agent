@@ -3632,6 +3632,19 @@ def overflowAssistantMessage
     timestamp := 0
   }
 
+def testEstimateTextTokensPredictable : IO Unit := do
+  let empty := LeanAgent.AI.Util.Estimate.estimateTextTokens ""
+  assertTrue (empty == 0) "expected empty string to produce zero tokens"
+  let single := LeanAgent.AI.Util.Estimate.estimateTextTokens "hello"
+  assertTrue (single > 0) "expected single word to produce positive token count"
+  let longer := "The quick brown fox jumps over the lazy dog"
+  let estimate := LeanAgent.AI.Util.Estimate.estimateTextTokens longer
+  assertTrue (estimate >= 5 && estimate <= 15)
+    s!"expected reasonable token estimate for 9-word sentence, got {estimate}"
+  let ascii := String.intercalate " " (List.replicate 100 "word")
+  let asciiEstimate := LeanAgent.AI.Util.Estimate.estimateTextTokens ascii
+  assertTrue (asciiEstimate >= 100) "expected at least 100 tokens for 100 words"
+
 def testOverflowClassifiesProviderErrors : IO Unit := do
   assertTrue
     (LeanAgent.AI.Util.Overflow.isContextOverflow
@@ -8654,6 +8667,7 @@ def main : IO UInt32 := do
     testValidationChecksObjectAndArrayKeywords
     testValidationToolLookupAndRequired
     testSanitizeUnicodeSurrogates
+    testEstimateTextTokensPredictable
     testOverflowClassifiesProviderErrors
     testAnthropicMessagesPreserveUnicodePayloads
     testOpenAICompletionsPreserveUnicodeInMessages
