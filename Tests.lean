@@ -650,12 +650,196 @@ def jsonStringField? (json : Lean.Json) (key : String) : Option String :=
   | some (.str value) => some value
   | _ => none
 
+def jsonNatField? (json : Lean.Json) (key : String) : Option Nat :=
+  match LeanAgent.Json.optVal? json key with
+  | some value => value.getNat?.toOption
+  | none => none
+
 def responseItemWithType? (items : Array Lean.Json) (itemType : String) : Option Lean.Json :=
   items.find? fun item => jsonStringField? item "type" == some itemType
 
 def headerValueCaseInsensitive? (headers : Array (String × String)) (name : String) : Option String :=
   headers.findSome? fun (headerName, value) =>
     if headerName.toLower == name.toLower then some value else none
+
+def diagnosticResponseHeaders? (diagnostic : LeanAgent.AI.AssistantMessageDiagnostic) :
+    Option (Array (String × String)) := do
+  let details ← diagnostic.details
+  let responseHeadersJson ← LeanAgent.Json.optVal? details "responseHeaders"
+  let responseHeaders ← match responseHeadersJson.getArr? with
+    | .ok headers => some headers
+    | .error _ => none
+  responseHeaders.mapM fun entry => do
+    let name ← jsonStringField? entry "name"
+    let value ← jsonStringField? entry "value"
+    pure (name, value)
+
+def diagnosticResponseHeaderValueCaseInsensitive?
+    (diagnostic : LeanAgent.AI.AssistantMessageDiagnostic)
+    (name : String) : Option String := do
+  let headers ← diagnosticResponseHeaders? diagnostic
+  headerValueCaseInsensitive? headers name
+
+def invokeResponseHookAndRead
+    (hook? : Option LeanAgent.AI.ResponseHook) : IO Bool := do
+  let saw ← IO.mkRef false
+  let model : LeanAgent.AI.ModelRef := { id := "hook-model", api := "openai-responses", provider := "openai" }
+  match hook? with
+  | some hook =>
+      hook { status := 200, headers := #[("x-hook", "present")] } model
+      saw.set true
+  | none => pure ()
+  saw.get
+
+def testOpenAIResponsesOptionsFromSimplePreserveResponseHook : IO Unit := do
+  let sawHeader ← IO.mkRef false
+  let options : LeanAgent.AI.SimpleStreamOptions :=
+    { onResponse := some fun response _model => do
+        assertTrue (headerValueCaseInsensitive? response.headers "x-hook" == some "present")
+          "expected preserved response hook header"
+        sawHeader.set true
+      reasoning := some .medium
+      maxTokens := some 32
+    }
+  let model : LeanAgent.Models.ModelInfo :=
+    { id := responsesCodexModel.id
+      name := "Responses Hook Model"
+      provider := responsesCodexModel.provider
+      api := responsesCodexModel.api
+      baseUrl := "http://127.0.0.1"
+      contextWindow := 128000
+      maxTokens := 4096
+      reasoning := true
+    }
+  let context : LeanAgent.AI.Context :=
+    { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }] }
+  let clamped :=
+    LeanAgent.AI.Providers.Streams.clampSimpleOptionsToContext
+      model
+      context
+      options
+  let apiOptions := LeanAgent.AI.Api.OpenAIResponses.optionsFromSimple clamped
+  let invoked ← invokeResponseHookAndRead apiOptions.onResponse
+  assertTrue invoked "expected OpenAI Responses optionsFromSimple to preserve onResponse"
+  assertTrue (← sawHeader.get) "expected preserved OpenAI Responses response hook to run"
+
+def testModelsApplyAuthPreservesResponseHook : IO Unit := do
+  let sawHeader ← IO.mkRef false
+  let collection ← LeanAgent.Models.createModels
+  let provider ← LeanAgent.Models.createProvider
+    { id := "hook-provider"
+      auth := {}
+      models := #[]
+      apis := #[]
+      headers := #[]
+    }
+  collection.setProvider provider
+  let model : LeanAgent.Models.ModelInfo :=
+    { id := "hook-model"
+      name := "Hook Model"
+      provider := provider.id
+      api := "openai-responses"
+      baseUrl := "http://127.0.0.1"
+      contextWindow := 4096
+      maxTokens := 512
+    }
+  let options : LeanAgent.AI.SimpleStreamOptions :=
+    { onResponse := some fun response _model => do
+        assertTrue (headerValueCaseInsensitive? response.headers "x-hook" == some "present")
+          "expected applyAuth-preserved response hook header"
+        sawHeader.set true
+    }
+  let (_requestModel, requestOptions) ← collection.applyAuth provider model options
+  let invoked ← invokeResponseHookAndRead requestOptions.onResponse
+  assertTrue invoked "expected applyAuth to preserve onResponse"
+  assertTrue (← sawHeader.get) "expected applyAuth-preserved response hook to run"
+
+def testModelsWithCapturedResponseHookPreservesOriginalHook : IO Unit := do
+  let sawOriginalHook ← IO.mkRef false
+  let options : LeanAgent.AI.SimpleStreamOptions :=
+    { onResponse := some fun response _model => do
+        assertTrue (headerValueCaseInsensitive? response.headers "x-hook" == some "present")
+          "expected wrapped response hook header"
+        sawOriginalHook.set true
+    }
+  let (responseRef, wrapped) ← LeanAgent.Models.withCapturedResponseHook options
+  let invoked ← invokeResponseHookAndRead wrapped.onResponse
+  assertTrue invoked "expected wrapped onResponse hook to exist"
+  assertTrue (← sawOriginalHook.get) "expected wrapped onResponse to preserve original hook"
+  match ← responseRef.get with
+  | some response =>
+      assertTrue (response.status == 200) "expected wrapped response hook to capture status"
+      assertTrue
+        (headerValueCaseInsensitive? response.headers "x-hook" == some "present")
+        "expected wrapped response hook to capture headers"
+  | none => fail "expected wrapped response hook to capture response"
+
+def testWrappedOpenAIResponsesCompatOptionChainPreservesResponseHook : IO Unit := do
+  let sawOriginalHook ← IO.mkRef false
+  let baseOptions : LeanAgent.AI.SimpleStreamOptions :=
+    { onResponse := some fun response _model => do
+        assertTrue (headerValueCaseInsensitive? response.headers "x-hook" == some "present")
+          "expected chained response hook header"
+        sawOriginalHook.set true
+      apiKey := some "test-key"
+      reasoning := some .medium
+    }
+  let model : LeanAgent.Models.ModelInfo :=
+    { id := responsesCodexModel.id
+      name := "Wrapped Responses Hook Model"
+      provider := responsesCodexModel.provider
+      api := responsesCodexModel.api
+      baseUrl := "http://127.0.0.1"
+      contextWindow := 128000
+      maxTokens := 4096
+      reasoning := true
+    }
+  let context : LeanAgent.AI.Context :=
+    { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }] }
+  let (responseRef, wrappedOptions) ← LeanAgent.Models.withCapturedResponseHook baseOptions
+  let clamped :=
+    LeanAgent.AI.Providers.Streams.clampSimpleOptionsToContext
+      model
+      context
+      wrappedOptions
+  let apiOptions := LeanAgent.AI.Api.OpenAIResponses.optionsFromSimple clamped
+  let invoked ← invokeResponseHookAndRead apiOptions.onResponse
+  assertTrue invoked "expected wrapped compat option chain to preserve onResponse"
+  assertTrue (← sawOriginalHook.get) "expected wrapped compat option chain to run original hook"
+  match ← responseRef.get with
+  | some response =>
+      assertTrue (response.status == 200) "expected wrapped compat option chain to capture status"
+      assertTrue
+        (headerValueCaseInsensitive? response.headers "x-hook" == some "present")
+        "expected wrapped compat option chain to capture headers"
+  | none => fail "expected wrapped compat option chain to capture response"
+
+def testBuiltinOpenAIApplyAuthPreservesResponseHook : IO Unit := do
+  let sawHeader ← IO.mkRef false
+  let collection ← LeanAgent.Models.createModels
+  let provider ← LeanAgent.AI.Providers.OpenAI.provider
+  collection.setProvider provider
+  let model : LeanAgent.Models.ModelInfo :=
+    { id := "gpt-5.4"
+      name := "GPT 5.4"
+      provider := LeanAgent.Models.openAIProviderId
+      api := "openai-responses"
+      baseUrl := "http://127.0.0.1"
+      contextWindow := 100000
+      maxTokens := 4096
+      reasoning := true
+    }
+  let options : LeanAgent.AI.SimpleStreamOptions :=
+    { apiKey := some "test-key"
+      onResponse := some fun response _model => do
+        assertTrue (headerValueCaseInsensitive? response.headers "x-hook" == some "present")
+          "expected builtin OpenAI applyAuth response hook header"
+        sawHeader.set true
+    }
+  let (_requestModel, requestOptions) ← collection.applyAuth provider model options
+  let invoked ← invokeResponseHookAndRead requestOptions.onResponse
+  assertTrue invoked "expected builtin OpenAI applyAuth to preserve onResponse"
+  assertTrue (← sawHeader.get) "expected builtin OpenAI applyAuth response hook to run"
 
 def testTransformMessagesCrossModelHandoff : IO Unit := do
   let assistant : LeanAgent.AI.AssistantMessage :=
@@ -7560,7 +7744,7 @@ def testModelsCreateProviderMissingApiReturnsLazyErrorStream : IO Unit := do
   let stream ← provider.streamSimple fakeRuntimeModel {} {}
   assertLazyErrorStream stream "has no API implementation"
 
-def testModelsCreateProviderSetupFailureReturnsLazyErrorStream : IO Unit := do
+def testModelsCreateProviderSetupFailurePropagatesProviderError : IO Unit := do
   let streams : LeanAgent.Models.ProviderStreams :=
     { streamSimple := fun _ _ _ => throw (IO.userError "setup failed") }
   let provider ← LeanAgent.Models.createProvider
@@ -7570,8 +7754,13 @@ def testModelsCreateProviderSetupFailureReturnsLazyErrorStream : IO Unit := do
       models := #[fakeRuntimeModel]
       apis := #[{ api := fakeRuntimeModel.api, streams := streams }]
     }
-  let stream ← provider.streamSimple fakeRuntimeModel {} {}
-  assertLazyErrorStream stream "setup failed"
+  let failed ←
+    try
+      let _ ← provider.streamSimple fakeRuntimeModel {} {}
+      pure false
+    catch err =>
+      pure (err.toString.contains "setup failed")
+  assertTrue failed "expected provider setup failure to propagate"
 
 def testModelsLazyProviderStreamsLoadFailureReturnsErrorStream : IO Unit := do
   let streams := LeanAgent.Models.ProviderStreams.lazy (throw (IO.userError "load failed"))
@@ -8330,6 +8519,7 @@ def httpServerScript : String :=
     , "            payload = json.dumps({'error': {'message': 'rate limit exceeded', 'type': 'rate_limit_error', 'code': 'rate_limit'}}).encode('utf-8')"
     , "            self.send_response(429)"
     , "            self.send_header('Content-Type', 'application/json')"
+    , "            self.send_header('X-Diagnostic-Trace', 'rate-limit-route')"
     , "            self.send_header('Content-Length', str(len(payload)))"
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
@@ -8520,6 +8710,7 @@ def httpServerScript : String :=
     , "            ).encode('utf-8')"
     , "            self.send_response(200)"
     , "            self.send_header('Content-Type', 'text/event-stream')"
+    , "            self.send_header('X-Diagnostic-Trace', 'early-eof-route')"
     , "            self.send_header('Content-Length', str(len(payload)))"
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
@@ -10866,6 +11057,123 @@ def testCompatOpenAIResponsesTypedLegacyAliasCompleteLocal : IO Unit := do
     assertTrue (message.usage.cost.output == 2.0)
       "expected compat OpenAI Responses typed complete alias flex output cost multiplier"
 
+def testOpenAIResponsesEarlyEofInvokesResponseHook : IO Unit := do
+  let port := 18117
+  withHttpServer port do
+    let sawResponseHeader ← IO.mkRef false
+    let failed ←
+      try
+        let _stream ← LeanAgent.AI.Api.OpenAIResponses.completeStreamWithOptions
+          { apiKey := "test-key"
+            baseUrl := s!"http://127.0.0.1:{port}/responses-stream-early-eof"
+            timeoutSeconds := 5
+            connectTimeoutSeconds := 5
+            noProxy := some "*"
+            userAgent := "lean-agent-test/0.1.0"
+          }
+          responsesCodexModel
+          { systemPrompt := some "system"
+            messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+          }
+          { onResponse := some fun response _model => do
+              assertTrue (response.status == 200) "expected direct early EOF response hook status"
+              assertTrue
+                (headerValueCaseInsensitive? response.headers "x-diagnostic-trace" ==
+                  some "early-eof-route")
+                "expected direct early EOF response hook headers"
+              sawResponseHeader.set true
+          }
+        pure false
+      catch err =>
+        pure (err.toString.contains "OpenAI Responses stream ended before a terminal response event")
+    assertTrue failed "expected direct OpenAI Responses early EOF parse failure"
+    assertTrue (← sawResponseHeader.get) "expected direct OpenAI Responses early EOF response hook to run"
+
+def testOpenAIResponsesProviderStreamsEarlyEofInvokesResponseHook : IO Unit := do
+  let port := 18118
+  withHttpServer port do
+    let sawResponseHeader ← IO.mkRef false
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := "gpt-5.4"
+        name := "GPT 5.4"
+        provider := LeanAgent.Models.openAIProviderId
+        api := "openai-responses"
+        baseUrl := s!"http://127.0.0.1:{port}/responses-stream-early-eof"
+        contextWindow := 100000
+        maxTokens := 4096
+        reasoning := true
+      }
+    let failed ←
+      try
+        let _stream ← LeanAgent.AI.Providers.Streams.openAIResponsesStreams.streamSimple
+          model
+          { systemPrompt := some "system"
+            messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+          }
+          { apiKey := some "test-key"
+            onResponse := some fun response _model => do
+              assertTrue (response.status == 200) "expected provider-stream early EOF response hook status"
+              assertTrue
+                (headerValueCaseInsensitive? response.headers "x-diagnostic-trace" ==
+                  some "early-eof-route")
+                "expected provider-stream early EOF response hook headers"
+              sawResponseHeader.set true
+          }
+        pure false
+      catch err =>
+        pure (err.toString.contains "OpenAI Responses stream ended before a terminal response event")
+    assertTrue failed "expected provider-stream OpenAI Responses early EOF parse failure"
+    assertTrue
+      (← sawResponseHeader.get)
+      "expected provider-stream OpenAI Responses early EOF response hook to run"
+
+def testWrappedOpenAIResponsesProviderStreamsEarlyEofInvokesResponseHook : IO Unit := do
+  let port := 18119
+  withHttpServer port do
+    let sawResponseHeader ← IO.mkRef false
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := "gpt-5.4"
+        name := "GPT 5.4"
+        provider := LeanAgent.Models.openAIProviderId
+        api := "openai-responses"
+        baseUrl := s!"http://127.0.0.1:{port}/responses-stream-early-eof"
+        contextWindow := 100000
+        maxTokens := 4096
+        reasoning := true
+      }
+    let (responseRef, wrappedOptions) ← LeanAgent.Models.withCapturedResponseHook
+      { apiKey := some "test-key"
+        onResponse := some fun response _model => do
+          assertTrue (response.status == 200) "expected wrapped provider-stream early EOF response hook status"
+          assertTrue
+            (headerValueCaseInsensitive? response.headers "x-diagnostic-trace" ==
+              some "early-eof-route")
+            "expected wrapped provider-stream early EOF response hook headers"
+          sawResponseHeader.set true
+      }
+    let failed ←
+      try
+        let _stream ← LeanAgent.AI.Providers.Streams.openAIResponsesStreams.streamSimple
+          model
+          { systemPrompt := some "system"
+            messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+          }
+          wrappedOptions
+        pure false
+      catch err =>
+        pure (err.toString.contains "OpenAI Responses stream ended before a terminal response event")
+    assertTrue failed "expected wrapped provider-stream OpenAI Responses early EOF parse failure"
+    assertTrue
+      (← sawResponseHeader.get)
+      "expected wrapped provider-stream OpenAI Responses early EOF response hook to run"
+    match ← responseRef.get with
+    | some response =>
+        assertTrue (response.status == 200) "expected wrapped provider-stream to capture status"
+        assertTrue
+          (headerValueCaseInsensitive? response.headers "x-diagnostic-trace" == some "early-eof-route")
+          "expected wrapped provider-stream to capture response headers"
+    | none => fail "expected wrapped provider-stream to capture response"
+
 def testCompatOpenAIResponsesEarlyEofReturnsErrorStream : IO Unit := do
   let port := 18112
   withHttpServer port do
@@ -10879,6 +11187,8 @@ def testCompatOpenAIResponsesEarlyEofReturnsErrorStream : IO Unit := do
         maxTokens := 4096
         reasoning := true
       }
+    assertTrue (← LeanAgent.AI.Compat.shouldUseBuiltinModels model)
+      "expected early EOF compat model to route through builtin models"
     let stream ← LeanAgent.AI.Compat.streamSimple
       model
       { systemPrompt := some "system"
@@ -10902,6 +11212,11 @@ def testCompatOpenAIResponsesEarlyEofReturnsErrorStream : IO Unit := do
               (err.message.contains "OpenAI Responses stream ended before a terminal response event")
               "expected early EOF diagnostic detail"
         | none => fail "expected early EOF diagnostic error payload"
+        match diagnostic.details with
+        | some details =>
+            assertTrue (jsonNatField? details "status" == some 200)
+              "expected early EOF diagnostic HTTP status"
+        | none => fail "expected early EOF diagnostic details"
     | none => fail "expected early EOF diagnostic entry"
     assertTrue
       (match stream.events.back? with
@@ -11491,6 +11806,54 @@ def testOpenAICompletionsProviderErrorDiagnostics : IO Unit := do
         pure true
     assertTrue failed "expected provider diagnostic error"
 
+def testModelsCollectionProviderErrorDiagnosticsIncludeResponseHeaders : IO Unit := do
+  let port := 18083
+  withHttpServer port do
+    let providerId := "diagnostic-openai"
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := "gpt-4o-mini"
+        name := "Diagnostic OpenAI"
+        provider := providerId
+        api := "openai-completions"
+        baseUrl := s!"http://127.0.0.1:{port}/diagnostic-openai"
+        contextWindow := 128000
+        maxTokens := 4096
+      }
+    let provider ← LeanAgent.Models.createProvider
+      { id := providerId
+        name := some "Diagnostic OpenAI"
+        auth := {}
+        models := #[model]
+        apis := #[{ api := model.api, streams := LeanAgent.AI.Providers.Streams.openAICompatibleStreams }]
+      }
+    let collection ← LeanAgent.Models.createModels
+    collection.setProvider provider
+    let stream ← collection.streamSimple
+      model
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+      { apiKey := some "test-key" }
+    assertTrue stream.isComplete "expected collection provider error stream to complete"
+    assertTrue (stream.result.stopReason == .error) "expected collection provider error stop reason"
+    match stream.result.errorMessage with
+    | some message =>
+        assertTrue (message.contains "provider HTTP 429") "expected collection provider error message"
+    | none => fail "expected collection provider error message"
+    match stream.result.diagnostics[0]? with
+    | some diagnostic =>
+        assertTrue (diagnostic.type == "provider_error") "expected collection provider_error diagnostic"
+        match diagnostic.details with
+        | some details =>
+            assertTrue (jsonNatField? details "status" == some 429)
+              "expected collection diagnostic HTTP status"
+        | none => fail "expected collection diagnostic details"
+        assertTrue
+          (diagnosticResponseHeaderValueCaseInsensitive? diagnostic "x-diagnostic-trace" ==
+            some "rate-limit-route")
+          "expected collection diagnostic response headers"
+    | none => fail "expected collection provider diagnostic entry"
+
 def main : IO UInt32 := do
   try
     testAgentLoopReadsFile
@@ -11713,7 +12076,7 @@ def main : IO UInt32 := do
     testCompatLegacyAliasesRejectMismatchedApi
     testCompatLegacyAliasesUseRegistryForNonBuiltins
     testModelsCreateProviderMissingApiReturnsLazyErrorStream
-    testModelsCreateProviderSetupFailureReturnsLazyErrorStream
+    testModelsCreateProviderSetupFailurePropagatesProviderError
     testModelsLazyProviderStreamsLoadFailureReturnsErrorStream
     testModelsCalculateCost
     testModelsThinkingLevelMapSupport
@@ -11759,8 +12122,16 @@ def main : IO UInt32 := do
     testOpenAIResponsesPayloadAndResponseHooks
     testOpenAIResponsesSendsCopilotDynamicHeaders
     testOpenAIResponsesStreamWithOptionsLocal
+    testOpenAIResponsesOptionsFromSimplePreserveResponseHook
+    testModelsApplyAuthPreservesResponseHook
+    testModelsWithCapturedResponseHookPreservesOriginalHook
+    testWrappedOpenAIResponsesCompatOptionChainPreservesResponseHook
+    testBuiltinOpenAIApplyAuthPreservesResponseHook
     testCompatOpenAIResponsesTypedLegacyAliasLocal
     testCompatOpenAIResponsesTypedLegacyAliasCompleteLocal
+    testOpenAIResponsesEarlyEofInvokesResponseHook
+    testOpenAIResponsesProviderStreamsEarlyEofInvokesResponseHook
+    testWrappedOpenAIResponsesProviderStreamsEarlyEofInvokesResponseHook
     testCompatOpenAIResponsesEarlyEofReturnsErrorStream
     testAzureOpenAIResponsesStreamWithOptionsLocal
     testCompatAzureOpenAIResponsesTypedLegacyAliasLocal
@@ -11780,6 +12151,7 @@ def main : IO UInt32 := do
     testCompatOpenAICodexResponsesTypedLegacyAliasLocal
     testCompatOpenAICodexResponsesMissingTokenUsesOauthCode
     testOpenAICompletionsProviderErrorDiagnostics
+    testModelsCollectionProviderErrorDiagnosticsIncludeResponseHeaders
     IO.println "lean-agent tests passed"
     pure 0
   catch err =>

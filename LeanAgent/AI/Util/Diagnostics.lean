@@ -49,6 +49,33 @@ def createAssistantMessageDiagnosticFromJsonValue
     details := details
   }
 
+def responseHeaderToJson (header : String × String) : Lean.Json :=
+  let (name, value) := header
+  LeanAgent.Json.obj
+    [ ("name", LeanAgent.Json.str name)
+    , ("value", LeanAgent.Json.str value)
+    ]
+
+def responseHeadersToJson (headers : Array (String × String)) : Lean.Json :=
+  LeanAgent.Json.arr (headers.map responseHeaderToJson)
+
+def responseDetailsToJson (response : LeanAgent.AI.ProviderResponse) : Lean.Json :=
+  LeanAgent.Json.obj
+    [ ("status", LeanAgent.Json.nat response.status)
+    , ("responseHeaders", responseHeadersToJson response.headers)
+    ]
+
+def createAssistantMessageDiagnosticFromError
+    (type : String)
+    (error : IO.Error)
+    (timestamp : Nat)
+    (response : Option LeanAgent.AI.ProviderResponse := none) : AssistantMessageDiagnostic :=
+  { type := type
+    timestamp := timestamp
+    error := some (extractDiagnosticError error.toString)
+    details := response.map responseDetailsToJson
+  }
+
 def appendAssistantMessageDiagnostic
     (message : AssistantMessage)
     (diagnostic : AssistantMessageDiagnostic) : AssistantMessage :=

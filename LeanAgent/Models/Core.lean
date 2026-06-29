@@ -124,10 +124,13 @@ def ProviderStreams.completeSimple
   pure stream.result
 
 def ProviderStreams.lazy (load : IO ProviderStreams) : ProviderStreams :=
-  { streamSimple := fun model context options =>
-      LeanAgent.AI.Api.Lazy.lazyStream model.toModelRef do
-        let streams ← load
-        streams.streamSimple model context options
+  { streamSimple := fun model context options => do
+      let streams ←
+        try
+          load
+        catch err =>
+          return ← LeanAgent.AI.Api.Lazy.setupErrorStream model.toModelRef err.toString
+      streams.streamSimple model context options
   }
 
 structure Provider where
@@ -199,11 +202,12 @@ def createProvider (input : CreateProviderOptions) : IO Provider := do
       getModels := modelsRef.get
       refreshModels := refreshModels
       streamSimple := fun model context options => do
-        LeanAgent.AI.Api.Lazy.lazyStream model.toModelRef do
-          match apiDispatchFor? input.apis model.api with
-          | some streams => streams.streamSimple model context options
-          | none =>
-              throw (modelsError .stream s!"Provider {input.id} has no API implementation for \"{model.api}\"")
+        match apiDispatchFor? input.apis model.api with
+        | some streams => streams.streamSimple model context options
+        | none =>
+            LeanAgent.AI.Api.Lazy.setupErrorStream
+              model.toModelRef
+              (modelsError .stream s!"Provider {input.id} has no API implementation for \"{model.api}\"").toString
     }
 
 def hasApi (model : ModelInfo) (api : String) : Bool :=
@@ -344,6 +348,33 @@ def authHeadersToStreamHeaders
   let inherited := authHeaders.filterMap fun (name, value) =>
     if requestNames.contains name then none else some (name, some value)
   inherited ++ requestHeaders
+
+def rebuildSimpleStreamOptions
+    (options : LeanAgent.AI.SimpleStreamOptions)
+    (apiKey : Option String := options.apiKey)
+    (headers : Array (String × Option String) := options.headers)
+    (env : Array (String × String) := options.env)
+    (onResponse : Option LeanAgent.AI.ResponseHook := options.onResponse) :
+    LeanAgent.AI.SimpleStreamOptions :=
+  { temperature := options.temperature
+    maxTokens := options.maxTokens
+    signal := options.signal
+    apiKey := apiKey
+    transport := options.transport
+    cacheRetention := options.cacheRetention
+    sessionId := options.sessionId
+    headers := headers
+    onPayload := options.onPayload
+    onResponse := onResponse
+    timeoutMs := options.timeoutMs
+    websocketConnectTimeoutMs := options.websocketConnectTimeoutMs
+    maxRetries := options.maxRetries
+    maxRetryDelayMs := options.maxRetryDelayMs
+    metadata := options.metadata
+    env := env
+    reasoning := options.reasoning
+    thinkingBudgets := options.thinkingBudgets
+  }
 
 structure Collection where
   providersRef : IO.Ref (Array Provider)
@@ -543,7 +574,7 @@ def Collection.applyAuth
       (authHeadersToStreamHeaders model.headers options.headers)
   match resolution with
   | none =>
-      pure (model, { options with headers := providerModelHeaders })
+      pure (model, rebuildSimpleStreamOptions options (headers := providerModelHeaders))
   | some resolution =>
       let requestModel :=
         match resolution.auth.baseUrl with
@@ -554,14 +585,14 @@ def Collection.applyAuth
         | some value => some value
         | none => resolution.auth.apiKey
       let requestOptions :=
-        { options with
-          apiKey := apiKey
-          headers :=
+        rebuildSimpleStreamOptions
+          options
+          (apiKey := apiKey)
+          (headers :=
             authHeadersToStreamHeaders provider.headers
               (authHeadersToStreamHeaders model.headers
-                (authHeadersToStreamHeaders resolution.auth.headers options.headers))
-          env := LeanAgent.AI.Auth.providerEnvMerge resolution.env options.env
-        }
+                (authHeadersToStreamHeaders resolution.auth.headers options.headers)))
+          (env := LeanAgent.AI.Auth.providerEnvMerge resolution.env options.env)
       pure (requestModel, requestOptions)
 
 def abortedAssistantMessage (model : ModelInfo) (timestamp : Nat) : LeanAgent.AI.AssistantMessage :=
@@ -577,7 +608,34 @@ def abortedAssistantMessage (model : ModelInfo) (timestamp : Nat) : LeanAgent.AI
 def abortedEventStream (model : ModelInfo) (timestamp : Nat) : LeanAgent.AI.AssistantMessageEventStream :=
   LeanAgent.AI.fromMessage (abortedAssistantMessage model timestamp)
 
-def errorEventStream (model : ModelInfo) (error : IO.Error) (timestamp : Nat) : LeanAgent.AI.AssistantMessageEventStream :=
+def captureResponseHook
+    (responseRef : IO.Ref (Option LeanAgent.AI.ProviderResponse))
+    (hook? : Option LeanAgent.AI.ResponseHook) : LeanAgent.AI.ResponseHook :=
+  fun response model => do
+    match hook? with
+    | some hook => hook response model
+    | none => pure ()
+    responseRef.set (some response)
+
+def withCapturedResponseHook
+    (options : LeanAgent.AI.SimpleStreamOptions) :
+    IO (IO.Ref (Option LeanAgent.AI.ProviderResponse) × LeanAgent.AI.SimpleStreamOptions) := do
+  let responseRef ← IO.mkRef none
+  let wrapped : LeanAgent.AI.ResponseHook := captureResponseHook responseRef options.onResponse
+  pure (responseRef, rebuildSimpleStreamOptions options (onResponse := some wrapped))
+
+def errorEventStream
+    (model : ModelInfo)
+    (error : IO.Error)
+    (timestamp : Nat)
+    (response : Option LeanAgent.AI.ProviderResponse := none) :
+    LeanAgent.AI.AssistantMessageEventStream :=
+  let diagnostic :=
+    LeanAgent.AI.Util.Diagnostics.createAssistantMessageDiagnosticFromError
+      "provider_error"
+      error
+      timestamp
+      response
   let message : LeanAgent.AI.AssistantMessage :=
     { content := #[]
       api := model.api
@@ -585,13 +643,7 @@ def errorEventStream (model : ModelInfo) (error : IO.Error) (timestamp : Nat) : 
       model := model.id
       stopReason := .error
       errorMessage := some error.toString
-      diagnostics :=
-        #[ LeanAgent.AI.Util.Diagnostics.createAssistantMessageDiagnostic
-            "provider_error"
-            error.toString
-            none
-            timestamp
-         ]
+      diagnostics := #[diagnostic]
       timestamp := timestamp
     }
   LeanAgent.AI.errorStream message
@@ -606,13 +658,14 @@ def Collection.streamSimple
     return abortedEventStream model (← IO.monoMsNow)
   let provider ← collection.requireProvider model
   let (requestModel, requestOptions) ← collection.applyAuth provider model options
+  let (responseRef, requestOptions) ← withCapturedResponseHook requestOptions
   try
     provider.streamSimple requestModel context requestOptions
   catch err =>
     if LeanAgent.AI.Util.Abort.isAbortErrorMessage err.toString then
       pure (abortedEventStream requestModel (← IO.monoMsNow))
     else
-      pure (errorEventStream requestModel err (← IO.monoMsNow))
+      pure (errorEventStream requestModel err (← IO.monoMsNow) (← responseRef.get))
 
 def Collection.completeSimple
     (collection : Collection)

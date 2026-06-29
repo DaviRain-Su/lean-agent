@@ -294,6 +294,7 @@ def streamBuiltinSimple
   let models ← compatModels
   let builtinProvider ← models.requireProvider model
   let (requestModel, requestOptions) ← models.applyAuth builtinProvider model options
+  let (responseRef, requestOptions) ← LeanAgent.Models.withCapturedResponseHook requestOptions
   let provider ← resolveApiProvider requestModel.api
   ensureApiMatches provider requestModel
   try
@@ -302,7 +303,7 @@ def streamBuiltinSimple
     if LeanAgent.AI.Util.Abort.isAbortErrorMessage err.toString then
       pure (abortedCompatStream requestModel (← IO.monoMsNow))
     else
-      pure (LeanAgent.Models.errorEventStream requestModel err (← IO.monoMsNow))
+      pure (LeanAgent.Models.errorEventStream requestModel err (← IO.monoMsNow) (← responseRef.get))
 
 def streamSimple
     (model : LeanAgent.Models.ModelInfo)
@@ -316,13 +317,14 @@ def streamSimple
   let provider ← resolveApiProvider model.api
   ensureApiMatches provider model
   let options ← withEnvApiKey model options
+  let (responseRef, options) ← LeanAgent.Models.withCapturedResponseHook options
   try
     provider.streams.streamSimple model context options
   catch err =>
     if LeanAgent.AI.Util.Abort.isAbortErrorMessage err.toString then
       pure (abortedCompatStream model (← IO.monoMsNow))
     else
-      pure (LeanAgent.Models.errorEventStream model err (← IO.monoMsNow))
+      pure (LeanAgent.Models.errorEventStream model err (← IO.monoMsNow) (← responseRef.get))
 
 def stream
     (model : LeanAgent.Models.ModelInfo)
@@ -347,13 +349,14 @@ def streamSimpleWithApi
   let provider ← resolveApiProvider api
   ensureApiMatches provider model
   let options ← withEnvApiKey model options
+  let (responseRef, options) ← LeanAgent.Models.withCapturedResponseHook options
   try
     provider.streams.streamSimple model context options
   catch err =>
     if LeanAgent.AI.Util.Abort.isAbortErrorMessage err.toString then
       pure (abortedCompatStream model (← IO.monoMsNow))
     else
-      pure (LeanAgent.Models.errorEventStream model err (← IO.monoMsNow))
+      pure (LeanAgent.Models.errorEventStream model err (← IO.monoMsNow) (← responseRef.get))
 
 def streamWithApi
     (api : String)
