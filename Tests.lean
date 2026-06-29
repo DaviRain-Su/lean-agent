@@ -2207,6 +2207,122 @@ def testOAuthSuccessPageOmitsDetails : IO Unit := do
   assertTrue (!html.contains "class=\"details\"") "expected details block to be omitted"
   assertTrue (html.contains "class=\"logo\"") "expected Pi OAuth logo container"
 
+def testGitHubCopilotOAuthDomainAndBaseUrlHelpers : IO Unit := do
+  assertTrue
+    (LeanAgent.AI.OAuth.GitHubCopilot.normalizeDomain " https://Company.GHE.com/path?q=1 " ==
+      some "company.ghe.com")
+    "expected GitHub Enterprise URL normalization"
+  assertTrue
+    (LeanAgent.AI.OAuth.GitHubCopilot.normalizeDomain "company.ghe.com/org" ==
+      some "company.ghe.com")
+    "expected scheme-less GitHub Enterprise domain normalization"
+  assertTrue
+    (LeanAgent.AI.OAuth.GitHubCopilot.normalizeDomain "not a domain" == none)
+    "expected invalid GitHub Enterprise domain to be rejected"
+  let urls := LeanAgent.AI.OAuth.GitHubCopilot.urlsForDomain "github.com"
+  assertTrue (urls.deviceCodeUrl == "https://github.com/login/device/code")
+    "expected GitHub device-code URL"
+  assertTrue (urls.accessTokenUrl == "https://github.com/login/oauth/access_token")
+    "expected GitHub access-token URL"
+  assertTrue (urls.copilotTokenUrl == "https://api.github.com/copilot_internal/v2/token")
+    "expected GitHub Copilot token URL"
+  let token := "tid=abc;proxy-ep=proxy.enterprise.githubcopilot.com;exp=123"
+  assertTrue
+    (LeanAgent.AI.OAuth.GitHubCopilot.baseUrlFromToken? token ==
+      some "https://api.enterprise.githubcopilot.com")
+    "expected proxy endpoint base URL extraction"
+  assertTrue
+    (LeanAgent.AI.OAuth.GitHubCopilot.getBaseUrl none (some "company.ghe.com") ==
+      "https://copilot-api.company.ghe.com")
+    "expected enterprise base URL fallback"
+  assertTrue (LeanAgent.AI.OAuth.GitHubCopilot.getBaseUrl == LeanAgent.AI.OAuth.GitHubCopilot.defaultBaseUrl)
+    "expected default individual Copilot base URL"
+
+def selectableCopilotModelJson (id : String) (picker : Bool := true)
+    (policyState : Option String := none) (toolCalls : Option Bool := none) : Lean.Json :=
+  let policyFields :=
+    match policyState with
+    | some state => [("policy", LeanAgent.Json.obj [("state", LeanAgent.Json.str state)])]
+    | none => []
+  let supportsFields :=
+    match toolCalls with
+    | some value =>
+        [ ("capabilities",
+            LeanAgent.Json.obj
+              [ ("supports", LeanAgent.Json.obj [("tool_calls", LeanAgent.Json.bool value)]) ]) ]
+    | none => []
+  LeanAgent.Json.obj
+    ([ ("id", LeanAgent.Json.str id)
+     , ("model_picker_enabled", LeanAgent.Json.bool picker)
+     ] ++ policyFields ++ supportsFields)
+
+def testGitHubCopilotOAuthParsesAvailableModels : IO Unit := do
+  let raw := LeanAgent.Json.obj
+    [ ("data",
+        LeanAgent.Json.arr
+          #[ selectableCopilotModelJson "enabled"
+           , selectableCopilotModelJson "missing-supports"
+           , selectableCopilotModelJson "disabled-policy" true (some "disabled")
+           , selectableCopilotModelJson "disabled-tools" true none (some false)
+           , selectableCopilotModelJson "hidden" false
+           , LeanAgent.Json.obj [("model_picker_enabled", LeanAgent.Json.bool true)]
+           ])]
+  match LeanAgent.AI.OAuth.GitHubCopilot.parseAvailableModelIds raw with
+  | .ok ids =>
+      assertTrue (ids == #["enabled", "missing-supports"]) "expected selectable Copilot model IDs"
+  | .error err => fail s!"expected valid Copilot models response: {err}"
+  match LeanAgent.AI.OAuth.GitHubCopilot.parseAvailableModelIds (LeanAgent.Json.obj []) with
+  | .ok _ => fail "expected invalid Copilot models response to fail"
+  | .error err =>
+      assertTrue (err.contains "Invalid Copilot models response") "expected invalid response error"
+
+def githubCopilotTestModel (id : String) : LeanAgent.Models.ModelInfo :=
+  { LeanAgent.Models.openAIGpt41Mini with
+    id := id
+    name := id
+    provider := LeanAgent.AI.OAuth.GitHubCopilot.providerId
+    baseUrl := "https://old-copilot.test"
+  }
+
+def testGitHubCopilotOAuthModifiesModelsFromCredential : IO Unit := do
+  let models :=
+    #[ githubCopilotTestModel "disabled"
+     , githubCopilotTestModel "enabled"
+     , { LeanAgent.Models.deepSeekV4Flash with id := "other-provider" }
+     ]
+  let credential : LeanAgent.AI.Auth.OAuthCredential :=
+    { access := "tid=abc;proxy-ep=proxy.enterprise.githubcopilot.com;exp=123"
+      refresh := "github-access-token"
+      expires := 1000
+      extra :=
+        #[ ( "availableModelIds"
+           , LeanAgent.Json.arr #[LeanAgent.Json.str "enabled"] )
+         ]
+    }
+  let modified := LeanAgent.AI.OAuth.GitHubCopilot.modifyModels models credential
+  assertTrue (modified.size == 2) "expected unavailable Copilot model to be filtered out"
+  match modified.find? (fun model => model.provider == LeanAgent.AI.OAuth.GitHubCopilot.providerId) with
+  | some model =>
+      assertTrue (model.id == "enabled") "expected only enabled Copilot model"
+      assertTrue (model.baseUrl == "https://api.enterprise.githubcopilot.com")
+        "expected Copilot token proxy endpoint base URL"
+  | none => fail "expected enabled Copilot model"
+  assertTrue (modified.any (fun model => model.id == "other-provider"))
+    "expected non-Copilot models to be preserved"
+  let enterpriseCredential : LeanAgent.AI.Auth.OAuthCredential :=
+    { access := "token-without-proxy-endpoint"
+      refresh := "github-access-token"
+      expires := 1000
+      extra := #[("enterpriseUrl", LeanAgent.Json.str "https://enterprise.example/path")]
+    }
+  let enterpriseModels := LeanAgent.AI.OAuth.GitHubCopilot.modifyModels
+    #[githubCopilotTestModel "a", githubCopilotTestModel "b"]
+    enterpriseCredential
+  assertTrue (enterpriseModels.size == 2) "expected legacy credentials without availability to keep models"
+  assertTrue
+    (enterpriseModels.all (fun model => model.baseUrl == "https://copilot-api.enterprise.example"))
+    "expected enterprise base URL fallback for Copilot models"
+
 def headerValueOpt? (headers : Array (String × Option String)) (name : String) : Option (Option String) :=
   headers.findSome? fun (headerName, value) =>
     if headerName.toLower == name.toLower then some value else none
@@ -4315,6 +4431,9 @@ def main : IO UInt32 := do
     testOAuthDeviceCodeTimeouts
     testOAuthPageHtmlEscapesDynamicContent
     testOAuthSuccessPageOmitsDetails
+    testGitHubCopilotOAuthDomainAndBaseUrlHelpers
+    testGitHubCopilotOAuthParsesAvailableModels
+    testGitHubCopilotOAuthModifiesModelsFromCredential
     testCloudflareWorkersAIAuthResolution
     testCloudflareAIGatewayAuthResolution
     testCloudflareStoredCredentialResolution
