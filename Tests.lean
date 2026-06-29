@@ -7851,6 +7851,11 @@ def testModelsLazyProviderStreamsLoadFailureReturnsErrorStream : IO Unit := do
   let stream ← streams.streamSimple fakeRuntimeModel {} {}
   assertLazyErrorStream stream "load failed"
 
+def testApiLazyApiLoadFailureReturnsErrorStream : IO Unit := do
+  let streams := LeanAgent.AI.Api.Lazy.lazyApi (throw (IO.userError "api load failed"))
+  let stream ← streams.streamSimple fakeRuntimeModel {} {}
+  assertLazyErrorStream stream "api load failed"
+
 def testImagesLazyProviderLoadFailureReturnsErrorResult : IO Unit := do
   let provider := LeanAgent.AI.Images.ProviderImages.lazy (throw (IO.userError "image load failed"))
   let result ← provider.generateImages fakeImagesModel { input := #[LeanAgent.AI.text "draw"] } {}
@@ -12354,6 +12359,7 @@ def main : IO UInt32 := do
     testModelsCreateProviderMissingApiReturnsLazyErrorStream
     testModelsCreateProviderSetupFailurePropagatesProviderError
     testModelsLazyProviderStreamsLoadFailureReturnsErrorStream
+    testApiLazyApiLoadFailureReturnsErrorStream
     testImagesLazyProviderLoadFailureReturnsErrorResult
     testModelsCalculateCost
     testModelsThinkingLevelMapSupport

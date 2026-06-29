@@ -1,5 +1,5 @@
 import LeanAgent.AI.Auth
-import LeanAgent.AI.Api.Lazy
+import LeanAgent.AI.Api.LazyBase
 import LeanAgent.AI.Api.OpenAIResponsesShared
 import LeanAgent.AI.EventStream
 import LeanAgent.AI.OAuth.Core

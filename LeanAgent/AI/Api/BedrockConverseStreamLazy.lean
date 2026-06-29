@@ -1,3 +1,4 @@
+import LeanAgent.AI.Api.Lazy
 import LeanAgent.AI.Providers.Streams
 
 namespace LeanAgent.AI.Api.BedrockConverseStreamLazy
@@ -12,7 +13,7 @@ def resetBedrockProviderModule : IO Unit :=
   bedrockProviderModuleOverride.set none
 
 def bedrockConverseStreamApi : LeanAgent.Models.ProviderStreams :=
-  LeanAgent.Models.ProviderStreams.lazy do
+  LeanAgent.AI.Api.Lazy.lazyApi do
     match ← bedrockProviderModuleOverride.get with
     | some streams => pure streams
     | none => pure LeanAgent.AI.Providers.Streams.bedrockConverseStreamStreams
