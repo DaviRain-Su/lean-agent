@@ -3574,6 +3574,22 @@ def testRetryClassifiesAssistantErrors : IO Unit := do
       (retryAssistantMessage (some "You can retry your request later.")))
     "expected explicit retry guidance to be retryable"
   assertTrue
+    (LeanAgent.AI.Util.Retry.isRetryableAssistantError
+      (retryAssistantMessage (some "provider_returned_error: upstream failed")))
+    "expected underscore-separated provider returned error to be retryable"
+  assertTrue
+    (LeanAgent.AI.Util.Retry.isRetryableAssistantError
+      (retryAssistantMessage (some "service-unavailable from upstream")))
+    "expected hyphenated service unavailable to be retryable"
+  assertTrue
+    (LeanAgent.AI.Util.Retry.isRetryableAssistantError
+      (retryAssistantMessage (some "websocket.closed before completion")))
+    "expected dotted websocket closed to be retryable"
+  assertTrue
+    (LeanAgent.AI.Util.Retry.isRetryableAssistantError
+      (retryAssistantMessage (some "rate_limit_error from gateway")))
+    "expected underscore rate-limit variant to be retryable"
+  assertTrue
     (!LeanAgent.AI.Util.Retry.isRetryableAssistantError
       (retryAssistantMessage (some "429 quota exceeded")))
     "expected quota exhaustion to be non-retryable"

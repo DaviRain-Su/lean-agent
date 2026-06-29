@@ -16,6 +16,15 @@ def containsAny (message : String) (patterns : List String) : Bool :=
   let lower := message.toLower
   patterns.any fun pattern => lower.contains pattern
 
+def compactRetryText (value : String) : String :=
+  String.ofList <|
+    value.toLower.toList.filter fun char =>
+      char.isAlphanum
+
+def containsAnyCompact (message : String) (patterns : List String) : Bool :=
+  let compactMessage := compactRetryText message
+  patterns.any fun pattern => compactMessage.contains (compactRetryText pattern)
+
 def nonRetryableProviderLimitPatterns : List String :=
   [ "gousagelimiterror"
   , "freeusagelimiterror"
@@ -70,8 +79,10 @@ def retryableProviderErrorPatterns : List String :=
   ]
 
 def isRetryableErrorMessage (message : String) : Bool :=
-  !containsAny message nonRetryableProviderLimitPatterns &&
-    containsAny message retryableProviderErrorPatterns
+  !(containsAny message nonRetryableProviderLimitPatterns ||
+      containsAnyCompact message nonRetryableProviderLimitPatterns) &&
+    (containsAny message retryableProviderErrorPatterns ||
+      containsAnyCompact message retryableProviderErrorPatterns)
 
 def isRetryableAssistantError (message : AssistantMessage) : Bool :=
   message.stopReason == .error &&
