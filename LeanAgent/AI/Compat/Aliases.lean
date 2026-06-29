@@ -46,6 +46,11 @@ abbrev GoogleVertexStream :=
     LeanAgent.AI.Api.GoogleVertex.GoogleVertexOptions →
       IO LeanAgent.AI.AssistantMessageEventStream
 
+abbrev BedrockConverseStream :=
+  LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
+    LeanAgent.AI.Api.BedrockConverseStream.BedrockOptions →
+      IO LeanAgent.AI.AssistantMessageEventStream
+
 def streamForApi (api : String) : AliasStream :=
   fun model context options => LeanAgent.AI.Compat.streamSimpleWithApi api model context options
 
@@ -325,17 +330,56 @@ def streamGoogleVertexWithOptions : GoogleVertexStream :=
       options
     pure (LeanAgent.Models.applyUsageCostToStream model stream)
 
+def nonPlaceholderToken? (token : Option String) : Option String :=
+  match token with
+  | none => none
+  | some token =>
+      let token := token.trimAscii.toString
+      if token.isEmpty || (token.startsWith "<" && token.endsWith ">") then none else some token
+
+def withEnvApiKeyForBedrockConverseStream
+    (model : LeanAgent.Models.ModelInfo)
+    (options : LeanAgent.AI.Api.BedrockConverseStream.BedrockOptions) :
+    IO LeanAgent.AI.Api.BedrockConverseStream.BedrockOptions := do
+  let simple ← LeanAgent.AI.Compat.withEnvApiKey model options.toSimpleStreamOptions
+  pure
+    { options with
+      apiKey := simple.apiKey
+      bearerToken := options.bearerToken <|> nonPlaceholderToken? simple.apiKey
+    }
+
+def streamBedrockConverseStreamWithOptions : BedrockConverseStream :=
+  fun model context options => do
+    LeanAgent.AI.Compat.ensureApiMatches
+      { api := LeanAgent.AI.Api.BedrockConverseStream.api
+        streams := LeanAgent.Models.bedrockConverseStreamStreams
+      }
+      model
+    let options ← withEnvApiKeyForBedrockConverseStream model options
+    let config : LeanAgent.AI.Api.BedrockConverseStream.BedrockConverseStreamConfig :=
+      { baseUrl := model.baseUrl }
+    let stream ← LeanAgent.AI.Api.BedrockConverseStream.completeStreamWithOptions
+      config
+      model.toModelRef
+      model.input
+      model.name
+      model.thinkingLevelMap
+      model.reasoning
+      context
+      options
+    pure (LeanAgent.Models.applyUsageCostToStream model stream)
+
 def streamAnthropic : AnthropicMessagesStream :=
   streamAnthropicWithOptions
 
 def streamSimpleAnthropic : AliasStream :=
   streamForApi "anthropic-messages"
 
-def streamBedrockConverseStream : AliasStream :=
-  streamForApi "bedrock-converse-stream"
+def streamBedrockConverseStream : BedrockConverseStream :=
+  streamBedrockConverseStreamWithOptions
 
 def streamSimpleBedrockConverseStream : AliasStream :=
-  streamBedrockConverseStream
+  streamForApi "bedrock-converse-stream"
 
 def streamAzureOpenAIResponses : AzureOpenAIResponsesStream :=
   streamAzureOpenAIResponsesWithOptions

@@ -2355,6 +2355,88 @@ def testBedrockConverseHelpersAndTransportBoundary : IO Unit := do
   assertTrue failed "expected Bedrock transport to fail explicitly"
   assertTrue (← sawPayload.get) "expected Bedrock payload hook before transport boundary"
 
+def testCompatBedrockTypedLegacyAliasBoundary : IO Unit := do
+  let sawPayload ← IO.mkRef false
+  let tool : LeanAgent.AI.Tool :=
+    { name := "read"
+      description := "Read a file"
+      parameters := LeanAgent.Json.obj [("type", LeanAgent.Json.str "object")]
+    }
+  let model : LeanAgent.Models.ModelInfo :=
+    { id := LeanAgent.Models.amazonBedrockDefaultModel
+      name := "Claude Opus 4.6 (US)"
+      provider := LeanAgent.Models.amazonBedrockProviderId
+      api := LeanAgent.AI.Api.BedrockConverseStream.api
+      baseUrl := LeanAgent.Models.amazonBedrockBaseUrl
+      contextWindow := 200000
+      maxTokens := 64000
+      reasoning := true
+      thinkingLevelMap := #[{ level := .level .xhigh, mapped := some "max" }]
+      input := #["text", "image"]
+    }
+  let failed ←
+    try
+      let _ ← LeanAgent.AI.Compat.Aliases.streamBedrockConverseStream
+        model
+        { systemPrompt := some "system"
+          messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+          tools := #[tool]
+        }
+        { apiKey := some "<authenticated>"
+          bearerToken := some "bedrock-bearer"
+          region := some "us-west-2"
+          profile := some "dev"
+          maxTokens := some 123
+          toolChoice := some (.tool "read")
+          reasoning := some .xhigh
+          thinkingDisplay := some .summarized
+          metadata := some (LeanAgent.Json.obj [("session", LeanAgent.Json.str "typed-bedrock")])
+          onPayload := some (fun payload ref => do
+            sawPayload.set true
+            assertTrue (ref.api == LeanAgent.AI.Api.BedrockConverseStream.api)
+              "expected typed Bedrock payload hook model api"
+            assertTrue (jsonStringField? payload "modelId" == some LeanAgent.Models.amazonBedrockDefaultModel)
+              "expected typed Bedrock model id"
+            match jsonObjectField? payload "inferenceConfig" with
+            | some inference =>
+                assertTrue (LeanAgent.Json.optVal? inference "maxTokens" == some (LeanAgent.Json.nat 123))
+                  "expected typed Bedrock max tokens"
+            | none => fail "expected typed Bedrock inference config"
+            match jsonObjectField? payload "toolConfig" with
+            | some toolConfig =>
+                match jsonObjectField? toolConfig "toolChoice" with
+                | some choice =>
+                    match jsonObjectField? choice "tool" with
+                    | some selected =>
+                        assertTrue (jsonStringField? selected "name" == some "read")
+                          "expected typed Bedrock specific tool choice"
+                    | none => fail "expected typed Bedrock tool choice object"
+                | none => fail "expected typed Bedrock tool choice"
+            | none => fail "expected typed Bedrock tool config"
+            match jsonObjectField? payload "additionalModelRequestFields" with
+            | some fields =>
+                match jsonObjectField? fields "thinking", jsonObjectField? fields "output_config" with
+                | some thinking, some outputConfig =>
+                    assertTrue (jsonStringField? thinking "display" == some "summarized")
+                      "expected typed Bedrock thinking display"
+                    assertTrue (jsonStringField? outputConfig "effort" == some "max")
+                      "expected typed Bedrock xhigh effort mapping"
+                | _, _ => fail "expected typed Bedrock thinking fields"
+            | none => fail "expected typed Bedrock additional request fields"
+            match jsonObjectField? payload "requestMetadata" with
+            | some metadata =>
+                assertTrue (jsonStringField? metadata "session" == some "typed-bedrock")
+                  "expected typed Bedrock metadata"
+            | none => fail "expected typed Bedrock request metadata"
+            pure none)
+        }
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains "AWS SigV4") "expected Bedrock transport boundary error"
+      pure true
+  assertTrue failed "expected typed Bedrock alias to fail at transport boundary"
+  assertTrue (← sawPayload.get) "expected typed Bedrock alias payload hook"
+
 def testGitHubCopilotDynamicHeaders : IO Unit := do
   let userOnly : Array LeanAgent.AI.Message :=
     #[.user { content := #[LeanAgent.AI.text "hi"], timestamp := 1 }]
@@ -7631,6 +7713,7 @@ def main : IO UInt32 := do
     testMistralConversationsParsesStreamingEvents
     testBedrockConverseRequestPayload
     testBedrockConverseHelpersAndTransportBoundary
+    testCompatBedrockTypedLegacyAliasBoundary
     testGitHubCopilotDynamicHeaders
     testOpenAIResponsesRequestPayload
     testOpenAIResponsesRequestUsesThinkingLevelMap
