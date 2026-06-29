@@ -10,6 +10,8 @@ def providerName : String := "Cloudflare Workers AI"
 def workersAICompat : LeanAgent.Models.ModelCompat :=
   { supportsStore := false
     supportsDeveloperRole := false
+    supportsLongCacheRetention := false
+    sendSessionAffinityHeaders := true
   }
 
 def gptOss120B : LeanAgent.Models.ModelInfo :=

@@ -10,6 +10,8 @@ def providerName : String := "Cloudflare AI Gateway"
 def gatewayCompat : LeanAgent.Models.ModelCompat :=
   { supportsStore := false
     supportsDeveloperRole := false
+    supportsLongCacheRetention := false
+    sendSessionAffinityHeaders := true
   }
 
 def gpt4oMini : LeanAgent.Models.ModelInfo :=

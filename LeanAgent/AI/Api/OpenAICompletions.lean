@@ -40,6 +40,7 @@ structure OpenAICompletionsOptions extends LeanAgent.AI.SimpleStreamOptions wher
   supportsReasoningEffort : Bool := true
   maxTokensField : String := "max_tokens"
   supportsLongCacheRetention : Bool := true
+  sendSessionAffinityHeaders : Bool := false
 
 def optionsFromSimple (options : LeanAgent.AI.SimpleStreamOptions) : OpenAICompletionsOptions :=
   { temperature := options.temperature
@@ -208,6 +209,23 @@ def promptCacheFields (baseUrl : String) (options : OpenAICompletionsOptions) : 
       else
         []
     keyFields ++ retentionFields
+
+def sessionAffinityHeaders (options : OpenAICompletionsOptions) : Array (String × String) :=
+  if !options.sendSessionAffinityHeaders || resolveCacheRetention options == .none then
+    #[]
+  else
+    match options.sessionId with
+    | some sessionId =>
+        #[ ("session_id", sessionId)
+         , ("x-client-request-id", sessionId)
+         , ("x-session-affinity", sessionId)
+         ]
+    | none => #[]
+
+def requestHeaders (options : OpenAICompletionsOptions) : Array (String × String) :=
+  LeanAgent.AI.Util.Headers.mergeProvider
+    (sessionAffinityHeaders options)
+    options.headers
 
 def modelRef
     (config : OpenAICompatibleConfig)
@@ -730,7 +748,7 @@ def completeWithOptions
   let payload ← applyPayloadHook options model (requestToJsonWithOptions request options config.baseUrl)
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
   let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
-    (runHttpJson config payload (LeanAgent.AI.Util.Headers.providerHeadersToArray options.headers) options model)
+    (runHttpJson config payload (requestHeaders options) options model)
   match parseChatCompletion raw with
   | .ok response => pure response
   | .error err => throw (IO.userError s!"failed to parse provider response: {err}\n{raw}")
@@ -744,7 +762,7 @@ def streamWithOptions
   let payload ← applyPayloadHook options model (requestToStreamingJsonWithOptions request options config.baseUrl)
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
   let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
-    (runHttpJson config payload (LeanAgent.AI.Util.Headers.providerHeadersToArray options.headers) options model)
+    (runHttpJson config payload (requestHeaders options) options model)
   let timestamp ← IO.monoMsNow
   match parseStreamingEventStream api providerId request.model timestamp raw with
   | .ok stream => pure stream

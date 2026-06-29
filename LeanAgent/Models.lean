@@ -196,6 +196,7 @@ structure ModelCompat where
   supportsReasoningEffort : Bool := true
   maxTokensField : String := "max_tokens"
   supportsLongCacheRetention : Bool := true
+  sendSessionAffinityHeaders : Bool := false
   supportsTemperature : Bool := true
   forceAdaptiveThinking : Bool := false
 deriving Repr, BEq
@@ -2093,6 +2094,7 @@ def openAICompletionsOptionsFromSimple
     supportsReasoningEffort := model.compat.supportsReasoningEffort
     maxTokensField := model.compat.maxTokensField
     supportsLongCacheRetention := model.compat.supportsLongCacheRetention
+    sendSessionAffinityHeaders := model.compat.sendSessionAffinityHeaders
   }
 
 def thinkingLevelIndex? : LeanAgent.AI.ModelThinkingLevel → Option Nat

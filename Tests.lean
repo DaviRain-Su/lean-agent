@@ -431,6 +431,38 @@ def testOpenAICompletionsPromptCacheEnvLongRetention : IO Unit := do
     (LeanAgent.Json.optVal? json "prompt_cache_retention" == some (LeanAgent.Json.str "24h"))
     "expected env 24h prompt cache retention"
 
+def testOpenAICompletionsSessionAffinityHeaders : IO Unit := do
+  let headers := LeanAgent.AI.Api.OpenAICompletions.requestHeaders
+    { sessionId := some "session-header"
+      sendSessionAffinityHeaders := true
+    }
+  assertTrue (headerValue? headers "session_id" == some "session-header")
+    "expected session_id affinity header"
+  assertTrue (headerValue? headers "x-client-request-id" == some "session-header")
+    "expected x-client-request-id affinity header"
+  assertTrue (headerValue? headers "x-session-affinity" == some "session-header")
+    "expected x-session-affinity header"
+  let overridden := LeanAgent.AI.Api.OpenAICompletions.requestHeaders
+    { sessionId := some "session-header"
+      sendSessionAffinityHeaders := true
+      headers := #[("x-session-affinity", some "caller-session"), ("session_id", none)]
+    }
+  assertTrue (headerValue? overridden "session_id" == none)
+    "expected caller to suppress session_id"
+  assertTrue (headerValue? overridden "x-client-request-id" == some "session-header")
+    "expected non-overridden request id header"
+  assertTrue (headerValue? overridden "x-session-affinity" == some "caller-session")
+    "expected caller to override x-session-affinity"
+  let disabled := LeanAgent.AI.Api.OpenAICompletions.requestHeaders
+    { sessionId := some "session-header" }
+  assertTrue (disabled.isEmpty) "expected disabled affinity headers by default"
+  let noCache := LeanAgent.AI.Api.OpenAICompletions.requestHeaders
+    { sessionId := some "session-header"
+      cacheRetention := some .none
+      sendSessionAffinityHeaders := true
+    }
+  assertTrue (noCache.isEmpty) "expected cacheRetention none to omit affinity headers"
+
 def testSSEParsesDataEvents : IO Unit := do
   let raw := ": keepalive\n" ++
     "data: {\"a\":1}\n" ++
@@ -4284,6 +4316,10 @@ def testCloudflareProviderFactoriesExposeModelsAndAuth : IO Unit := do
       assertTrue (model.api == "openai-completions") "expected Workers AI OpenAI-compatible API"
       assertTrue (model.baseUrl == LeanAgent.AI.Api.Cloudflare.workersAIBaseUrl)
         "expected Workers AI base URL template"
+      assertTrue model.compat.sendSessionAffinityHeaders
+        "expected Workers AI session affinity compat"
+      assertTrue (!model.compat.supportsLongCacheRetention)
+        "expected Workers AI long cache retention compat"
       let collection ← LeanAgent.Models.createModels none fakeCloudflareAuthContext
       let (requestModel, options) ← collection.applyAuth workers model {}
       assertTrue
@@ -4299,6 +4335,13 @@ def testCloudflareProviderFactoriesExposeModelsAndAuth : IO Unit := do
     "expected AI Gateway Responses models"
   assertTrue (gatewayModels.any (fun model => model.api == "openai-completions"))
     "expected AI Gateway OpenAI-compatible models"
+  match gatewayModels.find? (fun model => model.id == "workers-ai/@cf/moonshotai/kimi-k2.6") with
+  | some model =>
+      assertTrue model.compat.sendSessionAffinityHeaders
+        "expected AI Gateway OpenAI-compatible session affinity compat"
+      assertTrue (!model.compat.supportsLongCacheRetention)
+        "expected AI Gateway OpenAI-compatible long cache retention compat"
+  | none => fail "expected AI Gateway OpenAI-compatible Workers AI model"
   match gatewayModels.find? (fun model => model.id == "gpt-4o-mini") with
   | some model =>
       assertTrue (model.baseUrl == LeanAgent.AI.Api.Cloudflare.aiGatewayOpenAIBaseUrl)
@@ -5649,7 +5692,8 @@ def httpServerScript : String :=
     , "            self.wfile.write(payload)"
     , "            return"
     , "        if self.path == '/headers-openai/chat/completions':"
-    , "            payload = json.dumps({'choices': [{'message': {'content': self.headers.get('X-Trace') or ''}, 'finish_reason': 'stop'}]}).encode('utf-8')"
+    , "            text = '|'.join([self.headers.get('X-Trace') or '', self.headers.get('session_id') or '', self.headers.get('x-client-request-id') or '', self.headers.get('x-session-affinity') or ''])"
+    , "            payload = json.dumps({'choices': [{'message': {'content': text}, 'finish_reason': 'stop'}]}).encode('utf-8')"
     , "            self.send_response(200)"
     , "            self.send_header('Content-Type', 'application/json')"
     , "            self.send_header('Content-Length', str(len(payload)))"
@@ -6072,7 +6116,22 @@ def testOpenAICompletionsSendsCustomHeaders : IO Unit := do
       }
       (basicProviderRequest)
       { headers := #[("X-Trace", some "trace-1")] }
-    assertTrue (response.content == "trace-1") "expected OpenAI-compatible request header"
+    assertTrue (response.content == "trace-1|||") "expected OpenAI-compatible request header"
+    let affinityResponse ← LeanAgent.AI.Api.OpenAICompletions.completeWithOptions
+      { apiKey := "test-key"
+        baseUrl := s!"http://127.0.0.1:{port}/headers-openai"
+        timeoutSeconds := 5
+        connectTimeoutSeconds := 5
+        noProxy := some "*"
+        userAgent := "lean-agent-test/0.1.0"
+      }
+      (basicProviderRequest)
+      { sessionId := some "session-http"
+        sendSessionAffinityHeaders := true
+        headers := #[("X-Trace", some "trace-2"), ("x-session-affinity", some "caller-session")]
+      }
+    assertTrue (affinityResponse.content == "trace-2|session-http|session-http|caller-session")
+      "expected OpenAI-compatible session affinity headers with caller override"
 
 def testOpenAICompletionsPayloadAndResponseHooks : IO Unit := do
   let port := 18092
@@ -6858,6 +6917,7 @@ def main : IO UInt32 := do
     testOpenAICompletionsPromptCacheClampsKey
     testOpenAICompletionsPromptCacheNoneOmitsFields
     testOpenAICompletionsPromptCacheEnvLongRetention
+    testOpenAICompletionsSessionAffinityHeaders
     testSSEParsesDataEvents
     testOpenAICompletionsStreamingPayload
     testOpenAICompletionsParsesStreamingText
