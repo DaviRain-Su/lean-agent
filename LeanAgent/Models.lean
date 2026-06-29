@@ -5,6 +5,7 @@ import LeanAgent.AI.Api.AzureOpenAIResponses
 import LeanAgent.AI.Api.GoogleGenerativeAI
 import LeanAgent.AI.Api.GoogleVertex
 import LeanAgent.AI.Api.Lazy
+import LeanAgent.AI.Api.MistralConversations
 import LeanAgent.AI.Api.OpenAICompletions
 import LeanAgent.AI.Api.OpenAIResponses
 import LeanAgent.AI.Api.SimpleOptions
@@ -70,6 +71,11 @@ def googleVertexProviderId : String := "google-vertex"
 def googleVertexApiKeyEnv : String := "GOOGLE_CLOUD_API_KEY"
 def googleVertexDefaultModel : String := "gemini-2.5-flash"
 def googleVertexBaseUrl : String := "https://{location}-aiplatform.googleapis.com"
+
+def mistralProviderId : String := "mistral"
+def mistralApiKeyEnv : String := "MISTRAL_API_KEY"
+def mistralDefaultModel : String := "devstral-medium-latest"
+def mistralBaseUrl : String := LeanAgent.AI.Api.MistralConversations.defaultBaseUrl
 
 structure ModelCompat where
   supportsStore : Bool := true
@@ -484,6 +490,59 @@ def googleVertexModels : Array ModelInfo :=
    , googleVertexGeminiFlashLiteLatest
    ]
 
+def mistralModel
+    (id name : String)
+    (inputCost outputCost cacheReadCost cacheWriteCost : Float)
+    (contextWindow maxTokens : Nat)
+    (reasoning : Bool := false)
+    (input : Array String := #["text"]) : ModelInfo :=
+  { id := id
+    name := name
+    provider := mistralProviderId
+    api := LeanAgent.AI.Api.MistralConversations.api
+    baseUrl := mistralBaseUrl
+    reasoning := reasoning
+    input := input
+    cost := cost inputCost outputCost cacheReadCost cacheWriteCost
+    contextWindow := contextWindow
+    maxTokens := maxTokens
+  }
+
+def textImageInput : Array String := #["text", "image"]
+
+def mistralModels : Array ModelInfo :=
+  #[ mistralModel "codestral-latest" "Codestral (latest)" 0.3 0.9 0.03 0.0 256000 4096
+   , mistralModel "devstral-2512" "Devstral 2" 0.4 2.0 0.04 0.0 262144 262144
+   , mistralModel "devstral-latest" "Devstral 2" 0.4 2.0 0.04 0.0 262144 262144
+   , mistralModel "devstral-medium-2507" "Devstral Medium" 0.4 2.0 0.04 0.0 128000 128000
+   , mistralModel "devstral-medium-latest" "Devstral 2 (latest)" 0.4 2.0 0.04 0.0 262144 262144
+   , mistralModel "devstral-small-2505" "Devstral Small 2505" 0.1 0.3 0.01 0.0 128000 128000
+   , mistralModel "devstral-small-2507" "Devstral Small" 0.1 0.3 0.01 0.0 128000 128000
+   , mistralModel "labs-devstral-small-2512" "Devstral Small 2" 0.0 0.0 0.0 0.0 256000 256000 false textImageInput
+   , mistralModel "magistral-medium-latest" "Magistral Medium (latest)" 2.0 5.0 0.2 0.0 128000 16384 true
+   , mistralModel "magistral-small" "Magistral Small" 0.5 1.5 0.05 0.0 128000 128000 true
+   , mistralModel "ministral-3b-latest" "Ministral 3B (latest)" 0.04 0.04 0.004 0.0 128000 128000
+   , mistralModel "ministral-8b-latest" "Ministral 8B (latest)" 0.1 0.1 0.01 0.0 128000 128000
+   , mistralModel "mistral-large-2411" "Mistral Large 2.1" 2.0 6.0 0.2 0.0 131072 16384
+   , mistralModel "mistral-large-2512" "Mistral Large 3" 0.5 1.5 0.05 0.0 262144 262144 false textImageInput
+   , mistralModel "mistral-large-latest" "Mistral Large (latest)" 0.5 1.5 0.05 0.0 262144 262144 false textImageInput
+   , mistralModel "mistral-medium-2505" "Mistral Medium 3" 0.4 2.0 0.04 0.0 131072 131072 false textImageInput
+   , mistralModel "mistral-medium-2508" "Mistral Medium 3.1" 0.4 2.0 0.04 0.0 262144 262144 false textImageInput
+   , mistralModel "mistral-medium-2604" "Mistral Medium 3.5" 1.5 7.5 0.15 0.0 262144 262144 true textImageInput
+   , mistralModel "mistral-medium-3.5" "Mistral Medium 3.5" 1.5 7.5 0.0 0.0 262144 262144 true textImageInput
+   , mistralModel "mistral-medium-latest" "Mistral Medium (latest)" 0.4 2.0 0.04 0.0 262144 262144 false textImageInput
+   , mistralModel "mistral-nemo" "Mistral Nemo" 0.15 0.15 0.015 0.0 128000 128000
+   , mistralModel "mistral-small-2506" "Mistral Small 3.2" 0.1 0.3 0.01 0.0 128000 16384 false textImageInput
+   , mistralModel "mistral-small-2603" "Mistral Small 4" 0.15 0.6 0.015 0.0 256000 256000 true textImageInput
+   , mistralModel "mistral-small-latest" "Mistral Small (latest)" 0.15 0.6 0.015 0.0 256000 256000 true textImageInput
+   , mistralModel "open-mistral-7b" "Mistral 7B" 0.25 0.25 0.025 0.0 8000 8000
+   , mistralModel "open-mistral-nemo" "Open Mistral Nemo" 0.15 0.15 0.015 0.0 128000 128000
+   , mistralModel "open-mixtral-8x22b" "Mixtral 8x22B" 2.0 6.0 0.2 0.0 64000 64000
+   , mistralModel "open-mixtral-8x7b" "Mixtral 8x7B" 0.7 0.7 0.07 0.0 32000 32000
+   , mistralModel "pixtral-12b" "Pixtral 12B" 0.15 0.15 0.015 0.0 128000 128000 false textImageInput
+   , mistralModel "pixtral-large-latest" "Pixtral Large (latest)" 2.0 6.0 0.2 0.0 128000 128000 false textImageInput
+   ]
+
 structure ProviderInfo where
   id : String
   name : String
@@ -606,6 +665,15 @@ def googleVertexProviderInfo : ProviderInfo :=
     models := googleVertexModels
   }
 
+def mistralProviderInfo : ProviderInfo :=
+  { id := mistralProviderId
+    name := "Mistral"
+    baseUrl := mistralBaseUrl
+    apiKeyEnv := mistralApiKeyEnv
+    defaultModel := mistralDefaultModel
+    models := mistralModels
+  }
+
 structure ProviderCatalog where
   providers : Array ProviderInfo := #[]
 deriving Repr, BEq
@@ -620,10 +688,11 @@ def defaultCatalog : ProviderCatalog :=
        , cerebrasProviderInfo
        , togetherProviderInfo
        , fireworksProviderInfo
-       , anthropicProviderInfo
-       , googleProviderInfo
-       , googleVertexProviderInfo
-       ]
+     , anthropicProviderInfo
+     , googleProviderInfo
+     , googleVertexProviderInfo
+     , mistralProviderInfo
+     ]
   }
 
 def ProviderCatalog.provider? (catalog : ProviderCatalog) (id : String) : Option ProviderInfo :=
@@ -1251,6 +1320,50 @@ def googleVertexStreams : ProviderStreams :=
       pure (applyUsageCostToStream model stream)
   }
 
+def usesMistralReasoningEffort (model : ModelInfo) : Bool :=
+  model.id == "mistral-small-2603" ||
+    model.id == "mistral-small-latest" ||
+    model.id == "mistral-medium-3.5"
+
+def mistralReasoningEffort (model : ModelInfo) (level : LeanAgent.AI.ThinkingLevel) : String :=
+  thinkingLevelPayloadValueD model (.level level) "high"
+
+def mistralOptionsFromSimple
+    (model : ModelInfo)
+    (options : LeanAgent.AI.SimpleStreamOptions) :
+    LeanAgent.AI.Api.MistralConversations.MistralOptions :=
+  let base := LeanAgent.AI.Api.MistralConversations.optionsFromSimple options
+  match options.reasoning with
+  | none => base
+  | some requested =>
+      if !model.reasoning then
+        base
+      else
+        match clampThinkingLevel model (.level requested) with
+        | .off => base
+        | .level level =>
+            if usesMistralReasoningEffort model then
+              { base with reasoningEffort := some (mistralReasoningEffort model level) }
+            else
+              { base with promptMode := some "reasoning" }
+
+def mistralConversationsStreams : ProviderStreams :=
+  { streamSimple := fun model context options => do
+      let options := clampSimpleOptionsToContext model context options
+      let apiKey ← requireApiKeyOrHeaderAuth model.provider options
+      let config : LeanAgent.AI.Api.MistralConversations.MistralConversationsConfig :=
+        { apiKey := apiKey
+          baseUrl := model.baseUrl
+        }
+      let stream ← LeanAgent.AI.Api.MistralConversations.completeStreamWithOptions
+        config
+        model.toModelRef
+        model.input
+        context
+        (mistralOptionsFromSimple model options)
+      pure (applyUsageCostToStream model stream)
+  }
+
 def googleVertexAdcPath : String := "~/.config/gcloud/application_default_credentials.json"
 
 def googleVertexHasAdcCredentials
@@ -1319,6 +1432,7 @@ def createCatalogProvider (info : ProviderInfo) : IO Provider :=
          , { api := LeanAgent.AI.Api.AnthropicMessages.api, streams := anthropicMessagesStreams }
          , { api := LeanAgent.AI.Api.GoogleGenerativeAI.api, streams := googleGenerativeAIStreams }
          , { api := LeanAgent.AI.Api.GoogleVertex.api, streams := googleVertexStreams }
+         , { api := LeanAgent.AI.Api.MistralConversations.api, streams := mistralConversationsStreams }
          ]
     }
 

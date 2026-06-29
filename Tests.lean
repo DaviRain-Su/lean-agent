@@ -837,6 +837,13 @@ def googleVertexModelRef : LeanAgent.AI.ModelRef :=
     baseUrl := some LeanAgent.Models.googleVertexBaseUrl
   }
 
+def mistralModelRef : LeanAgent.AI.ModelRef :=
+  { id := LeanAgent.Models.mistralDefaultModel
+    api := LeanAgent.AI.Api.MistralConversations.api
+    provider := LeanAgent.Models.mistralProviderId
+    baseUrl := some LeanAgent.Models.mistralBaseUrl
+  }
+
 def jsonArrayField? (json : Lean.Json) (key : String) : Option (Array Lean.Json) :=
   match LeanAgent.Json.optVal? json key with
   | some value =>
@@ -1454,6 +1461,301 @@ def testGoogleVertexAuthResolution : IO Unit := do
       assertTrue (result.source == some "gcloud application default credentials")
         "expected Vertex ADC source"
   | none => fail "expected Vertex ADC auth result"
+
+def testMistralConversationsRequestPayloadAndHeaders : IO Unit := do
+  let normalizedToolId := LeanAgent.AI.Api.MistralConversations.normalizeToolCallId "call/read|item"
+  assertTrue (normalizedToolId.length == 9) "expected Mistral tool-call id to be 9 chars"
+  let assistant : LeanAgent.AI.AssistantMessage :=
+    { content :=
+        #[ .text { text := "prior answer" }
+         , .toolCall
+            { id := "call/read|item"
+              name := "read"
+              arguments := LeanAgent.Json.obj [("path", LeanAgent.Json.str "README.md")]
+            }
+         ]
+      api := LeanAgent.AI.Api.MistralConversations.api
+      provider := LeanAgent.Models.mistralProviderId
+      model := LeanAgent.Models.mistralDefaultModel
+      stopReason := .toolUse
+      timestamp := 2
+    }
+  let context : LeanAgent.AI.Context :=
+    { systemPrompt := some "Be precise."
+      messages :=
+        #[ .user
+            { content :=
+                #[ LeanAgent.AI.text "hello"
+                 , LeanAgent.AI.image "aGVsbG8=" "image/png"
+                 ]
+              timestamp := 1
+            }
+         , .assistant assistant
+         , .toolResult
+            { toolCallId := "call/read|item"
+              toolName := "read"
+              content := #[LeanAgent.AI.text "file contents"]
+              isError := false
+              timestamp := 3
+            }
+         ]
+      tools :=
+        #[ { name := "read"
+             description := "Read a file"
+             parameters :=
+              LeanAgent.Json.obj
+                [ ("type", LeanAgent.Json.str "object")
+                , ("properties", LeanAgent.Json.obj [("path", LeanAgent.Json.obj [("type", LeanAgent.Json.str "string")])])
+                , ("required", LeanAgent.Json.arr #[LeanAgent.Json.str "path"])
+                ]
+           }
+         ]
+    }
+  let payload := LeanAgent.AI.Api.MistralConversations.requestToJsonWithOptions
+    mistralModelRef
+    #["text", "image"]
+    context
+    { maxTokens := some 123
+      temperature := some 0.2
+      toolChoice := some (.function "read")
+      promptMode := some "reasoning"
+      reasoningEffort := some "high"
+      sessionId := some "session-123"
+    }
+  assertTrue (jsonStringField? payload "model" == some LeanAgent.Models.mistralDefaultModel)
+    "expected Mistral model id"
+  assertTrue (LeanAgent.Json.optVal? payload "stream" == some (LeanAgent.Json.bool true))
+    "expected streaming Mistral payload"
+  assertTrue (LeanAgent.Json.optVal? payload "max_tokens" == some (LeanAgent.Json.nat 123))
+    "expected Mistral max tokens"
+  assertTrue (jsonStringField? payload "prompt_mode" == some "reasoning")
+    "expected Mistral prompt mode"
+  assertTrue (jsonStringField? payload "reasoning_effort" == some "high")
+    "expected Mistral reasoning effort"
+  assertTrue (jsonStringField? payload "prompt_cache_key" == some "session-123")
+    "expected Mistral prompt cache key"
+  match jsonArrayField? payload "messages" with
+  | some messages =>
+      assertTrue (messages.size == 4) "expected system, user, assistant, tool messages"
+      match messages[0]? with
+      | some systemMessage =>
+          assertTrue (jsonStringField? systemMessage "role" == some "system") "expected Mistral system role"
+          assertTrue (jsonStringField? systemMessage "content" == some "Be precise.") "expected Mistral system text"
+      | none => fail "expected Mistral system message"
+      match messages[1]? with
+      | some userMessage =>
+          assertTrue (jsonStringField? userMessage "role" == some "user") "expected Mistral user role"
+          match jsonArrayField? userMessage "content" with
+          | some content =>
+              match content[0]?, content[1]? with
+              | some textPart, some imagePart =>
+                  assertTrue (jsonStringField? textPart "type" == some "text") "expected Mistral text chunk"
+                  assertTrue (jsonStringField? textPart "text" == some "hello") "expected Mistral text"
+                  assertTrue (jsonStringField? imagePart "type" == some "image_url") "expected Mistral image chunk"
+                  assertTrue (jsonStringField? imagePart "image_url" == some "data:image/png;base64,aGVsbG8=")
+                    "expected Mistral image data URL"
+              | _, _ => fail "expected Mistral text and image chunks"
+          | none => fail "expected Mistral user content array"
+      | none => fail "expected Mistral user message"
+      match messages[2]? with
+      | some assistantMessage =>
+          match jsonArrayField? assistantMessage "tool_calls" with
+          | some toolCalls =>
+              match toolCalls[0]? with
+              | some toolCall =>
+                  assertTrue (jsonStringField? toolCall "id" == some normalizedToolId)
+                    "expected normalized Mistral assistant tool id"
+              | none => fail "expected Mistral assistant tool call"
+          | none => fail "expected Mistral assistant tool_calls"
+      | none => fail "expected Mistral assistant message"
+      match messages[3]? with
+      | some toolMessage =>
+          assertTrue (jsonStringField? toolMessage "tool_call_id" == some normalizedToolId)
+            "expected normalized Mistral tool result id"
+      | none => fail "expected Mistral tool message"
+  | none => fail "expected Mistral messages"
+  match jsonArrayField? payload "tools" with
+  | some tools =>
+      match tools[0]? with
+      | some tool =>
+          assertTrue (jsonStringField? tool "type" == some "function") "expected Mistral function tool"
+          match LeanAgent.Json.optVal? tool "function" with
+          | some fn =>
+              assertTrue (jsonStringField? fn "name" == some "read") "expected Mistral function name"
+              assertTrue (LeanAgent.Json.optVal? fn "strict" == some (LeanAgent.Json.bool false))
+                "expected Mistral strict false"
+              assertTrue (LeanAgent.Json.optVal? fn "parameters" |>.isSome)
+                "expected Mistral tool parameters"
+          | none => fail "expected Mistral function object"
+      | none => fail "expected Mistral tool"
+  | none => fail "expected Mistral tools"
+  match LeanAgent.Json.optVal? payload "tool_choice" with
+  | some toolChoice =>
+      match LeanAgent.Json.optVal? toolChoice "function" with
+      | some fn => assertTrue (jsonStringField? fn "name" == some "read") "expected Mistral tool choice name"
+      | none => fail "expected Mistral function tool choice"
+  | none => fail "expected Mistral tool_choice"
+  let headers := LeanAgent.AI.Api.MistralConversations.requestHeaders
+    { apiKey := "mistral-key"
+      headers := #[("X-Custom", "custom")]
+    }
+    { sessionId := some "session-123"
+      headers := #[("X-Trace", some "trace-mistral")]
+    }
+  assertTrue (headerValueCaseInsensitive? headers "authorization" == some "Bearer mistral-key")
+    "expected Mistral bearer auth"
+  assertTrue (headerValueCaseInsensitive? headers "x-affinity" == some "session-123")
+    "expected Mistral x-affinity prompt cache header"
+  assertTrue (headerValueCaseInsensitive? headers "X-Custom" == some "custom")
+    "expected Mistral custom config header"
+  assertTrue (headerValueCaseInsensitive? headers "X-Trace" == some "trace-mistral")
+    "expected Mistral request header"
+  let overrideHeaders := LeanAgent.AI.Api.MistralConversations.requestHeaders
+    { apiKey := "" }
+    { sessionId := some "session-123"
+      headers := #[("Authorization", some "Bearer external"), ("x-affinity", some "caller-session")]
+    }
+  assertTrue (headerValueCaseInsensitive? overrideHeaders "authorization" == some "Bearer external")
+    "expected caller-owned Mistral authorization"
+  assertTrue (headerValueCaseInsensitive? overrideHeaders "x-affinity" == some "caller-session")
+    "expected caller-owned x-affinity"
+
+def testMistralReasoningAndPromptCacheOptions : IO Unit := do
+  let small2603 ←
+    match LeanAgent.Models.mistralModels.find? (fun model => model.id == "mistral-small-2603") with
+    | some model => pure model
+    | none => throw (IO.userError "expected Mistral Small 4 model")
+  let magistral ←
+    match LeanAgent.Models.mistralModels.find? (fun model => model.id == "magistral-medium-latest") with
+    | some model => pure model
+    | none => throw (IO.userError "expected Magistral model")
+  let large ←
+    match LeanAgent.Models.mistralModels.find? (fun model => model.id == "mistral-large-latest") with
+    | some model => pure model
+    | none => throw (IO.userError "expected Mistral Large model")
+  let smallOptions := LeanAgent.Models.mistralOptionsFromSimple
+    small2603
+    { reasoning := some .medium }
+  assertTrue (smallOptions.reasoningEffort == some "high") "expected Mistral Small 4 reasoning effort"
+  assertTrue smallOptions.promptMode.isNone "expected no prompt mode for reasoning-effort models"
+  let magistralOptions := LeanAgent.Models.mistralOptionsFromSimple
+    magistral
+    { reasoning := some .medium }
+  assertTrue (magistralOptions.promptMode == some "reasoning") "expected Magistral prompt mode"
+  assertTrue magistralOptions.reasoningEffort.isNone "expected no reasoning effort for Magistral"
+  let noReasoning := LeanAgent.Models.mistralOptionsFromSimple
+    small2603
+    {}
+  assertTrue noReasoning.reasoningEffort.isNone "expected no Mistral reasoning controls without request"
+  assertTrue noReasoning.promptMode.isNone "expected no Mistral prompt mode without request"
+  let cachePayload := LeanAgent.AI.Api.MistralConversations.requestToJsonWithOptions
+    large.toModelRef
+    large.input
+    { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }] }
+    { sessionId := some "session-123" }
+  assertTrue (jsonStringField? cachePayload "prompt_cache_key" == some "session-123")
+    "expected Mistral prompt cache key from session"
+  let noCachePayload := LeanAgent.AI.Api.MistralConversations.requestToJsonWithOptions
+    large.toModelRef
+    large.input
+    { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }] }
+    { sessionId := some "session-123"
+      cacheRetention := some .none
+    }
+  assertTrue (jsonStringField? noCachePayload "prompt_cache_key" == none)
+    "expected disabled Mistral prompt cache"
+
+def testMistralConversationsParsesResponse : IO Unit := do
+  let raw :=
+    "{ \"id\":\"chatcmpl_mistral\", \"model\":\"devstral-medium-latest\", \"choices\":[{" ++
+    "\"finish_reason\":\"tool_calls\", \"message\":{" ++
+    "\"content\":[{\"type\":\"thinking\",\"thinking\":[{\"type\":\"text\",\"text\":\"plan\"}]},{\"type\":\"text\",\"text\":\"hello\"}]," ++
+    "\"tool_calls\":[{\"id\":\"abc123def\",\"type\":\"function\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}]" ++
+    "}}], \"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15,\"prompt_tokens_details\":{\"cached_tokens\":3}} }"
+  match LeanAgent.AI.Api.MistralConversations.parseChatCompletion
+      LeanAgent.AI.Api.MistralConversations.api
+      LeanAgent.Models.mistralProviderId
+      LeanAgent.Models.mistralDefaultModel
+      7
+      raw with
+  | .ok response =>
+      assertTrue (response.responseId == some "chatcmpl_mistral") "expected Mistral response id"
+      assertTrue (response.responseModel == none) "expected same Mistral model to be omitted"
+      assertTrue (response.stopReason == .toolUse) "expected Mistral tool-use stop"
+      assertTrue (response.usage.input == 7) "expected Mistral cached input subtraction"
+      assertTrue (response.usage.output == 5) "expected Mistral output tokens"
+      assertTrue (response.usage.cacheRead == 3) "expected Mistral cache read"
+      assertTrue (response.usage.totalTokens == 15) "expected Mistral total tokens"
+      assertTrue
+        (response.content.any fun
+          | .thinking thinking => thinking.thinking == "plan"
+          | _ => false)
+        "expected Mistral thinking block"
+      assertTrue
+        (response.content.any fun
+          | .text text => text.text == "hello"
+          | _ => false)
+        "expected Mistral text block"
+      match LeanAgent.AI.contentToolCalls response.content |>.toList with
+      | [call] =>
+          assertTrue (call.id == "abc123def") "expected Mistral tool id"
+          assertTrue (call.name == "read") "expected Mistral tool name"
+          assertTrue (LeanAgent.Json.optVal? call.arguments "path" == some (LeanAgent.Json.str "README.md"))
+            "expected Mistral tool args"
+      | _ => fail "expected one Mistral tool call"
+  | .error err => fail s!"expected Mistral parse success: {err}"
+
+def testMistralConversationsParsesStreamingEvents : IO Unit := do
+  let raw := String.intercalate "\n\n"
+    [ "data: {\"id\":\"chatcmpl_stream\",\"model\":\"devstral-medium-latest\",\"choices\":[{\"delta\":{\"content\":[{\"type\":\"thinking\",\"thinking\":[{\"type\":\"text\",\"text\":\"plan\"}]}]},\"finish_reason\":null}],\"usage\":{\"prompt_tokens\":4,\"prompt_tokens_details\":{\"cached_tokens\":1}}}"
+    , "data: {\"choices\":[{\"delta\":{\"content\":\"hel\"},\"finish_reason\":null}]}"
+    , "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"},\"finish_reason\":null}]}"
+    , "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"abc123def\",\"type\":\"function\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"path\\\":\"}}]},\"finish_reason\":null}]}"
+    , "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"README.md\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":2,\"total_tokens\":6,\"prompt_tokens_details\":{\"cached_tokens\":1}}}"
+    , "data: [DONE]"
+    , ""
+    ]
+  match LeanAgent.AI.Api.MistralConversations.parseStreamingEventStream
+      LeanAgent.AI.Api.MistralConversations.api
+      LeanAgent.Models.mistralProviderId
+      LeanAgent.Models.mistralDefaultModel
+      9
+      raw with
+  | .ok stream =>
+      assertTrue stream.isComplete "expected completed Mistral stream"
+      assertTrue (stream.result.responseId == some "chatcmpl_stream") "expected streamed Mistral response id"
+      assertTrue (stream.result.responseModel == none) "expected same streamed Mistral model to be omitted"
+      assertTrue (stream.result.stopReason == .toolUse) "expected streamed Mistral tool-use stop"
+      assertTrue (stream.result.usage.input == 3) "expected streamed Mistral input"
+      assertTrue (stream.result.usage.output == 2) "expected streamed Mistral output"
+      assertTrue (stream.result.usage.cacheRead == 1) "expected streamed Mistral cache read"
+      assertTrue (stream.result.usage.totalTokens == 6) "expected streamed Mistral total tokens"
+      assertTrue
+        (LeanAgent.AI.contentPlainText stream.result.content == "plan\nhello")
+        "expected streamed Mistral text content"
+      match LeanAgent.AI.contentToolCalls stream.result.content |>.toList with
+      | [call] =>
+          assertTrue (call.id == "abc123def") "expected streamed Mistral tool id"
+          assertTrue (call.name == "read") "expected streamed Mistral tool name"
+          assertTrue (LeanAgent.Json.optVal? call.arguments "path" == some (LeanAgent.Json.str "README.md"))
+            "expected streamed Mistral tool arguments"
+      | _ => fail "expected one streamed Mistral tool call"
+      assertTrue
+        (stream.events.any fun
+          | .thinkingDelta _ "plan" _ => true
+          | _ => false)
+        "expected Mistral thinking delta"
+      assertTrue
+        (stream.events.any fun
+          | .textDelta _ "hel" _ => true
+          | _ => false)
+        "expected Mistral text delta"
+      assertTrue
+        (stream.events.any fun
+          | .toolCallDelta _ "{\"path\":" _ => true
+          | _ => false)
+        "expected Mistral tool-call delta"
+  | .error err => fail s!"expected Mistral streaming parse success: {err}"
 
 def testGitHubCopilotDynamicHeaders : IO Unit := do
   let userOnly : Array LeanAgent.AI.Message :=
@@ -2347,6 +2649,7 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
      , LeanAgent.Models.anthropicProviderId
      , LeanAgent.Models.googleProviderId
      , LeanAgent.Models.googleVertexProviderId
+     , LeanAgent.Models.mistralProviderId
      ]
   for providerId in expectedProviders do
     match LeanAgent.Models.ProviderCatalog.provider? catalog providerId with
@@ -2363,6 +2666,7 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
   assertTrue (rendered.contains "anthropic/claude-sonnet-4-5") "expected Anthropic model"
   assertTrue (rendered.contains "google/gemini-2.5-flash") "expected Google Gemini model"
   assertTrue (rendered.contains "google-vertex/gemini-2.5-flash") "expected Google Vertex model"
+  assertTrue (rendered.contains "mistral/devstral-medium-latest") "expected Mistral model"
   match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.anthropicOAuthTokenEnv with
   | some provider =>
       assertTrue (provider.id == LeanAgent.Models.anthropicProviderId) "expected Anthropic OAuth token env"
@@ -2378,11 +2682,17 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
       assertTrue (provider.defaultModel == LeanAgent.Models.googleVertexDefaultModel)
         "expected Google Vertex default model"
   | none => fail "expected Google Vertex provider by env"
+  match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.mistralApiKeyEnv with
+  | some provider =>
+      assertTrue (provider.id == LeanAgent.Models.mistralProviderId) "expected Mistral provider by env"
+      assertTrue (provider.defaultModel == LeanAgent.Models.mistralDefaultModel)
+        "expected Mistral default model"
+  | none => fail "expected Mistral provider by env"
 
 def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
   let collection ← LeanAgent.Models.createDefaultModels
   let providers ← collection.getProviders
-  assertTrue (providers.size == 11) "expected default provider family"
+  assertTrue (providers.size == 12) "expected default provider family"
   match ← collection.getModel? LeanAgent.Models.openRouterProviderId LeanAgent.Models.openRouterDefaultModel with
   | some model =>
       assertTrue (model.api == "openai-completions") "expected OpenRouter OpenAI-compatible API"
@@ -2409,6 +2719,12 @@ def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
       assertTrue model.reasoning "expected Google Vertex reasoning metadata"
       assertTrue (model.baseUrl == LeanAgent.Models.googleVertexBaseUrl) "expected Google Vertex placeholder base URL"
   | none => fail "expected Google Vertex model in default runtime collection"
+  match ← collection.getModel? LeanAgent.Models.mistralProviderId LeanAgent.Models.mistralDefaultModel with
+  | some model =>
+      assertTrue (model.api == LeanAgent.AI.Api.MistralConversations.api) "expected Mistral Conversations API"
+      assertTrue (model.baseUrl == LeanAgent.Models.mistralBaseUrl) "expected Mistral base URL"
+      assertTrue (model.maxTokens == 262144) "expected Mistral default max tokens"
+  | none => fail "expected Mistral model in default runtime collection"
 
 def assertProviderFactoryMatchesInfo (mkProvider : IO LeanAgent.Models.Provider)
     (info : LeanAgent.Models.ProviderInfo) : IO Unit := do
@@ -2444,6 +2760,7 @@ def testOpenAICompatibleProviderFactoriesMatchCatalog : IO Unit := do
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Anthropic.provider LeanAgent.Models.anthropicProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Google.provider LeanAgent.Models.googleProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.GoogleVertex.provider LeanAgent.Models.googleVertexProviderInfo
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Mistral.provider LeanAgent.Models.mistralProviderInfo
 
 def testLegacySelectionRejectsAnthropicProvider : IO Unit := do
   match ← LeanAgent.Models.resolveSelection { apiKeyEnv := some LeanAgent.Models.anthropicApiKeyEnv } with
@@ -2461,6 +2778,11 @@ def testLegacySelectionRejectsAnthropicProvider : IO Unit := do
   | .error err =>
       assertTrue (err.contains "legacy CLI path currently supports only openai-completions")
         "expected unsupported Google Vertex provider API error"
+  match ← LeanAgent.Models.resolveSelection { apiKeyEnv := some LeanAgent.Models.mistralApiKeyEnv } with
+  | .ok _ => fail "expected legacy CLI selection to reject Mistral"
+  | .error err =>
+      assertTrue (err.contains "legacy CLI path currently supports only openai-completions")
+        "expected unsupported Mistral provider API error"
 
 def fakeAuthContext : LeanAgent.AI.Auth.AuthContext :=
   { env := fun name =>
@@ -3252,6 +3574,8 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
     "expected all providers to include Google catalog provider"
   assertTrue (providerIds.contains LeanAgent.Models.googleVertexProviderId)
     "expected all providers to include Google Vertex catalog provider"
+  assertTrue (providerIds.contains LeanAgent.Models.mistralProviderId)
+    "expected all providers to include Mistral catalog provider"
   assertTrue (providerIds.contains LeanAgent.AI.Providers.CloudflareWorkersAI.providerId)
     "expected all providers to include Cloudflare Workers AI"
   assertTrue (providerIds.contains LeanAgent.AI.Providers.CloudflareAIGateway.providerId)
@@ -3281,6 +3605,12 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
       assertTrue (model.api == LeanAgent.AI.Api.GoogleVertex.api) "expected Google Vertex builtin model"
   | none => fail "expected Google Vertex builtin model lookup"
   match LeanAgent.AI.Providers.All.getBuiltinModel?
+    LeanAgent.Models.mistralProviderId
+    LeanAgent.Models.mistralDefaultModel with
+  | some model =>
+      assertTrue (model.api == LeanAgent.AI.Api.MistralConversations.api) "expected Mistral builtin model"
+  | none => fail "expected Mistral builtin model lookup"
+  match LeanAgent.AI.Providers.All.getBuiltinModel?
     LeanAgent.AI.Providers.CloudflareAIGateway.providerId
     "gpt-4o-mini" with
   | some model =>
@@ -3288,7 +3618,7 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
   | none => fail "expected Cloudflare AI Gateway builtin model lookup"
   let collection ← LeanAgent.AI.Providers.All.builtinModels none fakeCloudflareAuthContext
   let providers ← collection.getProviders
-  assertTrue (providers.size == 13) "expected implemented builtin text providers"
+  assertTrue (providers.size == 14) "expected implemented builtin text providers"
   match ← collection.getProvider? LeanAgent.AI.Providers.CloudflareWorkersAI.providerId with
   | some _ => pure ()
   | none => fail "expected Workers AI provider in builtin collection"
@@ -3319,6 +3649,9 @@ def testEnvApiKeysProviderMap : IO Unit := do
   assertTrue
     (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "google-vertex" == some #[LeanAgent.Models.googleVertexApiKeyEnv])
     "expected Google Vertex env var"
+  assertTrue
+    (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "mistral" == some #[LeanAgent.Models.mistralApiKeyEnv])
+    "expected Mistral env var"
   assertTrue
     (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "unknown-provider" == none)
     "expected unknown provider to have no env vars"
@@ -4582,6 +4915,27 @@ def httpServerScript : String :=
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
     , "            return"
+    , "        if self.path == '/mistral/v1/chat/completions':"
+    , "            request = json.loads(body)"
+    , "            messages = request.get('messages') or []"
+    , "            first = messages[0] if messages else {}"
+    , "            content = first.get('content') or ''"
+    , "            if isinstance(content, list):"
+    , "                first_text = content[0].get('text') if content else ''"
+    , "            else:"
+    , "                first_text = content"
+    , "            text = '|'.join([request.get('model') or '', str(request.get('stream')), self.headers.get('Authorization') or '', self.headers.get('x-affinity') or '', request.get('prompt_cache_key') or '', request.get('reasoning_effort') or '', request.get('prompt_mode') or '', self.headers.get('X-Trace') or '', first_text or ''])"
+    , "            payload = ("
+    , "                'data: ' + json.dumps({'id': 'chatcmpl_mistral_http', 'model': request.get('model') or '', 'choices': [{'delta': {'content': text[:24]}, 'finish_reason': None}], 'usage': {'prompt_tokens': 5, 'prompt_tokens_details': {'cached_tokens': 2}}}) + '\\n\\n' +"
+    , "                'data: ' + json.dumps({'choices': [{'delta': {'content': text[24:]}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 5, 'completion_tokens': 3, 'total_tokens': 8, 'prompt_tokens_details': {'cached_tokens': 2}}}) + '\\n\\n' +"
+    , "                'data: [DONE]\\n\\n'"
+    , "            ).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'text/event-stream')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/large':"
     , "            payload = b'x' * 1024"
     , "            self.send_response(200)"
@@ -5348,6 +5702,42 @@ def testGoogleVertexStreamWithOptionsLocal : IO Unit := do
         | _ => false)
       "expected Vertex local text delta"
 
+def testMistralConversationsStreamWithOptionsLocal : IO Unit := do
+  let port := 18100
+  withHttpServer port do
+    let stream ← LeanAgent.AI.Api.MistralConversations.completeStreamWithOptions
+      { apiKey := "mistral-key"
+        baseUrl := s!"http://127.0.0.1:{port}/mistral"
+        timeoutSeconds := 5
+        connectTimeoutSeconds := 5
+        noProxy := some "*"
+        userAgent := "lean-agent-test/0.1.0"
+      }
+      mistralModelRef
+      #["text", "image"]
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+      { sessionId := some "session-123"
+        reasoningEffort := some "high"
+        promptMode := some "reasoning"
+        headers := #[("X-Trace", some "trace-mistral")]
+      }
+    assertTrue stream.isComplete "expected completed Mistral stream"
+    assertTrue (stream.result.responseId == some "chatcmpl_mistral_http") "expected Mistral response id"
+    assertTrue
+      (LeanAgent.AI.contentPlainText stream.result.content ==
+        "devstral-medium-latest|True|Bearer mistral-key|session-123|session-123|high|reasoning|trace-mistral|system")
+      "expected Mistral model, stream flag, bearer auth, cache affinity, reasoning, prompt mode, custom header, and system text"
+    assertTrue (stream.result.usage.input == 3) "expected Mistral local cached input subtraction"
+    assertTrue (stream.result.usage.output == 3) "expected Mistral local output usage"
+    assertTrue (stream.result.usage.cacheRead == 2) "expected Mistral local cache read"
+    assertTrue
+      (stream.events.any fun
+        | .textDelta _ delta _ => delta.contains "devstral-medium-latest"
+        | _ => false)
+      "expected Mistral local text delta"
+
 def testCompatAzureOpenAIResponsesBuiltinDispatch : IO Unit := do
   let port := 18095
   withHttpServer port do
@@ -5444,6 +5834,10 @@ def main : IO UInt32 := do
     testGoogleGenerativeAIParsesStreamingEvents
     testGoogleVertexUrlsAndHeaders
     testGoogleVertexAuthResolution
+    testMistralConversationsRequestPayloadAndHeaders
+    testMistralReasoningAndPromptCacheOptions
+    testMistralConversationsParsesResponse
+    testMistralConversationsParsesStreamingEvents
     testGitHubCopilotDynamicHeaders
     testOpenAIResponsesRequestPayload
     testOpenAIResponsesRequestUsesThinkingLevelMap
@@ -5580,6 +5974,7 @@ def main : IO UInt32 := do
     testAnthropicMessagesStreamWithOptionsLocal
     testGoogleGenerativeAIStreamWithOptionsLocal
     testGoogleVertexStreamWithOptionsLocal
+    testMistralConversationsStreamWithOptionsLocal
     testCompatAzureOpenAIResponsesBuiltinDispatch
     testOpenAICompletionsProviderErrorDiagnostics
     IO.println "lean-agent tests passed"

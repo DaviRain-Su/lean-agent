@@ -4,6 +4,7 @@ import LeanAgent.AI.Api.GoogleGenerativeAI
 import LeanAgent.AI.Api.GoogleShared
 import LeanAgent.AI.Api.GoogleVertex
 import LeanAgent.AI.Api.Lazy
+import LeanAgent.AI.Api.MistralConversations
 import LeanAgent.AI.Api.Cloudflare
 import LeanAgent.AI.Api.OpenAICompletions
 import LeanAgent.AI.Api.OpenAIPromptCache
@@ -36,6 +37,7 @@ import LeanAgent.AI.Providers.Fireworks
 import LeanAgent.AI.Providers.Google
 import LeanAgent.AI.Providers.GoogleVertex
 import LeanAgent.AI.Providers.Groq
+import LeanAgent.AI.Providers.Mistral
 import LeanAgent.AI.Providers.OpenAI
 import LeanAgent.AI.Providers.OpenRouterImages
 import LeanAgent.AI.Providers.OpenRouter

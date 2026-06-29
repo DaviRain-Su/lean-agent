@@ -47,6 +47,8 @@ def registerBuiltInApiProviders : IO Unit := do
     registerApiProvider { api := LeanAgent.AI.Api.GoogleGenerativeAI.api, streams := LeanAgent.Models.googleGenerativeAIStreams }
   if (← getApiProvider? LeanAgent.AI.Api.GoogleVertex.api).isNone then
     registerApiProvider { api := LeanAgent.AI.Api.GoogleVertex.api, streams := LeanAgent.Models.googleVertexStreams }
+  if (← getApiProvider? LeanAgent.AI.Api.MistralConversations.api).isNone then
+    registerApiProvider { api := LeanAgent.AI.Api.MistralConversations.api, streams := LeanAgent.Models.mistralConversationsStreams }
 
 def resetApiProviders : IO Unit := do
   clearApiProviders
