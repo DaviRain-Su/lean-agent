@@ -1,3 +1,4 @@
+import LeanAgent.AI.EventStream
 import LeanAgent.Core
 
 namespace LeanAgent
@@ -42,6 +43,25 @@ def executeToolCall (tools : Array AgentTool) (call : ToolCall) (sink : EventSin
   sink (.toolExecutionEnd result)
   pure result
 
+def emitAssistantStreamEvents (stream : LeanAgent.AI.AssistantMessageEventStream) (sink : EventSink) :
+    IO AgentMessage := do
+  let mut finalMessage := LeanAgent.AI.toLegacyMessage (.assistant stream.result)
+  for event in stream.events do
+    match event with
+    | .start _ =>
+        sink (.messageStart "assistant")
+    | .textDelta _ delta _ =>
+        if !delta.isEmpty then
+          sink (.messageDelta delta)
+    | .done _ message =>
+        finalMessage := LeanAgent.AI.toLegacyMessage (.assistant message)
+        sink (.messageEnd finalMessage)
+    | .error _ message =>
+        finalMessage := LeanAgent.AI.toLegacyMessage (.assistant message)
+        sink (.messageEnd finalMessage)
+    | _ => pure ()
+  pure finalMessage
+
 def runTurns
     (config : AgentLoopConfig)
     (remainingTurns : Nat)
@@ -54,24 +74,25 @@ def runTurns
     pure messages
   | remainingTurns + 1 =>
     sink (.turnStart turn)
-    let response ← config.provider.complete
+    let request :=
       { model := config.model
         system := config.system
         messages := messages
         tools := config.tools
       }
-    let assistant := AgentMessage.assistant response.content response.toolCalls
-    sink (.messageStart "assistant")
-    if !response.content.isEmpty then
-      sink (.messageDelta response.content)
-    sink (.messageEnd assistant)
+    let stream ← LeanAgent.AI.streamLegacyProvider config.provider request "legacy" "legacy"
+    let assistant ← emitAssistantStreamEvents stream sink
     let messages := messages.push assistant
-    if response.toolCalls.isEmpty then
+    let toolCalls :=
+      match assistant with
+      | .assistant _ calls => calls
+      | _ => #[]
+    if toolCalls.isEmpty then
       sink (.turnEnd turn)
       pure messages
     else
       let mut updated := messages
-      for call in response.toolCalls do
+      for call in toolCalls do
         let result ← executeToolCall config.tools call sink
         updated := updated.push (toolResultMessage result)
       sink (.turnEnd turn)

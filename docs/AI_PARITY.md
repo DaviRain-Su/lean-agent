@@ -90,7 +90,7 @@ before expanding provider behavior.
 | Text/image content blocks | `LeanAgent.AI.Types` | implemented | Text, thinking, image, and tool-call content blocks exist with JSON helpers. |
 | User/assistant/tool result messages | `LeanAgent.AI.Types` | partial | Pi-style messages exist with JSON helpers. Runtime migration from `Core.AgentMessage` is not complete. |
 | Tool schema and tool call content | `LeanAgent.AI.Types` | partial | Tool call exists, but schema validation/typebox parity is missing. |
-| Assistant stream events | `LeanAgent.AI.Types`, `LeanAgent.AI.EventStream` | partial | Event data types and stream/result container exist. Async iteration and live provider streaming are still missing. |
+| Assistant stream events | `LeanAgent.AI.Types`, `LeanAgent.AI.EventStream`, `LeanAgent.Loop` | partial | Event data types, stream/result container, and agent-loop bridge exist. Async iteration and live provider streaming are still missing. |
 | Usage and cost | `LeanAgent.AI.Types` | partial | Usage/cost types and JSON helpers exist. Token accounting is not wired into providers. |
 | Stop reasons and errors | `LeanAgent.AI.Types` | partial | Stop reason types exist. Provider error diagnostics still missing. |
 | Thinking/reasoning levels | `LeanAgent.AI.Types` | partial | Thinking level types exist. Model thinking-level maps/helpers still missing. |
@@ -208,7 +208,7 @@ should be generated or checked in as Lean data.
 | `utils/abort-signals.ts` | `LeanAgent.AI.Util.Abort` | missing | Lean cancellation model needs separate design. |
 | `utils/diagnostics.ts` | `LeanAgent.AI.Util.Diagnostics` | missing | Provider diagnostics and assistant message diagnostics. |
 | `utils/estimate.ts` | `LeanAgent.AI.Util.Estimate` | missing | Token estimation. |
-| `utils/event-stream.ts` | `LeanAgent.AI.EventStream` | partial | Synchronous event/result container and legacy provider wrapper exist. Async iteration/backpressure is not implemented. |
+| `utils/event-stream.ts` | `LeanAgent.AI.EventStream`, `LeanAgent.Loop` | partial | Synchronous event/result container, legacy provider wrapper, and loop consumption bridge exist. Async iteration/backpressure is not implemented. |
 | `utils/hash.ts` | `LeanAgent.AI.Util.Hash` | missing | Stable hashing for cache/session affinity. |
 | `utils/headers.ts` | `LeanAgent.AI.Util.Headers` | missing | Header merge/suppression helpers. |
 | `utils/json-parse.ts` | `LeanAgent.Json` or `LeanAgent.AI.Util.JsonParse` | partial | Basic JSON helpers exist, partial JSON cleanup missing. |
@@ -272,7 +272,7 @@ Deliver:
 
 Exit criteria:
 
-- Agent loop can consume stream events or complete results through the same boundary.
+- Agent loop can consume stream events or complete results through the same boundary. Status: partial; current loop consumes a legacy provider stream bridge, not live provider streaming.
 
 ### M3: Models Collection and Auth
 

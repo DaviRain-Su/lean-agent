@@ -344,6 +344,37 @@ def testAIEventStreamLegacyProviderWrapper : IO Unit := do
   assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "streamed") "expected provider content"
   assertTrue stream.isComplete "expected wrapper stream to be complete"
 
+def eventBridgeProvider : ModelProvider :=
+  { complete := fun _ => pure { content := "bridged", toolCalls := #[], finishReason := some "stop" } }
+
+def testAgentLoopUsesAssistantEventStreamBridge : IO Unit := do
+  let events ← IO.mkRef #[]
+  let sink : EventSink := fun event => do
+    let label :=
+      match event with
+      | .messageStart "assistant" => some "message_start"
+      | .messageDelta "bridged" => some "message_delta"
+      | .messageEnd (.assistant "bridged" calls) =>
+          if calls.isEmpty then some "message_end" else none
+      | _ => none
+    match label with
+    | some value => events.modify (fun current => current.push value)
+    | none => pure ()
+  let messages ← runAgentLoop
+    { provider := eventBridgeProvider
+      model := "fake"
+      system := defaultSystemPrompt
+      tools := #[]
+      maxTurns := 1
+    }
+    #[.user "hello"]
+    sink
+  let labels ← events.get
+  assertTrue (labels == #["message_start", "message_delta", "message_end"]) "expected assistant stream events"
+  match messages.back? with
+  | some (.assistant "bridged" calls) => assertTrue calls.isEmpty "expected final assistant message"
+  | _ => fail "expected assistant message from stream bridge"
+
 def continueProvider : ModelProvider :=
   { complete := fun _ => pure { content := "continued", toolCalls := #[] } }
 
@@ -535,6 +566,7 @@ def main : IO UInt32 := do
     testAIEventStreamTextResult
     testAIEventStreamToolUseResult
     testAIEventStreamLegacyProviderWrapper
+    testAgentLoopUsesAssistantEventStreamBridge
     testAgentSessionCreateAndContinue
     testAgentSessionRejectsAssistantContinue
     testJsonEventShape
