@@ -1,8 +1,8 @@
 import LeanAgent.Core
 import LeanAgent.AI.Auth
+import LeanAgent.AI.Api.OpenAICompletions
 import LeanAgent.AI.EventStream
 import LeanAgent.AI.Types
-import LeanAgent.OpenAI
 
 namespace LeanAgent.Models
 
@@ -163,7 +163,7 @@ def renderCatalog (catalog : ProviderCatalog := defaultCatalog) : String :=
 def provider
     (baseUrl apiKey : String)
     (noProxy : Option String := none) : ModelProvider :=
-  LeanAgent.OpenAI.provider
+  LeanAgent.AI.Api.OpenAICompletions.provider
     { apiKey := apiKey
       baseUrl := baseUrl
       noProxy := noProxy
@@ -357,7 +357,7 @@ def openAICompatibleStreams : ProviderStreams :=
       match options.apiKey with
       | none => throw (modelsError .auth s!"missing API key for provider {model.provider}")
       | some apiKey =>
-          let provider := LeanAgent.OpenAI.provider
+          let provider := LeanAgent.AI.Api.OpenAICompletions.provider
             { apiKey := apiKey
               baseUrl := model.baseUrl
             }

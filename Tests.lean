@@ -208,6 +208,73 @@ def testOpenAIAssistantOmitsEmptyToolCalls : IO Unit := do
   let json := LeanAgent.OpenAI.messageToJson (AgentMessage.assistant "done" #[])
   assertTrue (LeanAgent.Json.optVal? json "tool_calls" == none) "empty tool_calls should be omitted"
 
+def noopTool : AgentTool :=
+  { name := "read"
+    description := "Read a file"
+    inputSchema := LeanAgent.Json.obj [("type", LeanAgent.Json.str "object")]
+    execute := fun call =>
+      pure
+        { toolCallId := call.id
+          name := call.name
+          ok := true
+          content := ""
+        }
+  }
+
+def basicProviderRequest (tools : Array AgentTool := #[]) (messages : Array AgentMessage := #[.user "hello"]) :
+    ProviderRequest :=
+  { model := "model"
+    system := "system"
+    messages := messages
+    tools := tools
+  }
+
+def testOpenAICompletionsOmitsEmptyTools : IO Unit := do
+  let json := LeanAgent.AI.Api.OpenAICompletions.requestToJsonWithOptions (basicProviderRequest)
+  assertTrue (LeanAgent.Json.optVal? json "tools" == none) "empty tools should be omitted"
+  assertTrue (LeanAgent.Json.optVal? json "tool_choice" == none) "tool_choice should be omitted without tools"
+
+def testOpenAICompletionsIncludesToolsWhenPresent : IO Unit := do
+  let json := LeanAgent.AI.Api.OpenAICompletions.requestToJsonWithOptions (basicProviderRequest #[noopTool])
+  match LeanAgent.Json.optVal? json "tools" with
+  | some value =>
+      match value.getArr? with
+      | .ok tools => assertTrue (tools.size == 1) "expected one serialized tool"
+      | .error _ => fail "expected tools array"
+  | none => fail "expected tools field"
+  assertTrue (LeanAgent.Json.optVal? json "tool_choice" == some (LeanAgent.Json.str "auto")) "expected auto tool choice"
+
+def testOpenAICompletionsIncludesEmptyToolsForToolHistory : IO Unit := do
+  let toolCall : ToolCall :=
+    { id := "call-1"
+      name := "read"
+      arguments := LeanAgent.Json.obj []
+    }
+  let json := LeanAgent.AI.Api.OpenAICompletions.requestToJsonWithOptions
+    (basicProviderRequest #[] #[.assistant "" #[toolCall]])
+  match LeanAgent.Json.optVal? json "tools" with
+  | some value =>
+      match value.getArr? with
+      | .ok tools => assertTrue tools.isEmpty "expected empty tools array for tool history"
+      | .error _ => fail "expected tools array"
+  | none => fail "expected tools field for tool history"
+  assertTrue (LeanAgent.Json.optVal? json "tool_choice" == some (LeanAgent.Json.str "auto")) "expected tool choice for tool history"
+
+def testOpenAICompletionsSerializesOptions : IO Unit := do
+  let options : LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsOptions :=
+    { temperature := some 1.0
+      maxTokens := some 123
+      reasoningEffort := some .xhigh
+      toolChoice := some .required
+    }
+  let json := LeanAgent.AI.Api.OpenAICompletions.requestToJsonWithOptions (basicProviderRequest #[noopTool]) options
+  assertTrue (LeanAgent.Json.optVal? json "temperature" |>.isSome) "expected temperature"
+  assertTrue (LeanAgent.Json.optVal? json "max_tokens" == some (LeanAgent.Json.nat 123)) "expected max_tokens"
+  assertTrue
+    (LeanAgent.Json.optVal? json "reasoning_effort" == some (LeanAgent.Json.str "high"))
+    "expected xhigh to clamp to high"
+  assertTrue (LeanAgent.Json.optVal? json "tool_choice" == some (LeanAgent.Json.str "required")) "expected required tool choice"
+
 def testModelCatalogDeepSeekDefaults : IO Unit := do
   let catalog := LeanAgent.Models.defaultCatalog
   match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.deepSeekApiKeyEnv with
@@ -658,6 +725,10 @@ def main : IO UInt32 := do
     testProjectSkillExpansion
     testSessionJsonlRoundTrip
     testOpenAIAssistantOmitsEmptyToolCalls
+    testOpenAICompletionsOmitsEmptyTools
+    testOpenAICompletionsIncludesToolsWhenPresent
+    testOpenAICompletionsIncludesEmptyToolsForToolHistory
+    testOpenAICompletionsSerializesOptions
     testModelCatalogDeepSeekDefaults
     testModelsAuthEnvApiKeyResolution
     testModelsAuthStoredCredentialWins
