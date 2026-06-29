@@ -889,6 +889,37 @@ def testOpenAIResponsesSharedOmitsDifferentModelFcItemId : IO Unit := do
       assertTrue (LeanAgent.Json.optVal? functionCall "id" == none) "expected different-model fc item id to be omitted"
   | none => fail "expected function_call item"
 
+def testOpenAIResponsesSharedGeneratesFallbackMessageIds : IO Unit := do
+  let assistant : LeanAgent.AI.AssistantMessage :=
+    { content :=
+        #[ .thinking { thinking := "private reasoning" }
+         , .text { text := "visible answer" }
+         ]
+      api := LeanAgent.AI.Api.AnthropicMessages.api
+      provider := LeanAgent.Models.anthropicProviderId
+      model := "claude-opus-4-8"
+      stopReason := .stop
+      timestamp := 2
+    }
+  let context : LeanAgent.AI.Context :=
+    { systemPrompt := some "You are concise."
+      messages :=
+        #[ .user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }
+         , .assistant assistant
+         ]
+    }
+  let input := LeanAgent.AI.Api.OpenAIResponsesShared.convertResponsesMessages responsesCodexModel context
+  let messageIds :=
+    input.toList.filterMap fun item =>
+      if jsonStringField? item "type" == some "message" then
+        jsonStringField? item "id"
+      else
+        none
+  assertTrue (messageIds == ["msg_pi_1", "msg_pi_1_1"])
+    s!"expected fallback OpenAI Responses message ids, got {messageIds}"
+  assertTrue (messageIds.eraseDups.length == messageIds.length)
+    "expected fallback OpenAI Responses message ids to stay unique"
+
 def testOpenAIResponsesSharedConvertsTools : IO Unit := do
   let tool : LeanAgent.AI.Tool :=
     { name := "read"
@@ -3267,6 +3298,18 @@ def testDiagnosticsFormatsThrownJsonValues : IO Unit := do
       assertTrue (error.name == some "ThrownValue") "expected diagnostic thrown-value name"
       assertTrue (error.message == thrownObject.compress) "expected diagnostic thrown-value message"
   | none => fail "expected diagnostic error"
+
+def testDiagnosticsProviderErrorObjectExtraction : IO Unit := do
+  let wrapped := LeanAgent.Json.obj
+    [ ("error", LeanAgent.Json.obj [("message", LeanAgent.Json.str "oops")])
+    ]
+  let err := LeanAgent.AI.Util.Diagnostics.providerErrorObject wrapped
+  assertTrue (LeanAgent.Json.optVal? err "message" == some (LeanAgent.Json.str "oops"))
+    "expected error object extraction from wrapped body"
+  let unwrapped := LeanAgent.Json.obj [("code", LeanAgent.Json.nat 500)]
+  let errUnwrapped := LeanAgent.AI.Util.Diagnostics.providerErrorObject unwrapped
+  assertTrue (LeanAgent.Json.optVal? errUnwrapped "code" == some (LeanAgent.Json.nat 500))
+    "expected fallback to full body when error key missing"
 
 def testOpenAICompletionsParsesUsage : IO Unit := do
   let raw :=
@@ -8942,6 +8985,7 @@ def main : IO UInt32 := do
     testTransformMessagesSkipsErroredAssistant
     testOpenAIResponsesSharedNormalizesForeignToolCallIds
     testOpenAIResponsesSharedOmitsDifferentModelFcItemId
+    testOpenAIResponsesSharedGeneratesFallbackMessageIds
     testOpenAIResponsesSharedConvertsTools
     testAnthropicMessagesRequestPayload
     testAnthropicMessagesCompatOptions
@@ -8983,6 +9027,7 @@ def main : IO UInt32 := do
     testOpenAIResponsesStreamingRequiresTerminalEvent
     testDiagnosticsExtractsProviderError
     testDiagnosticsFormatsThrownJsonValues
+    testDiagnosticsProviderErrorObjectExtraction
     testOpenAICompletionsParsesUsage
     testShortHashMatchesPi
     testEstimateUtilities
