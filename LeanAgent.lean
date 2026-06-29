@@ -9,6 +9,7 @@ import LeanAgent.AI.Util.Hash
 import LeanAgent.AI.Util.JsonParse
 import LeanAgent.AI.Util.Overflow
 import LeanAgent.AI.Util.ProviderEnv
+import LeanAgent.AI.Util.Proxy
 import LeanAgent.AI.Util.Retry
 import LeanAgent.AI.Util.SSE
 import LeanAgent.CodingTools

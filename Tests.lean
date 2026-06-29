@@ -553,6 +553,57 @@ def testProviderEnvValueResolution : IO Unit := do
   let merged := LeanAgent.AI.Util.ProviderEnv.merge #[("A", "base"), ("B", "base")] #[("B", "override"), ("C", "new")]
   assertTrue (merged == #[("A", "base"), ("B", "override"), ("C", "new")]) "expected env merge override"
 
+def testProxyEnvResolution : IO Unit := do
+  let ambient : String → IO (Option String) := fun name =>
+    pure
+      (if name == "HTTPS_PROXY" then
+        some "proxy.local:8443"
+      else if name == "ALL_PROXY" then
+        some "http://fallback.local:8080"
+      else
+        none)
+  let resolved ← LeanAgent.AI.Util.Proxy.resolveHttpProxyUrlForTargetWith
+    ambient "https://api.example.com/v1"
+  assertTrue (resolved == some "https://proxy.local:8443") "expected HTTPS proxy with inferred protocol"
+  let scopedProxy ← LeanAgent.AI.Util.Proxy.resolveHttpProxyUrlForTargetWith
+    ambient "https://api.example.com/v1" #[("https_proxy", "http://scoped.local:9000")]
+  assertTrue (scopedProxy == some "http://scoped.local:9000") "expected scoped proxy to win"
+  let scopedEmpty ← LeanAgent.AI.Util.Proxy.resolveHttpProxyUrlForTargetWith
+    ambient "https://api.example.com/v1" #[("https_proxy", "")]
+  assertTrue (scopedEmpty == some "https://proxy.local:8443") "expected empty scoped proxy to fall back"
+  let fallback ← LeanAgent.AI.Util.Proxy.resolveHttpProxyUrlForTargetWith
+    ambient "ws://socket.example.com"
+  assertTrue (fallback == some "http://fallback.local:8080") "expected ALL_PROXY fallback"
+
+def testProxyNoProxyMatching : IO Unit := do
+  assertTrue
+    (!LeanAgent.AI.Util.Proxy.shouldProxyHostnameWithNoProxy "api.example.com" 443 ".example.com")
+    "expected domain suffix no_proxy to bypass"
+  assertTrue
+    (LeanAgent.AI.Util.Proxy.shouldProxyHostnameWithNoProxy "api.example.com" 443 ".example.com:8443")
+    "expected no_proxy port mismatch to allow proxy"
+  assertTrue
+    (!LeanAgent.AI.Util.Proxy.shouldProxyHostnameWithNoProxy "api.example.com" 8443 ".example.com:8443")
+    "expected no_proxy port match to bypass"
+  assertTrue
+    (!LeanAgent.AI.Util.Proxy.shouldProxyHostnameWithNoProxy "api.example.com" 443 "*")
+    "expected wildcard no_proxy to bypass all"
+
+def testProxyRejectsUnsupportedProtocol : IO Unit := do
+  let ambient : String → IO (Option String) := fun name =>
+    pure (if name == "HTTPS_PROXY" then some "socks5://proxy.local:1080" else none)
+  let failed ←
+    try
+      let _ ← LeanAgent.AI.Util.Proxy.resolveHttpProxyUrlForTargetWith
+        ambient "https://api.example.com/v1"
+      pure false
+    catch err =>
+      assertTrue
+        (err.toString.contains "Unsupported proxy protocol")
+        "expected unsupported proxy protocol error"
+      pure true
+  assertTrue failed "expected unsupported proxy protocol to fail"
+
 def testJsonParseRepairsMalformedStrings : IO Unit := do
   let raw := "{\"text\":\"hello\nworld\",\"path\":\"abc\\q\"}"
   match LeanAgent.AI.Util.JsonParse.parseJsonWithRepair raw with
@@ -1383,6 +1434,9 @@ def main : IO UInt32 := do
     testEstimateUtilities
     testEstimateContextUsesRecentAssistantUsage
     testProviderEnvValueResolution
+    testProxyEnvResolution
+    testProxyNoProxyMatching
+    testProxyRejectsUnsupportedProtocol
     testJsonParseRepairsMalformedStrings
     testJsonParseStreamingPartialObject
     testOverflowClassifiesProviderErrors
