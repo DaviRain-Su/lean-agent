@@ -685,41 +685,58 @@ def clampSimpleOptionsToContext
       | .off => { options with reasoning := none }
       | .level clamped => { options with reasoning := some clamped }
 
+def hasHeaderAuth (headers : Array (String × Option String)) : Bool :=
+  headers.any fun (name, value) =>
+    let name := name.toLower
+    let valueSet :=
+      match value with
+      | some value => !value.trimAscii.isEmpty
+      | none => false
+    valueSet &&
+      (name == "authorization" || name == "x-api-key" || name == "cf-aig-authorization")
+
+def requireApiKeyOrHeaderAuth
+    (providerId : String)
+    (options : LeanAgent.AI.SimpleStreamOptions) : IO String := do
+  match options.apiKey with
+  | some apiKey => pure apiKey
+  | none =>
+      if hasHeaderAuth options.headers then
+        pure ""
+      else
+        throw (modelsError .auth s!"missing API key for provider {providerId}")
+
 def openAICompatibleStreams : ProviderStreams :=
   { streamSimple := fun model context options => do
       let options := clampSimpleOptionsToContext model context options
-      match options.apiKey with
-      | none => throw (modelsError .auth s!"missing API key for provider {model.provider}")
-      | some apiKey =>
-          let config : LeanAgent.AI.Api.OpenAICompletions.OpenAICompatibleConfig :=
-            { apiKey := apiKey
-              baseUrl := model.baseUrl
-            }
-          let request := contextToProviderRequest model context
-          let stream ← LeanAgent.AI.Api.OpenAICompletions.streamWithOptions
-            config
-            request
-            model.api
-            model.provider
-            (openAICompletionsOptionsFromSimple model options)
-          pure (applyUsageCostToStream model stream)
+      let apiKey ← requireApiKeyOrHeaderAuth model.provider options
+      let config : LeanAgent.AI.Api.OpenAICompletions.OpenAICompatibleConfig :=
+        { apiKey := apiKey
+          baseUrl := model.baseUrl
+        }
+      let request := contextToProviderRequest model context
+      let stream ← LeanAgent.AI.Api.OpenAICompletions.streamWithOptions
+        config
+        request
+        model.api
+        model.provider
+        (openAICompletionsOptionsFromSimple model options)
+      pure (applyUsageCostToStream model stream)
   }
 
 def openAIResponsesStreams : ProviderStreams :=
   { streamSimple := fun model context options => do
       let options := clampSimpleOptionsToContext model context options
-      match options.apiKey with
-      | none => throw (modelsError .auth s!"missing API key for provider {model.provider}")
-      | some apiKey =>
-          let config : LeanAgent.AI.Api.OpenAIResponses.OpenAIResponsesConfig :=
-            { apiKey := apiKey
-              baseUrl := model.baseUrl
-            }
-          LeanAgent.AI.Api.OpenAIResponses.completeStreamWithOptions
-            config
-            model.toResponsesModel
-            context
-            (LeanAgent.AI.Api.OpenAIResponses.optionsFromSimple options)
+      let apiKey ← requireApiKeyOrHeaderAuth model.provider options
+      let config : LeanAgent.AI.Api.OpenAIResponses.OpenAIResponsesConfig :=
+        { apiKey := apiKey
+          baseUrl := model.baseUrl
+        }
+      LeanAgent.AI.Api.OpenAIResponses.completeStreamWithOptions
+        config
+        model.toResponsesModel
+        context
+        (LeanAgent.AI.Api.OpenAIResponses.optionsFromSimple options)
   }
 
 def azureOpenAIResponsesStreams : ProviderStreams :=
@@ -872,6 +889,7 @@ def Collection.applyAuth
   let resolution ←
     LeanAgent.AI.Auth.resolveProviderAuth provider.id provider.auth collection.credentials collection.authContext
       { apiKey := options.apiKey, env := options.env }
+      (some model.baseUrl)
   match resolution with
   | none => pure (model, options)
   | some resolution =>

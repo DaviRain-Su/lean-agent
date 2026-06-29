@@ -38,7 +38,7 @@ structure CredentialStore where
 
 structure ApiKeyAuth where
   name : String
-  resolve : AuthContext → Option ApiKeyCredential → IO (Option AuthResult)
+  resolve : AuthContext → Option ApiKeyCredential → Option String → IO (Option AuthResult)
 
 structure ProviderAuth where
   apiKey : Option ApiKeyAuth := none
@@ -101,7 +101,7 @@ def resolveEnvApiKey (ctx : AuthContext) (envVars : Array String) : IO (Option (
 
 def envApiKeyAuth (name : String) (envVars : Array String) : ApiKeyAuth :=
   { name := name
-    resolve := fun ctx credential => do
+    resolve := fun ctx credential _modelBaseUrl => do
       match credential with
       | some credential =>
           match credential.key with
@@ -124,8 +124,9 @@ def envApiKeyAuth (name : String) (envVars : Array String) : ApiKeyAuth :=
 def resolveApiKey
     (ctx : AuthContext)
     (apiKeyAuth : ApiKeyAuth)
-    (credential : Option ApiKeyCredential) : IO (Option AuthResult) :=
-  apiKeyAuth.resolve ctx credential
+    (credential : Option ApiKeyCredential)
+    (modelBaseUrl : Option String := none) : IO (Option AuthResult) :=
+  apiKeyAuth.resolve ctx credential modelBaseUrl
 
 def readCredential (credentials : CredentialStore) (providerId : String) : IO (Option Credential) :=
   credentials.read providerId
@@ -135,7 +136,8 @@ def resolveProviderAuth
     (auth : ProviderAuth)
     (credentials : CredentialStore)
     (ctx : AuthContext)
-    (overrides : AuthOverrides := {}) : IO (Option AuthResult) := do
+    (overrides : AuthOverrides := {})
+    (modelBaseUrl : Option String := none) : IO (Option AuthResult) := do
   let requestCtx :=
     if overrides.env.isEmpty then
       ctx
@@ -143,7 +145,7 @@ def resolveProviderAuth
       overlayEnvAuthContext ctx overrides.env
   match overrides.apiKey, auth.apiKey with
   | some apiKey, some apiKeyAuth =>
-      resolveApiKey requestCtx apiKeyAuth (some { key := some apiKey, env := overrides.env })
+      resolveApiKey requestCtx apiKeyAuth (some { key := some apiKey, env := overrides.env }) modelBaseUrl
   | _, _ =>
       match ← readCredential credentials providerId with
       | some (.apiKey credential) =>
@@ -154,11 +156,11 @@ def resolveProviderAuth
                   credential
                 else
                   { credential with env := providerEnvMerge credential.env overrides.env }
-              resolveApiKey requestCtx apiKeyAuth credential
+              resolveApiKey requestCtx apiKeyAuth credential modelBaseUrl
           | none => pure none
       | none =>
           match auth.apiKey with
-          | some apiKeyAuth => resolveApiKey requestCtx apiKeyAuth none
+          | some apiKeyAuth => resolveApiKey requestCtx apiKeyAuth none modelBaseUrl
           | none => pure none
 
 def InMemoryCredentialStore.mk : IO CredentialStore := do

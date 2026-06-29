@@ -1,6 +1,7 @@
 import LeanAgent.AI.Auth
 import LeanAgent.AI.Api.GitHubCopilotHeaders
 import LeanAgent.AI.Api.Lazy
+import LeanAgent.AI.Api.Cloudflare
 import LeanAgent.AI.Api.OpenAICompletions
 import LeanAgent.AI.Api.OpenAIPromptCache
 import LeanAgent.AI.Api.OpenAIResponses
@@ -12,6 +13,7 @@ import LeanAgent.AI.Compat
 import LeanAgent.AI.Compat.Aliases
 import LeanAgent.AI.EnvApiKeys
 import LeanAgent.AI.EventStream
+import LeanAgent.AI.Providers.CloudflareAuth
 import LeanAgent.AI.Providers.Faux
 import LeanAgent.AI.Schema
 import LeanAgent.AI.SessionResources

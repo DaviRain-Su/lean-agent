@@ -1746,6 +1746,20 @@ def fakeAuthContext : LeanAgent.AI.Auth.AuthContext :=
 def fakeProviderAuth : LeanAgent.AI.Auth.ProviderAuth :=
   { apiKey := some (LeanAgent.AI.Auth.envApiKeyAuth "Fake API key" #["FAKE_API_KEY"]) }
 
+def fakeCloudflareAuthContext : LeanAgent.AI.Auth.AuthContext :=
+  { env := fun name =>
+      pure
+        (if name == "CLOUDFLARE_API_KEY" then
+          some "cf-env-key"
+        else if name == "CLOUDFLARE_ACCOUNT_ID" then
+          some "acct-env"
+        else if name == "CLOUDFLARE_GATEWAY_ID" then
+          some "gateway-env"
+        else
+          none)
+    fileExists := fun _ => pure false
+  }
+
 def testModelsAuthEnvApiKeyResolution : IO Unit := do
   let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
   match ← LeanAgent.AI.Auth.resolveProviderAuth "fake" fakeProviderAuth store fakeAuthContext with
@@ -1763,6 +1777,92 @@ def testModelsAuthStoredCredentialWins : IO Unit := do
       assertTrue (result.auth.apiKey == some "stored-secret") "expected stored credential to win"
       assertTrue (result.source == some "stored credential") "expected stored credential source"
   | none => fail "expected auth result from stored credential"
+
+def headerValueOpt? (headers : Array (String × Option String)) (name : String) : Option (Option String) :=
+  headers.findSome? fun (headerName, value) =>
+    if headerName.toLower == name.toLower then some value else none
+
+def headerValueStringCI? (headers : Array (String × String)) (name : String) : Option String :=
+  headers.findSome? fun (headerName, value) =>
+    if headerName.toLower == name.toLower then some value else none
+
+def testCloudflareWorkersAIAuthResolution : IO Unit := do
+  let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+  let auth : LeanAgent.AI.Auth.ProviderAuth :=
+    { apiKey := some LeanAgent.AI.Providers.CloudflareAuth.cloudflareWorkersAIAuth }
+  match ← LeanAgent.AI.Auth.resolveProviderAuth
+    "cloudflare-workers-ai"
+    auth
+    store
+    fakeCloudflareAuthContext
+    {}
+    (some LeanAgent.AI.Api.Cloudflare.workersAIBaseUrl) with
+  | some result =>
+      assertTrue (result.auth.apiKey == some "cf-env-key") "expected Cloudflare API key"
+      assertTrue
+        (result.auth.baseUrl ==
+          some "https://api.cloudflare.com/client/v4/accounts/acct-env/ai/v1")
+        "expected Workers AI base URL substitution"
+      assertTrue (LeanAgent.AI.Auth.providerEnvGet? result.env "CLOUDFLARE_ACCOUNT_ID" == some "acct-env")
+        "expected Workers AI account env"
+      assertTrue (result.source == some "CLOUDFLARE_API_KEY") "expected Cloudflare env source"
+  | none => fail "expected Workers AI Cloudflare auth result"
+
+def testCloudflareAIGatewayAuthResolution : IO Unit := do
+  let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+  let auth : LeanAgent.AI.Auth.ProviderAuth :=
+    { apiKey := some LeanAgent.AI.Providers.CloudflareAuth.cloudflareAIGatewayAuth }
+  match ← LeanAgent.AI.Auth.resolveProviderAuth
+    "cloudflare-ai-gateway"
+    auth
+    store
+    fakeCloudflareAuthContext
+    {}
+    (some LeanAgent.AI.Api.Cloudflare.aiGatewayOpenAIBaseUrl) with
+  | some result =>
+      assertTrue result.auth.apiKey.isNone "expected AI Gateway to avoid default bearer API key"
+      assertTrue
+        (result.auth.baseUrl ==
+          some "https://gateway.ai.cloudflare.com/v1/acct-env/gateway-env/openai")
+        "expected AI Gateway base URL substitution"
+      assertTrue
+        (LeanAgent.AI.Auth.providerEnvGet? result.env "CLOUDFLARE_GATEWAY_ID" == some "gateway-env")
+        "expected AI Gateway id env"
+      assertTrue
+        (headerValueStringCI? result.auth.headers "cf-aig-authorization" == some "Bearer cf-env-key")
+        "expected cf-aig authorization header"
+      assertTrue (headerValueStringCI? result.auth.headers "Authorization" == some "")
+        "expected AI Gateway to suppress inherited bearer auth"
+      assertTrue (headerValueStringCI? result.auth.headers "x-api-key" == some "")
+        "expected AI Gateway to suppress inherited x-api-key auth"
+  | none => fail "expected AI Gateway Cloudflare auth result"
+
+def testCloudflareStoredCredentialResolution : IO Unit := do
+  let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+  let _ ← store.modify "cloudflare-workers-ai" fun _ =>
+    pure
+      (some
+        (.apiKey
+          { key := some "cf-stored-key"
+            env := #[("CLOUDFLARE_ACCOUNT_ID", "acct-stored")]
+          }))
+  let auth : LeanAgent.AI.Auth.ProviderAuth :=
+    { apiKey := some LeanAgent.AI.Providers.CloudflareAuth.cloudflareWorkersAIAuth }
+  match ← LeanAgent.AI.Auth.resolveProviderAuth
+    "cloudflare-workers-ai"
+    auth
+    store
+    fakeAuthContext
+    {}
+    (some LeanAgent.AI.Api.Cloudflare.workersAIBaseUrl) with
+  | some result =>
+      assertTrue (result.auth.apiKey == some "cf-stored-key") "expected stored Cloudflare key"
+      assertTrue
+        (result.auth.baseUrl ==
+          some "https://api.cloudflare.com/client/v4/accounts/acct-stored/ai/v1")
+        "expected stored account base URL"
+      assertTrue (result.source == some "stored credential") "expected stored Cloudflare source"
+  | none => fail "expected stored Cloudflare auth result"
 
 def testEnvApiKeysProviderMap : IO Unit := do
   assertTrue
@@ -1866,6 +1966,56 @@ def testModelsCollectionDispatchesWithAuth : IO Unit := do
     }
   assertTrue (LeanAgent.AI.contentPlainText message.content == "runtime-ok") "expected runtime stream result"
   assertTrue ((← seenApiKey.get) == some "env-secret") "expected collection to inject auth"
+
+def testModelsCollectionAppliesCloudflareAIGatewayAuth : IO Unit := do
+  let seenApiKey ← IO.mkRef (some "unset" : Option String)
+  let seenBaseUrl ← IO.mkRef ""
+  let seenHeaders ← IO.mkRef (#[] : Array (String × Option String))
+  let streams : LeanAgent.Models.ProviderStreams :=
+    { streamSimple := fun model _context options => do
+        seenApiKey.set options.apiKey
+        seenBaseUrl.set model.baseUrl
+        seenHeaders.set options.headers
+        let timestamp ← IO.monoMsNow
+        let message : LeanAgent.AI.AssistantMessage :=
+          { content := #[LeanAgent.AI.text "cloudflare-ok"]
+            api := model.api
+            provider := model.provider
+            model := model.id
+            timestamp := timestamp
+          }
+        pure (LeanAgent.AI.fromMessage message)
+    }
+  let model : LeanAgent.Models.ModelInfo :=
+    { id := "gpt-4o-mini"
+      name := "Gateway GPT-4o mini"
+      provider := "cloudflare-ai-gateway"
+      api := "openai-completions"
+      baseUrl := LeanAgent.AI.Api.Cloudflare.aiGatewayOpenAIBaseUrl
+    }
+  let collection ← LeanAgent.Models.createModels none fakeCloudflareAuthContext
+  let provider ← LeanAgent.Models.createProvider
+    { id := "cloudflare-ai-gateway"
+      name := some "Cloudflare AI Gateway"
+      auth := { apiKey := some LeanAgent.AI.Providers.CloudflareAuth.cloudflareAIGatewayAuth }
+      models := #[model]
+      apis := #[{ api := "openai-completions", streams := streams }]
+    }
+  collection.setProvider provider
+  let message ← collection.completeSimple
+    model
+    { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 0 }] }
+  assertTrue (LeanAgent.AI.contentPlainText message.content == "cloudflare-ok")
+    "expected Cloudflare collection dispatch"
+  assertTrue ((← seenApiKey.get).isNone) "expected AI Gateway to avoid default api key"
+  assertTrue
+    ((← seenBaseUrl.get) == "https://gateway.ai.cloudflare.com/v1/acct-env/gateway-env/openai")
+    "expected collection to apply Cloudflare base URL"
+  let headers ← seenHeaders.get
+  assertTrue (headerValueOpt? headers "cf-aig-authorization" == some (some "Bearer cf-env-key"))
+    "expected Cloudflare auth header in stream options"
+  assertTrue (headerValueOpt? headers "Authorization" == some (some ""))
+    "expected Authorization suppression header in stream options"
 
 def testCompatApiRegistryDispatchesAndUnregisters : IO Unit := do
   LeanAgent.AI.Compat.resetApiProviders
@@ -2570,6 +2720,19 @@ def httpServerScript : String :=
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
     , "            return"
+    , "        if self.path == '/cloudflare-openai/acct-env/gateway-env/chat/completions':"
+    , "            request = json.loads(body)"
+    , "            text = '|'.join([self.headers.get('cf-aig-authorization') or '', self.headers.get('Authorization') or '', request.get('model') or ''])"
+    , "            payload = ("
+    , "                'data: ' + json.dumps({'choices': [{'delta': {'content': text}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 1, 'completion_tokens': 1}}) + '\\n\\n' +"
+    , "                'data: [DONE]\\n\\n'"
+    , "            ).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'text/event-stream')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/responses-runtime/responses':"
     , "            request = json.loads(body)"
     , "            ok = request.get('model') == 'gpt-5.5' and request.get('stream') is False and request.get('prompt_cache_key') == 'session-123'"
@@ -2942,6 +3105,34 @@ def testOpenAICompatibleStreamsClampMaxTokens : IO Unit := do
     assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "902")
       "expected OpenAI-compatible runtime max_tokens to be context-clamped"
 
+def testCloudflareAIGatewayOpenAICompatibleHeaderAuthLocal : IO Unit := do
+  let port := 18096
+  withHttpServer port do
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := "gpt-4o-mini"
+        name := "Gateway GPT-4o mini"
+        provider := "cloudflare-ai-gateway"
+        api := "openai-completions"
+        baseUrl :=
+          s!"http://127.0.0.1:{port}/cloudflare-openai/" ++
+            "{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}"
+      }
+    let collection ← LeanAgent.Models.createModels none fakeCloudflareAuthContext
+    let provider ← LeanAgent.Models.createProvider
+      { id := "cloudflare-ai-gateway"
+        name := some "Cloudflare AI Gateway"
+        auth := { apiKey := some LeanAgent.AI.Providers.CloudflareAuth.cloudflareAIGatewayAuth }
+        models := #[model]
+        apis := #[{ api := "openai-completions", streams := LeanAgent.Models.openAICompatibleStreams }]
+      }
+    collection.setProvider provider
+    let message ← collection.completeSimple
+      model
+      { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }] }
+    assertTrue
+      (LeanAgent.AI.contentPlainText message.content == "Bearer cf-env-key||gpt-4o-mini")
+      "expected Cloudflare AI Gateway header-only auth through OpenAI-compatible runtime"
+
 def testOpenAIResponsesDispatchesThroughModelsCollection : IO Unit := do
   let port := 18095
   withHttpServer port do
@@ -3296,10 +3487,14 @@ def main : IO UInt32 := do
     testDefaultModelsRegistersOpenAICompatibleFamily
     testModelsAuthEnvApiKeyResolution
     testModelsAuthStoredCredentialWins
+    testCloudflareWorkersAIAuthResolution
+    testCloudflareAIGatewayAuthResolution
+    testCloudflareStoredCredentialResolution
     testEnvApiKeysProviderMap
     testEnvApiKeysPrefersAnthropicOAuthToken
     testEnvApiKeysAmbientAuthMarkers
     testModelsCollectionDispatchesWithAuth
+    testModelsCollectionAppliesCloudflareAIGatewayAuth
     testCompatApiRegistryDispatchesAndUnregisters
     testCompatInjectsEnvApiKeyForKnownProviders
     testCompatInjectsEnvApiKeyForMappedProvidersOutsideCatalog
@@ -3339,6 +3534,7 @@ def main : IO UInt32 := do
     testOpenAICompatibleStreamsUsesStreamingRuntime
     testOpenAICompatibleStreamsApplyModelCost
     testOpenAICompatibleStreamsClampMaxTokens
+    testCloudflareAIGatewayOpenAICompatibleHeaderAuthLocal
     testOpenAIResponsesDispatchesThroughModelsCollection
     testOpenAIResponsesCompleteWithOptionsLocal
     testOpenAIResponsesPayloadAndResponseHooks
