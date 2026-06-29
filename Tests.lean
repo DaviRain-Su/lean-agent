@@ -431,6 +431,22 @@ def testOpenAICompletionsPromptCacheEnvLongRetention : IO Unit := do
     (LeanAgent.Json.optVal? json "prompt_cache_retention" == some (LeanAgent.Json.str "24h"))
     "expected env 24h prompt cache retention"
 
+def testOpenAIPromptCacheClampHelper : IO Unit := do
+  let clamped := LeanAgent.AI.Api.OpenAIPromptCache.clampKey (some "")
+  assertTrue (clamped == some "") "expected empty key to stay empty"
+  let shortKey := "short-key"
+  let clampedShort := LeanAgent.AI.Api.OpenAIPromptCache.clampKey (some shortKey)
+  assertTrue (clampedShort == some shortKey) "expected short key unchanged"
+  let longKey := String.ofList (List.replicate 100 'x')
+  let clampedLong := LeanAgent.AI.Api.OpenAIPromptCache.clampKey (some longKey)
+  assertTrue
+    (match clampedLong with
+     | some key => key.length == 64
+     | none => false)
+    "expected long key clamped to 64 chars"
+  let noneClamped := LeanAgent.AI.Api.OpenAIPromptCache.clampKey none
+  assertTrue (noneClamped == none) "expected none key stays none"
+
 def testOpenAICompletionsSessionAffinityHeaders : IO Unit := do
   let headers := LeanAgent.AI.Api.OpenAICompletions.requestHeaders
     { sessionId := some "session-header"
@@ -8563,6 +8579,7 @@ def main : IO UInt32 := do
     testOpenAICompletionsPromptCacheLongRetention
     testOpenAICompletionsPromptCacheClampsKey
     testOpenAICompletionsPromptCacheNoneOmitsFields
+    testOpenAIPromptCacheClampHelper
     testOpenAICompletionsPromptCacheEnvLongRetention
     testOpenAICompletionsSessionAffinityHeaders
     testSSEParsesDataEvents
