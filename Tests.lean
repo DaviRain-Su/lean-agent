@@ -1,5 +1,7 @@
 import LeanAgent
 
+set_option maxRecDepth 2048
+
 open LeanAgent
 
 def fail (message : String) : IO Unit :=
@@ -533,6 +535,15 @@ def responsesCodexModel : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel 
     supportsDeveloperRole := true
   }
 
+def azureResponsesModel : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel :=
+  { id := "gpt-4o-mini"
+    provider := "azure-openai-responses"
+    api := "azure-openai-responses"
+    input := #["text", "image"]
+    contextWindow := 128000
+    maxTokens := 16384
+  }
+
 def jsonStringField? (json : Lean.Json) (key : String) : Option String :=
   match LeanAgent.Json.optVal? json key with
   | some (.str value) => some value
@@ -930,6 +941,96 @@ def testOpenAIResponsesRequestClampsMaxTokens : IO Unit := do
   assertTrue
     (LeanAgent.Json.optVal? payload "max_output_tokens" == some (LeanAgent.Json.nat 902))
     "expected Responses max_output_tokens to be context-clamped"
+
+def assertAzureBaseUrl (input expected : String) : IO Unit :=
+  match LeanAgent.AI.Api.AzureOpenAIResponses.normalizeAzureBaseUrl input with
+  | .ok actual => assertTrue (actual == expected) s!"expected Azure base URL {expected}, got {actual}"
+  | .error err => fail s!"expected Azure base URL normalization to succeed: {err}"
+
+def testAzureOpenAIResponsesBaseUrlNormalization : IO Unit := do
+  assertAzureBaseUrl
+    "https://my-resource.cognitiveservices.azure.com"
+    "https://my-resource.cognitiveservices.azure.com/openai/v1"
+  assertAzureBaseUrl
+    "https://my-resource.ai.azure.com"
+    "https://my-resource.ai.azure.com/openai/v1"
+  assertAzureBaseUrl
+    "https://my-resource.openai.azure.com/openai"
+    "https://my-resource.openai.azure.com/openai/v1"
+  assertAzureBaseUrl
+    "https://my-resource.openai.azure.com/openai/v1"
+    "https://my-resource.openai.azure.com/openai/v1"
+  assertAzureBaseUrl
+    "https://my-resource.services.ai.azure.com/openai/v1/responses"
+    "https://my-resource.services.ai.azure.com/openai/v1"
+  assertAzureBaseUrl
+    "https://my-resource.openai.azure.com/openai?api-version=2024-12-01"
+    "https://my-resource.openai.azure.com/openai/v1"
+  assertAzureBaseUrl
+    "https://my-proxy.example.com/v1?custom=true"
+    "https://my-proxy.example.com/v1?custom=true"
+  match LeanAgent.AI.Api.AzureOpenAIResponses.normalizeAzureBaseUrl "not-a-url" with
+  | .ok _ => fail "expected invalid Azure base URL to fail"
+  | .error err =>
+      assertTrue (err.contains "Invalid Azure OpenAI base URL") "expected invalid URL message"
+
+def testAzureOpenAIResponsesConfigAndDeployment : IO Unit := do
+  let resolved ← LeanAgent.AI.Api.AzureOpenAIResponses.resolveAzureConfig
+    { apiKey := "azure-key" }
+    { env :=
+        #[ ("AZURE_OPENAI_RESOURCE_NAME", "my-resource")
+         , ("AZURE_OPENAI_API_VERSION", "2025-01-01")
+         ]
+    }
+  assertTrue
+    (resolved.baseUrl == "https://my-resource.openai.azure.com/openai/v1")
+    "expected Azure resource-name base URL"
+  assertTrue (resolved.apiVersion == "2025-01-01") "expected Azure API version env"
+  let deployment ← LeanAgent.AI.Api.AzureOpenAIResponses.resolveDeploymentName
+    azureResponsesModel
+    { env := #[("AZURE_OPENAI_DEPLOYMENT_NAME_MAP", "gpt-4o-mini=mini-deploy,gpt-5=gpt5-deploy")] }
+  assertTrue (deployment == "mini-deploy") "expected deployment-name env map"
+
+def testAzureOpenAIResponsesRequestPayload : IO Unit := do
+  let longSession := String.ofList (List.replicate 67 'x')
+  let expectedSession := String.ofList (List.replicate 64 'x')
+  let context : LeanAgent.AI.Context :=
+    { systemPrompt := some "Be concise."
+      messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      tools :=
+        #[ { name := "read"
+             description := "Read a file"
+             parameters := LeanAgent.Json.obj [("type", LeanAgent.Json.str "object")]
+           }
+         ]
+    }
+  let payload := LeanAgent.AI.Api.AzureOpenAIResponses.requestToJsonWithOptions
+    azureResponsesModel
+    context
+    { maxTokens := some 321
+      temperature := some 0.4
+      sessionId := some longSession
+    }
+    "mini-deploy"
+    true
+  assertTrue (jsonStringField? payload "model" == some "mini-deploy")
+    "expected Azure deployment name in model field"
+  assertTrue (LeanAgent.Json.optVal? payload "stream" == some (LeanAgent.Json.bool true))
+    "expected Azure stream payload"
+  assertTrue (LeanAgent.Json.optVal? payload "store" == some (LeanAgent.Json.bool false))
+    "expected Azure store=false"
+  assertTrue (jsonStringField? payload "prompt_cache_key" == some expectedSession)
+    "expected Azure prompt cache key clamp"
+  assertTrue (LeanAgent.Json.optVal? payload "prompt_cache_retention" == none)
+    "expected Azure payload to omit prompt cache retention"
+  assertTrue (LeanAgent.Json.optVal? payload "max_output_tokens" == some (LeanAgent.Json.nat 321))
+    "expected Azure max output tokens"
+  match LeanAgent.Json.optVal? payload "tools" with
+  | some tools =>
+      match tools.getArr? with
+      | .ok arr => assertTrue (arr.size == 1) "expected one Azure Responses tool"
+      | .error _ => fail "expected Azure tools array"
+  | none => fail "expected Azure tools"
 
 def testOpenAIResponsesServiceTierCostMultiplier : IO Unit := do
   let usage : LeanAgent.AI.Usage := { input := 1000000, output := 1000000, totalTokens := 2000000 }
@@ -2530,6 +2631,21 @@ def httpServerScript : String :=
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
     , "            return"
+    , "        if self.path == '/azure-responses/responses?api-version=2025-01-01':"
+    , "            request = json.loads(body)"
+    , "            text = '|'.join([request.get('model') or '', str(request.get('stream')), self.headers.get('api-key') or '', self.headers.get('Authorization') or '', self.headers.get('X-Trace') or ''])"
+    , "            payload = ("
+    , "                'data: ' + json.dumps({'type': 'response.output_item.added', 'output_index': 0, 'item': {'type': 'message', 'id': 'msg_azure_http', 'content': []}}) + '\\n\\n' +"
+    , "                'data: ' + json.dumps({'type': 'response.output_text.delta', 'output_index': 0, 'delta': text}) + '\\n\\n' +"
+    , "                'data: ' + json.dumps({'type': 'response.output_item.done', 'output_index': 0, 'item': {'type': 'message', 'id': 'msg_azure_http', 'content': [{'type': 'output_text', 'text': text}]}}) + '\\n\\n' +"
+    , "                'data: ' + json.dumps({'type': 'response.completed', 'response': {'id': 'resp_azure_http', 'status': 'completed', 'usage': {'input_tokens': 3, 'output_tokens': 4, 'total_tokens': 7}}}) + '\\n\\n'"
+    , "            ).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'text/event-stream')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/large':"
     , "            payload = b'x' * 1024"
     , "            self.send_response(200)"
@@ -3028,6 +3144,58 @@ def testOpenAIResponsesStreamWithOptionsLocal : IO Unit := do
         | _ => false)
       "expected streamed text delta"
 
+def testAzureOpenAIResponsesStreamWithOptionsLocal : IO Unit := do
+  let port := 18094
+  withHttpServer port do
+    let stream ← LeanAgent.AI.Api.AzureOpenAIResponses.completeStreamWithOptions
+      { apiKey := "azure-key"
+        baseUrl := s!"http://127.0.0.1:{port}/azure-responses"
+        timeoutSeconds := 5
+        connectTimeoutSeconds := 5
+        noProxy := some "*"
+        userAgent := "lean-agent-test/0.1.0"
+      }
+      azureResponsesModel
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+      { azureApiVersion := some "2025-01-01"
+        azureDeploymentName := some "mini-deployment"
+        headers := #[("X-Trace", some "trace-azure")]
+      }
+    assertTrue stream.isComplete "expected completed Azure Responses stream"
+    assertTrue (stream.result.responseId == some "resp_azure_http") "expected Azure response id"
+    assertTrue
+      (LeanAgent.AI.contentPlainText stream.result.content == "mini-deployment|True|azure-key||trace-azure")
+      "expected Azure deployment, stream flag, api-key header, no bearer auth, and custom header"
+
+def testCompatAzureOpenAIResponsesBuiltinDispatch : IO Unit := do
+  let port := 18095
+  withHttpServer port do
+    LeanAgent.AI.Compat.resetApiProviders
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := "gpt-4o-mini"
+        name := "Azure GPT-4o mini"
+        provider := "azure-openai-responses"
+        api := "azure-openai-responses"
+        baseUrl := s!"http://127.0.0.1:{port}/azure-responses"
+      }
+    let stream ← LeanAgent.AI.Compat.Aliases.streamSimpleAzureOpenAIResponses
+      model
+      { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }] }
+      { apiKey := some "azure-key"
+        env :=
+          #[ ("AZURE_OPENAI_API_VERSION", "2025-01-01")
+           , ("AZURE_OPENAI_DEPLOYMENT_NAME_MAP", "gpt-4o-mini=mini-deployment")
+           ]
+        headers := #[("X-Trace", some "trace-azure")]
+      }
+    assertTrue stream.isComplete "expected compat Azure built-in stream"
+    assertTrue
+      (LeanAgent.AI.contentPlainText stream.result.content == "mini-deployment|True|azure-key||trace-azure")
+      "expected compat Azure Responses built-in dispatch"
+    LeanAgent.AI.Compat.resetApiProviders
+
 def testOpenAICompletionsProviderErrorDiagnostics : IO Unit := do
   let port := 18083
   withHttpServer port do
@@ -3091,6 +3259,9 @@ def main : IO UInt32 := do
     testOpenAIResponsesRequestPayload
     testOpenAIResponsesRequestUsesThinkingLevelMap
     testOpenAIResponsesRequestClampsMaxTokens
+    testAzureOpenAIResponsesBaseUrlNormalization
+    testAzureOpenAIResponsesConfigAndDeployment
+    testAzureOpenAIResponsesRequestPayload
     testOpenAIResponsesServiceTierCostMultiplier
     testOpenAIResponsesParsesResponse
     testOpenAIResponsesParsesStreamingTextAndUsage
@@ -3173,6 +3344,8 @@ def main : IO UInt32 := do
     testOpenAIResponsesPayloadAndResponseHooks
     testOpenAIResponsesSendsCopilotDynamicHeaders
     testOpenAIResponsesStreamWithOptionsLocal
+    testAzureOpenAIResponsesStreamWithOptionsLocal
+    testCompatAzureOpenAIResponsesBuiltinDispatch
     testOpenAICompletionsProviderErrorDiagnostics
     IO.println "lean-agent tests passed"
     pure 0

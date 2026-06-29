@@ -41,6 +41,8 @@ def registerBuiltInApiProviders : IO Unit := do
     registerApiProvider { api := "openai-completions", streams := LeanAgent.Models.openAICompatibleStreams }
   if (← getApiProvider? "openai-responses").isNone then
     registerApiProvider { api := "openai-responses", streams := LeanAgent.Models.openAIResponsesStreams }
+  if (← getApiProvider? "azure-openai-responses").isNone then
+    registerApiProvider { api := "azure-openai-responses", streams := LeanAgent.Models.azureOpenAIResponsesStreams }
 
 def resetApiProviders : IO Unit := do
   clearApiProviders

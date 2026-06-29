@@ -25,11 +25,11 @@ Every row must move through this ledger before it is considered complete.
 | HTTP transport | `LeanAgent.Http`, `LeanAgent.AI.Util.Proxy` | partial | Native libcurl JSON POST, custom request headers, parsed response headers, no-proxy support, and proxy env helper logic exist. Streaming callbacks and explicit proxy injection for non-libcurl transports are missing. |
 | OpenAI-compatible chat completions | `LeanAgent.AI.Api.OpenAICompletions`, `LeanAgent.OpenAI`, `LeanAgent.Models` | partial | Protocol logic now lives under `AI.Api`; legacy `LeanAgent.OpenAI` is a compatibility wrapper. Non-streaming Chat Completions, streaming request path through `streamSimple`, SSE chunk parsing, text/thinking/tool delta event reconstruction, tool calls, empty-tools omission, tool history handling, basic option/header serialization, prompt cache payload fields, usage parsing, model-rate cost calculation through Models runtime, retry policy, provider error diagnostics, and OpenAI Responses request/stream dispatch exist. Native callback-style live streaming transport, images, and the full compat matrix are missing. |
 | Static model catalog | `LeanAgent.Models` | partial | Starter catalog covers DeepSeek, OpenAI fallback, OpenRouter, Groq, xAI, Cerebras, Together, and Fireworks representative OpenAI-compatible models. Generated full catalog and dynamic refresh are missing. |
-| Provider/model collection | `LeanAgent.Models` | partial | Runtime provider collection now supports registration, lookup, refresh hooks, auth application, simple stream/complete dispatch, default registration for the starter OpenAI-compatible provider family, and generic OpenAI Responses dispatch. OpenAI-compatible and Responses `streamSimple` paths use streaming request formats but still buffer the HTTP response before returning events. Full generated catalog, dynamic providers, and callback-style live streaming are missing. |
+| Provider/model collection | `LeanAgent.Models` | partial | Runtime provider collection now supports registration, lookup, refresh hooks, auth application, simple stream/complete dispatch, default registration for the starter OpenAI-compatible provider family, generic OpenAI Responses dispatch, and Azure OpenAI Responses stream dispatch. OpenAI-compatible and Responses `streamSimple` paths use streaming request formats but still buffer the HTTP response before returning events. Full generated catalog, dynamic providers, and callback-style live streaming are missing. |
 | Agent-facing messages | `LeanAgent.Core`, `LeanAgent.AI.Types` | partial | Pi-style message/content/usage/diagnostic types and legacy conversions exist. Runtime still uses simplified `Core.AgentMessage`. |
 | Images | `LeanAgent.AI.Types` | partial | Image content types exist. Image generation APIs and image model catalog are missing. |
 | OAuth/auth store | `LeanAgent.AI.Auth`, `LeanAgent.AI.EnvApiKeys` | partial | Env API-key auth, Pi provider env-key map, auth context, in-memory credentials, and provider auth resolution exist. OAuth and file-backed stores are missing. |
-| Compat/global API registry | `LeanAgent.AI.Compat`, `LeanAgent.AI.Compat.Aliases` | partial | Global API provider registry, built-in OpenAI-compatible/Responses registrations, source-id unregister, reset, `streamSimple`/`completeSimple` dispatch, fixed-API legacy aliases, API mismatch guard, and Pi mapped provider env API-key injection exist. Full legacy static catalog exports, image entrypoints, typed full-stream options, and non-OpenAI builtins are still missing. |
+| Compat/global API registry | `LeanAgent.AI.Compat`, `LeanAgent.AI.Compat.Aliases` | partial | Global API provider registry, built-in OpenAI-compatible/OpenAI Responses/Azure OpenAI Responses registrations, source-id unregister, reset, `streamSimple`/`completeSimple` dispatch, fixed-API legacy aliases, API mismatch guard, and Pi mapped provider env API-key injection exist. Full legacy static catalog exports, image entrypoints, typed full-stream options, and most non-OpenAI builtins are still missing. |
 
 ## Implementation Gates
 
@@ -134,7 +134,7 @@ before expanding provider behavior.
 | `api/openai-responses.lazy.ts` | `LeanAgent.AI.Api.OpenAIResponses` | deferred | Lazy wrapper can be skipped if dispatch is explicit. |
 | `api/openai-codex-responses.ts` | `LeanAgent.AI.Api.OpenAICodexResponses` | missing | OAuth and WebSocket/cached transport later. |
 | `api/openai-codex-responses.lazy.ts` | `LeanAgent.AI.Api.OpenAICodexResponses` | deferred | Lazy wrapper. |
-| `api/azure-openai-responses.ts` | `LeanAgent.AI.Api.AzureOpenAIResponses` | missing | Needs Azure base URL handling. |
+| `api/azure-openai-responses.ts` | `LeanAgent.AI.Api.AzureOpenAIResponses`, `LeanAgent.Models` | partial | Azure base URL normalization, resource-name/default URL resolution, API-version query, deployment-name mapping, prompt-cache key clamp, `store=false`, `api-key` header transport, payload/response hooks via shared Responses runtime, streaming response parsing, and compat built-in dispatch exist. SDK abort semantics and full generated provider catalog integration are missing. |
 | `api/azure-openai-responses.lazy.ts` | `LeanAgent.AI.Api.AzureOpenAIResponses` | deferred | Lazy wrapper. |
 | `api/anthropic-messages.ts` | `LeanAgent.AI.Api.AnthropicMessages` | missing | Large protocol, thinking, cache, tool normalization. |
 | `api/anthropic-messages.lazy.ts` | `LeanAgent.AI.Api.AnthropicMessages` | deferred | Lazy wrapper. |
@@ -165,7 +165,7 @@ should be generated or checked in as Lean data.
 | Amazon Bedrock | `amazon-bedrock.ts`, `amazon-bedrock.models.ts` | `LeanAgent.AI.Providers.AmazonBedrock` | missing |
 | Ant Ling | `ant-ling.ts`, `ant-ling.models.ts` | `LeanAgent.AI.Providers.AntLing` | missing |
 | Anthropic | `anthropic.ts`, `anthropic.models.ts` | `LeanAgent.AI.Providers.Anthropic` | missing |
-| Azure OpenAI Responses | `azure-openai-responses.ts`, `azure-openai-responses.models.ts` | `LeanAgent.AI.Providers.AzureOpenAIResponses` | missing |
+| Azure OpenAI Responses | `azure-openai-responses.ts`, `azure-openai-responses.models.ts` | `LeanAgent.AI.Api.AzureOpenAIResponses`, future `LeanAgent.AI.Providers.AzureOpenAIResponses` | partial |
 | Cerebras | `cerebras.ts`, `cerebras.models.ts` | `LeanAgent.Models` | partial |
 | Cloudflare AI Gateway | `cloudflare-ai-gateway.ts`, `cloudflare-ai-gateway.models.ts` | `LeanAgent.AI.Providers.CloudflareAIGateway` | missing |
 | Cloudflare Workers AI | `cloudflare-workers-ai.ts`, `cloudflare-workers-ai.models.ts` | `LeanAgent.AI.Providers.CloudflareWorkersAI` | missing |
@@ -239,14 +239,14 @@ Initial Lean parity should port tests in this order:
 | Pi tests | Lean target | Status | Why first |
 | --- | --- | --- | --- |
 | `models-runtime.test.ts`, `providers.test.ts`, `supports-xhigh.test.ts`, `xhigh.test.ts` | model catalog and thinking tests | partial | Protects provider/model registry, cost calculation, and thinking-level map helpers. |
-| `env-api-keys.test.ts`, `compat-env.test.ts` | auth/env tests | partial | Env API-key, stored credential precedence, compat registry dispatch, request API key pass-through, known-provider env key injection, and legacy alias registry dispatch are covered. Full provider env map and ambient credential probes are missing. |
+| `env-api-keys.test.ts`, `compat-env.test.ts` | auth/env tests | partial | Env API-key, stored credential precedence, full provider env map, Anthropic OAuth-token precedence, Bedrock/Vertex ambient markers, compat registry dispatch, request API key pass-through, known-provider env key injection, catalog-outside provider env injection, and legacy alias registry dispatch are covered. File-backed auth and OAuth remain missing. |
 | `stream.test.ts`, `empty.test.ts`, `abort.test.ts` | event stream tests | partial | Stream result, text/thinking/tool events, partial snapshots, tool delta payloads, and empty-content completion are covered in Lean. Async iterator/backpressure, provider abort behavior, and live timing remain missing. |
 | `openai-completions-*.test.ts` | OpenAI completions tests | partial | Payload tests cover empty tools, tool history, tool choice, max tokens, temperature, reasoning effort, thinking-level payload aliases, prompt cache key/retention, streaming payload/SSE parsing, buffered streaming runtime dispatch, request/response headers, usage parsing, provider HTTP diagnostics, repaired tool arguments, and legacy assistant tool-call omission. Network provider matrix and true live-stream timing tests are missing. |
 | `retry.test.ts`, `diagnostics.test.ts`, `estimate.test.ts`, `overflow.test.ts`, `validation.test.ts`, `unicode-surrogate.test.ts` | util tests | partial | Retry classifier/policy, diagnostics extraction/round-trip, estimate utilities, provider header filtering/merge, proxy env resolution, JSON repair/streaming fallback, JSON Schema validation/coercion, Unicode surrogate sanitization helpers, overflow detection, and OpenAI transient HTTP retry are covered. Live provider unicode-surrogate tests are missing. |
 | `faux-provider.test.ts` | faux provider tests | partial | Deterministic provider handle, queued responses, helper blocks, model-aware factories, usage/cache estimates, model rewrite, collection dispatch, and event reconstruction are covered. Global compat registration, async timing, and abort behavior are missing. |
 | `session-resources.test.ts` | session resource cleanup tests | implemented | Cleanup registration, unregister handles, session id propagation, continued cleanup after failures, and aggregate errors are covered. |
 | `images*.test.ts`, `openrouter-images.test.ts` | image tests | missing | Separate image phase. |
-| Anthropic/Google/Mistral/Bedrock/Azure/Codex tests | provider protocol tests | missing | After core OpenAI-compatible path is stable. |
+| Anthropic/Google/Mistral/Bedrock/Azure/Codex tests | provider protocol tests | partial | Azure OpenAI Responses base URL, deployment mapping, payload, local streaming transport, and compat built-in dispatch are covered. Anthropic/Google/Mistral/Bedrock/Codex provider protocol tests are still missing. |
 
 ## Milestones
 
@@ -322,7 +322,7 @@ Deliver:
 
 - Image content support in message types.
 - Image generation registry and OpenRouter image provider.
-- Compat/global API registry after new `Models` API is stable. Status: partial; registry, reset, source unregister, built-in OpenAI-compatible/Responses entries, simple dispatch, fixed-API legacy aliases, and env key injection exist.
+- Compat/global API registry after new `Models` API is stable. Status: partial; registry, reset, source unregister, built-in OpenAI-compatible/OpenAI Responses/Azure OpenAI Responses entries, simple dispatch, fixed-API legacy aliases, and env key injection exist.
 
 Exit criteria:
 

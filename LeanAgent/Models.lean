@@ -1,5 +1,6 @@
 import LeanAgent.Core
 import LeanAgent.AI.Auth
+import LeanAgent.AI.Api.AzureOpenAIResponses
 import LeanAgent.AI.Api.Lazy
 import LeanAgent.AI.Api.OpenAICompletions
 import LeanAgent.AI.Api.OpenAIResponses
@@ -719,6 +720,23 @@ def openAIResponsesStreams : ProviderStreams :=
             model.toResponsesModel
             context
             (LeanAgent.AI.Api.OpenAIResponses.optionsFromSimple options)
+  }
+
+def azureOpenAIResponsesStreams : ProviderStreams :=
+  { streamSimple := fun model context options => do
+      let options := clampSimpleOptionsToContext model context options
+      match options.apiKey with
+      | none => throw (modelsError .auth s!"missing API key for provider {model.provider}")
+      | some apiKey =>
+          let config : LeanAgent.AI.Api.AzureOpenAIResponses.AzureOpenAIResponsesConfig :=
+            { apiKey := apiKey
+              baseUrl := model.baseUrl
+            }
+          LeanAgent.AI.Api.AzureOpenAIResponses.completeStreamWithOptions
+            config
+            model.toResponsesModel
+            context
+            (LeanAgent.AI.Api.AzureOpenAIResponses.optionsFromSimple options)
   }
 
 def authForProviderInfo (info : ProviderInfo) : LeanAgent.AI.Auth.ProviderAuth :=

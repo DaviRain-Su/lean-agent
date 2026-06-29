@@ -7,6 +7,7 @@ import LeanAgent.AI.Api.OpenAIResponses
 import LeanAgent.AI.Api.OpenAIResponsesShared
 import LeanAgent.AI.Api.SimpleOptions
 import LeanAgent.AI.Api.TransformMessages
+import LeanAgent.AI.Api.AzureOpenAIResponses
 import LeanAgent.AI.Compat
 import LeanAgent.AI.Compat.Aliases
 import LeanAgent.AI.EnvApiKeys
