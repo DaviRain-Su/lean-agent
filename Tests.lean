@@ -553,6 +553,64 @@ def testProviderEnvValueResolution : IO Unit := do
   let merged := LeanAgent.AI.Util.ProviderEnv.merge #[("A", "base"), ("B", "base")] #[("B", "override"), ("C", "new")]
   assertTrue (merged == #[("A", "base"), ("B", "override"), ("C", "new")]) "expected env merge override"
 
+def overflowAssistantMessage
+    (stopReason : LeanAgent.AI.StopReason)
+    (errorMessage : Option String := none)
+    (usage : LeanAgent.AI.Usage := {}) : LeanAgent.AI.AssistantMessage :=
+  { content := #[]
+    api := "fake"
+    provider := "fake"
+    model := "fake"
+    usage := usage
+    stopReason := stopReason
+    errorMessage := errorMessage
+    timestamp := 0
+  }
+
+def testOverflowClassifiesProviderErrors : IO Unit := do
+  assertTrue
+    (LeanAgent.AI.Util.Overflow.isContextOverflow
+      (overflowAssistantMessage .error (some "prompt is too long: 213462 tokens > 200000 maximum")))
+    "expected Anthropic overflow error"
+  assertTrue
+    (LeanAgent.AI.Util.Overflow.isContextOverflow
+      (overflowAssistantMessage .error (some "Input length (265330) exceeds model's maximum context length (262144).")))
+    "expected OpenAI-compatible overflow error"
+  assertTrue
+    (LeanAgent.AI.Util.Overflow.isContextOverflow
+      (overflowAssistantMessage .error (some "The input token count (1196265) exceeds the maximum number of tokens allowed (1048575)")))
+    "expected Gemini overflow error"
+  assertTrue
+    (!LeanAgent.AI.Util.Overflow.isContextOverflow
+      (overflowAssistantMessage .error (some "Throttling error: Too many tokens, please wait before trying again.")))
+    "expected Bedrock throttling text to be excluded"
+  assertTrue
+    (!LeanAgent.AI.Util.Overflow.isContextOverflow
+      (overflowAssistantMessage .error (some "rate limit: too many tokens in flight")))
+    "expected rate limits to be excluded"
+
+def testOverflowClassifiesContextWindowSignals : IO Unit := do
+  assertTrue
+    (LeanAgent.AI.Util.Overflow.isContextOverflow
+      (overflowAssistantMessage .stop none { input := 99, cacheRead := 2 })
+      (some 100))
+    "expected silent usage overflow"
+  assertTrue
+    (!LeanAgent.AI.Util.Overflow.isContextOverflow
+      (overflowAssistantMessage .stop none { input := 100 })
+      (some 100))
+    "expected exact context usage to fit"
+  assertTrue
+    (LeanAgent.AI.Util.Overflow.isContextOverflow
+      (overflowAssistantMessage .length none { input := 98, cacheRead := 1, output := 0 })
+      (some 100))
+    "expected length stop with full context and zero output"
+  assertTrue
+    (!LeanAgent.AI.Util.Overflow.isContextOverflow
+      (overflowAssistantMessage .length none { input := 99, output := 1 })
+      (some 100))
+    "expected length stop with output to be non-overflow"
+
 def retryAssistantMessage (errorMessage : Option String) : LeanAgent.AI.AssistantMessage :=
   { content := #[]
     api := "fake"
@@ -1299,6 +1357,8 @@ def main : IO UInt32 := do
     testEstimateUtilities
     testEstimateContextUsesRecentAssistantUsage
     testProviderEnvValueResolution
+    testOverflowClassifiesProviderErrors
+    testOverflowClassifiesContextWindowSignals
     testRetryClassifiesAssistantErrors
     testRetryWithRetriesSucceedsAfterTransientFailures
     testRetryWithRetriesStopsOnNonRetryableFailure

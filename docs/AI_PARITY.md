@@ -213,7 +213,7 @@ should be generated or checked in as Lean data.
 | `utils/headers.ts` | `LeanAgent.Http`, `LeanAgent.AI.Api.OpenAICompletions` | partial | Custom request headers, basic override behavior, and response header parsing exist. Dedicated header utility module and full provider callback integration are missing. |
 | `utils/json-parse.ts` | `LeanAgent.Json` or `LeanAgent.AI.Util.JsonParse` | partial | Basic JSON helpers exist, partial JSON cleanup missing. |
 | `utils/node-http-proxy.ts` | `LeanAgent.AI.Util.Proxy` | missing | Proxy detection/config. |
-| `utils/overflow.ts` | `LeanAgent.AI.Util.Overflow` | missing | Context window overflow detection. |
+| `utils/overflow.ts` | `LeanAgent.AI.Util.Overflow` | partial | Common provider overflow messages, non-overflow throttling/rate-limit exclusions, silent usage overflow, and length-stop full-context heuristics exist. Full JS regex parity remains incomplete. |
 | `utils/provider-env.ts` | `LeanAgent.AI.Util.ProviderEnv` | implemented | Scoped provider env lookup, ambient env fallback, empty-value suppression, and merge semantics exist. Bun-specific `/proc/self/environ` fallback is not applicable to Lean. |
 | `utils/retry.ts` | `LeanAgent.AI.Util.Retry` | partial | Retryable assistant/provider error classification, non-retryable quota guard, delay cap, and OpenAI-compatible request retry policy exist. Full Pi regex coverage and cross-provider retry integration are incomplete. |
 | `utils/sanitize-unicode.ts` | `LeanAgent.AI.Util.SanitizeUnicode` | missing | Unicode surrogate handling. |
@@ -242,7 +242,7 @@ Initial Lean parity should port tests in this order:
 | `env-api-keys.test.ts`, `compat-env.test.ts` | auth/env tests | partial | Env API-key and stored credential precedence are covered. Full provider env map and compat env tests are missing. |
 | `stream.test.ts`, `empty.test.ts`, `abort.test.ts` | event stream tests | missing | Establishes stream contract. |
 | `openai-completions-*.test.ts` | OpenAI completions tests | partial | Payload tests cover empty tools, tool history, tool choice, max tokens, temperature, reasoning effort, prompt cache key/retention, streaming payload/SSE parsing, buffered streaming runtime dispatch, request/response headers, usage parsing, provider HTTP diagnostics, and legacy assistant tool-call omission. Network provider matrix and true live-stream timing tests are missing. |
-| `retry.test.ts`, `diagnostics.test.ts`, `estimate.test.ts`, `overflow.test.ts`, `validation.test.ts`, `unicode-surrogate.test.ts` | util tests | partial | Retry classifier/policy, diagnostics extraction/round-trip, estimate utilities, and OpenAI transient HTTP retry are covered. Overflow, validation, and unicode surrogate tests are missing. |
+| `retry.test.ts`, `diagnostics.test.ts`, `estimate.test.ts`, `overflow.test.ts`, `validation.test.ts`, `unicode-surrogate.test.ts` | util tests | partial | Retry classifier/policy, diagnostics extraction/round-trip, estimate utilities, overflow detection, and OpenAI transient HTTP retry are covered. Validation and unicode surrogate tests are missing. |
 | `faux-provider.test.ts` | faux provider tests | missing | Needed for deterministic agent tests. |
 | `images*.test.ts`, `openrouter-images.test.ts` | image tests | missing | Separate image phase. |
 | Anthropic/Google/Mistral/Bedrock/Azure/Codex tests | provider protocol tests | missing | After core OpenAI-compatible path is stable. |

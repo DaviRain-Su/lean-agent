@@ -6,6 +6,7 @@ import LeanAgent.AI.Types
 import LeanAgent.AI.Util.Diagnostics
 import LeanAgent.AI.Util.Estimate
 import LeanAgent.AI.Util.Hash
+import LeanAgent.AI.Util.Overflow
 import LeanAgent.AI.Util.ProviderEnv
 import LeanAgent.AI.Util.Retry
 import LeanAgent.AI.Util.SSE
