@@ -13,6 +13,8 @@ import LeanAgent.AI.Compat
 import LeanAgent.AI.Compat.Aliases
 import LeanAgent.AI.EnvApiKeys
 import LeanAgent.AI.EventStream
+import LeanAgent.AI.Images
+import LeanAgent.AI.Images.Registry
 import LeanAgent.AI.Providers.CloudflareAuth
 import LeanAgent.AI.Providers.Faux
 import LeanAgent.AI.Schema

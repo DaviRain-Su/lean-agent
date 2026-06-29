@@ -123,8 +123,35 @@ structure ModelRef where
   baseUrl : Option String := none
 deriving BEq
 
+structure ImagesModel where
+  id : String
+  name : String
+  api : ImagesApi
+  provider : ImagesProviderId
+  baseUrl : Option String := none
+  output : Array String := #["image"]
+deriving Repr, BEq
+
+def ImagesModel.toModelRef (model : ImagesModel) : ModelRef :=
+  { id := model.id
+    api := model.api
+    provider := model.provider
+    baseUrl := model.baseUrl
+  }
+
 abbrev PayloadHook := Lean.Json → ModelRef → IO (Option Lean.Json)
 abbrev ResponseHook := ProviderResponse → ModelRef → IO Unit
+
+structure ImagesOptions where
+  apiKey : Option String := none
+  env : Array (String × String) := #[]
+  headers : Array (String × Option String) := #[]
+  onPayload : Option PayloadHook := none
+  onResponse : Option ResponseHook := none
+  timeoutMs : Option Nat := none
+  maxRetries : Option Nat := none
+  maxRetryDelayMs : Option Nat := none
+  metadata : Option Lean.Json := none
 
 structure StreamOptions where
   temperature : Option Float := none

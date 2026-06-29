@@ -27,7 +27,7 @@ Every row must move through this ledger before it is considered complete.
 | Static model catalog | `LeanAgent.Models` | partial | Starter catalog covers DeepSeek, OpenAI fallback, OpenRouter, Groq, xAI, Cerebras, Together, and Fireworks representative OpenAI-compatible models. Generated full catalog and dynamic refresh are missing. |
 | Provider/model collection | `LeanAgent.Models` | partial | Runtime provider collection now supports registration, lookup, refresh hooks, auth application, auth-driven base URL/header overrides, simple stream/complete dispatch, default registration for the starter OpenAI-compatible provider family, generic OpenAI Responses dispatch, and Azure OpenAI Responses stream dispatch. OpenAI-compatible and Responses `streamSimple` paths use streaming request formats but still buffer the HTTP response before returning events. Full generated catalog, dynamic providers, and callback-style live streaming are missing. |
 | Agent-facing messages | `LeanAgent.Core`, `LeanAgent.AI.Types` | partial | Pi-style message/content/usage/diagnostic types and legacy conversions exist. Runtime still uses simplified `Core.AgentMessage`. |
-| Images | `LeanAgent.AI.Types` | partial | Image content types exist. Image generation APIs and image model catalog are missing. |
+| Images | `LeanAgent.AI.Types`, `LeanAgent.AI.Images`, `LeanAgent.AI.Images.Registry` | partial | Image content/model/option/result types, global image API registry, API mismatch guard, source unregister, and `generateImages` dispatch exist. Provider implementations and generated image model catalog are missing. |
 | OAuth/auth store | `LeanAgent.AI.Auth`, `LeanAgent.AI.EnvApiKeys`, `LeanAgent.AI.Providers.CloudflareAuth` | partial | Env API-key auth, Pi provider env-key map, auth context, in-memory credentials, provider auth resolution, model-aware base URL auth resolution, and Cloudflare Workers AI / AI Gateway auth helpers exist. OAuth and file-backed stores are missing. |
 | Compat/global API registry | `LeanAgent.AI.Compat`, `LeanAgent.AI.Compat.Aliases` | partial | Global API provider registry, built-in OpenAI-compatible/OpenAI Responses/Azure OpenAI Responses registrations, source-id unregister, reset, `streamSimple`/`completeSimple` dispatch, fixed-API legacy aliases, API mismatch guard, and Pi mapped provider env API-key injection exist. Full legacy static catalog exports, image entrypoints, typed full-stream options, and most non-OpenAI builtins are still missing. |
 
@@ -62,12 +62,12 @@ Before starting OMP advanced work:
 
 | Pi source | Lean target | Status | Notes |
 | --- | --- | --- | --- |
-| `src/index.ts` | `LeanAgent.AI` or `LeanAgent.lean` exports | partial | Lean root exports modules, but not Pi AI public surface. |
+| `src/index.ts` | `LeanAgent.AI` or `LeanAgent.lean` exports | partial | Lean root exports core AI modules plus image dispatch modules, but not the full Pi AI public surface. |
 | `src/compat.ts` | `LeanAgent.AI.Compat` | partial | Global registry, simple dispatch, and legacy alias support exist. Full legacy surface, static catalog passthroughs, image exports, faux compat registration, typed full-stream options, and all builtin APIs are still missing. |
 | `src/cli.ts` | future `lean-agent ai ...` commands | missing | Not needed for core loop yet. |
 | `src/models.ts` | `LeanAgent.Models` | partial | Static catalog plus runtime `Provider`/`Collection`, `createModels`, `createProvider`, auth application, and simple completion dispatch. Generated catalog and full provider family are missing. |
 | `src/models.generated.ts` | generated Lean catalog or checked-in catalog | partial | Lean has a hand-curated starter catalog for key OpenAI-compatible providers. Full generated catalog parity is missing. |
-| `src/types.ts` | `LeanAgent.AI.Types` | partial | Core content/message/usage/stream-option types exist. Provider-specific compat and full stream runtime still missing. |
+| `src/types.ts` | `LeanAgent.AI.Types` | partial | Core content/message/usage/stream-option types and image model/option/result types exist. Provider-specific compat and full stream runtime still missing. |
 | `src/env-api-keys.ts` | `LeanAgent.AI.EnvApiKeys`, `LeanAgent.AI.Auth` | partial | Full Pi provider env-key map exists, including Anthropic OAuth-token precedence, `findEnvKeys`, `getEnvApiKey`, Bedrock ambient credential marker, and Vertex explicit/default ADC path marker. OAuth/file-backed auth stores are still tracked separately. |
 | `src/session-resources.ts` | `LeanAgent.AI.SessionResources` | implemented | Global cleanup registry exists with unregister handles, optional session id propagation, and aggregate cleanup errors. |
 | `src/legacy-api-aliases.ts` | `LeanAgent.AI.Compat.Aliases` | partial | Fixed-API legacy aliases exist for Anthropic, Azure OpenAI Responses, Google, Google Vertex, Mistral, OpenAI Codex Responses, OpenAI Completions, and OpenAI Responses. They dispatch through the compat registry with simple stream options; typed full-stream option parity is still missing. |
@@ -76,8 +76,8 @@ Before starting OMP advanced work:
 | `src/image-models.ts` | `LeanAgent.AI.Images.Models` | missing | Image phase. |
 | `src/image-models.generated.ts` | generated image model catalog | missing | Image phase. |
 | `src/images-models.ts` | `LeanAgent.AI.Images.Models` | missing | Image phase. |
-| `src/images.ts` | `LeanAgent.AI.Images` | missing | Image generation API. |
-| `src/images-api-registry.ts` | `LeanAgent.AI.Images.Registry` | missing | Image API dispatch. |
+| `src/images.ts` | `LeanAgent.AI.Images` | partial | `generateImages` and explicit `generateImagesWithApi` dispatch through registered image API providers. Built-in image providers are still missing. |
+| `src/images-api-registry.ts` | `LeanAgent.AI.Images.Registry` | implemented | Image API provider registry supports register, lookup, list, source unregister, clear/reset, and Pi-style API mismatch wrapping. |
 
 ## Types Layer
 
@@ -224,11 +224,11 @@ should be generated or checked in as Lean data.
 
 | Pi source | Lean target | Status | Notes |
 | --- | --- | --- | --- |
-| `images.ts` | `LeanAgent.AI.Images` | missing | Image generation API. |
+| `images.ts` | `LeanAgent.AI.Images` | partial | Generic image generation dispatch exists; built-in provider registration and provider protocol implementations are missing. |
 | `images-models.ts` | `LeanAgent.AI.Images.Models` | missing | Runtime model types. |
 | `image-models.ts` | `LeanAgent.AI.Images.Models` | missing | Static image model access. |
 | `image-models.generated.ts` | generated Lean image catalog | missing | Generated or checked-in data. |
-| `images-api-registry.ts` | `LeanAgent.AI.Images.Registry` | missing | Image API dispatch. |
+| `images-api-registry.ts` | `LeanAgent.AI.Images.Registry` | implemented | Register/get/list/unregister/clear/reset image API dispatch exists with API mismatch wrapping. |
 | `api/openrouter-images.ts` | `LeanAgent.AI.Api.OpenRouterImages` | missing | First image provider candidate. |
 | `providers/openrouter-images.ts` | `LeanAgent.AI.Providers.OpenRouterImages` | missing | Image provider factory. |
 
@@ -245,7 +245,7 @@ Initial Lean parity should port tests in this order:
 | `retry.test.ts`, `diagnostics.test.ts`, `estimate.test.ts`, `overflow.test.ts`, `validation.test.ts`, `unicode-surrogate.test.ts` | util tests | partial | Retry classifier/policy, diagnostics extraction/round-trip, estimate utilities, provider header filtering/merge, proxy env resolution, JSON repair/streaming fallback, JSON Schema validation/coercion, Unicode surrogate sanitization helpers, overflow detection, and OpenAI transient HTTP retry are covered. Live provider unicode-surrogate tests are missing. |
 | `faux-provider.test.ts` | faux provider tests | partial | Deterministic provider handle, queued responses, helper blocks, model-aware factories, usage/cache estimates, model rewrite, collection dispatch, and event reconstruction are covered. Global compat registration, async timing, and abort behavior are missing. |
 | `session-resources.test.ts` | session resource cleanup tests | implemented | Cleanup registration, unregister handles, session id propagation, continued cleanup after failures, and aggregate errors are covered. |
-| `images*.test.ts`, `openrouter-images.test.ts` | image tests | missing | Separate image phase. |
+| `images*.test.ts`, `openrouter-images.test.ts` | image tests | partial | Generic image API registry and `generateImages` dispatch are covered. Static image catalog and OpenRouter Images provider tests are still missing. |
 | Anthropic/Google/Mistral/Bedrock/Azure/Codex tests | provider protocol tests | partial | Azure OpenAI Responses base URL, deployment mapping, payload, local streaming transport, and compat built-in dispatch are covered. Anthropic/Google/Mistral/Bedrock/Codex provider protocol tests are still missing. |
 
 ## Milestones

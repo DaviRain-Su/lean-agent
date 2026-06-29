@@ -2039,6 +2039,81 @@ def testCompatApiRegistryDispatchesAndUnregisters : IO Unit := do
     "expected compat source unregister"
   LeanAgent.AI.Compat.resetApiProviders
 
+def fakeImagesModel : LeanAgent.AI.ImagesModel :=
+  { id := "fake-image-model"
+    name := "Fake Image Model"
+    provider := "fake-images"
+    api := "fake-images-api"
+    baseUrl := some "https://images.example.test/v1"
+    output := #["text", "image"]
+  }
+
+def testImagesApiRegistryDispatchesAndUnregisters : IO Unit := do
+  LeanAgent.AI.Images.resetImagesApiProviders
+  let seenApiKey ← IO.mkRef (none : Option String)
+  let seenPrompt ← IO.mkRef ""
+  LeanAgent.AI.Images.registerImagesApiProvider
+    { api := fakeImagesModel.api
+      generateImages := fun model context options => do
+        seenApiKey.set options.apiKey
+        seenPrompt.set (LeanAgent.AI.contentPlainText context.input)
+        let timestamp ← IO.monoMsNow
+        pure
+          { api := model.api
+            provider := model.provider
+            model := model.id
+            output :=
+              #[ LeanAgent.AI.text "image-ready"
+               , LeanAgent.AI.image "iVBORw0KGgo=" "image/png"
+               ]
+            timestamp := timestamp
+          }
+    }
+    (some "images-test")
+  match ← LeanAgent.AI.Images.getImagesApiProvider? fakeImagesModel.api with
+  | some provider => assertTrue (provider.api == fakeImagesModel.api) "expected image provider lookup"
+  | none => fail "expected image provider"
+  let result ← LeanAgent.AI.Images.generateImages
+    fakeImagesModel
+    { input := #[LeanAgent.AI.text "draw a red circle"] }
+    { apiKey := some "image-key" }
+  assertTrue (LeanAgent.AI.contentPlainText result.output == "image-ready")
+    "expected image dispatch text output"
+  assertTrue (result.output.size == 2) "expected image dispatch output blocks"
+  assertTrue ((← seenApiKey.get) == some "image-key") "expected image options passthrough"
+  assertTrue ((← seenPrompt.get) == "draw a red circle") "expected image context passthrough"
+  let mismatchFailed ←
+    try
+      let provider ← LeanAgent.AI.Images.resolveImagesApiProvider fakeImagesModel.api
+      let _ ← provider.generateImages { fakeImagesModel with api := "other-images-api" } {} {}
+      pure false
+    catch err =>
+      assertTrue
+        (err.toString.contains "Mismatched api: other-images-api expected fake-images-api")
+        "expected image api mismatch error"
+      pure true
+  assertTrue mismatchFailed "mismatched image api should fail"
+  LeanAgent.AI.Images.unregisterImagesApiProviders "images-test"
+  assertTrue ((← LeanAgent.AI.Images.getImagesApiProvider? fakeImagesModel.api).isNone)
+    "expected image source unregister"
+  LeanAgent.AI.Images.resetImagesApiProviders
+
+def testImagesApiRegistryMissingProviderReturnsError : IO Unit := do
+  LeanAgent.AI.Images.resetImagesApiProviders
+  let failed ←
+    try
+      let _ ← LeanAgent.AI.Images.generateImages
+        fakeImagesModel
+        { input := #[LeanAgent.AI.text "draw"] }
+      pure false
+    catch err =>
+      assertTrue
+        (err.toString.contains "No API provider registered for api: fake-images-api")
+        "expected missing image provider error"
+      pure true
+  assertTrue failed "missing image provider should fail"
+  LeanAgent.AI.Images.resetImagesApiProviders
+
 def testCompatInjectsEnvApiKeyForKnownProviders : IO Unit := do
   LeanAgent.AI.Compat.resetApiProviders
   let seenApiKey ← IO.mkRef (none : Option String)
@@ -3496,6 +3571,8 @@ def main : IO UInt32 := do
     testModelsCollectionDispatchesWithAuth
     testModelsCollectionAppliesCloudflareAIGatewayAuth
     testCompatApiRegistryDispatchesAndUnregisters
+    testImagesApiRegistryDispatchesAndUnregisters
+    testImagesApiRegistryMissingProviderReturnsError
     testCompatInjectsEnvApiKeyForKnownProviders
     testCompatInjectsEnvApiKeyForMappedProvidersOutsideCatalog
     testCompatMissingProviderReturnsError
