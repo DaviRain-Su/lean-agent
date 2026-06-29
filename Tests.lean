@@ -279,6 +279,22 @@ def testOpenAICompletionsSerializesOptions : IO Unit := do
     "expected xhigh to clamp to high"
   assertTrue (LeanAgent.Json.optVal? json "tool_choice" == some (LeanAgent.Json.str "required")) "expected required tool choice"
 
+def testOpenAICompletionsUsesMappedReasoningEffort : IO Unit := do
+  let options : LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsOptions :=
+    { reasoningEffort := some .xhigh
+      reasoningEffortValue := some "max"
+    }
+  let json := LeanAgent.AI.Api.OpenAICompletions.requestToJsonWithOptions (basicProviderRequest) options
+  assertTrue
+    (LeanAgent.Json.optVal? json "reasoning_effort" == some (LeanAgent.Json.str "max"))
+    "expected mapped xhigh reasoning effort"
+  let offJson := LeanAgent.AI.Api.OpenAICompletions.requestToJsonWithOptions
+    (basicProviderRequest)
+    { offReasoningEffortValue := some "none" }
+  assertTrue
+    (LeanAgent.Json.optVal? offJson "reasoning_effort" == some (LeanAgent.Json.str "none"))
+    "expected mapped off reasoning effort"
+
 def testOpenAICompletionsPromptCacheKey : IO Unit := do
   let options : LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsOptions :=
     { sessionId := some "session-123" }
@@ -819,6 +835,47 @@ def testOpenAIResponsesRequestPayload : IO Unit := do
       | .ok arr => assertTrue (arr.size == 1) "expected one responses tool"
       | .error _ => fail "expected tools array"
   | none => fail "expected tools"
+
+def testOpenAIResponsesRequestUsesThinkingLevelMap : IO Unit := do
+  let context : LeanAgent.AI.Context :=
+    { systemPrompt := some "Be concise."
+      messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+    }
+  let mappedModel :=
+    { responsesCodexModel with
+      thinkingLevelMap := #[{ level := .level .xhigh, mapped := some "max" }]
+    }
+  let mappedPayload := LeanAgent.AI.Api.OpenAIResponses.requestToJsonWithOptions
+    mappedModel
+    context
+    { reasoningEffort := some .xhigh }
+  match LeanAgent.Json.optVal? mappedPayload "reasoning" with
+  | some reasoning =>
+      assertTrue (jsonStringField? reasoning "effort" == some "max") "expected mapped xhigh effort"
+      assertTrue (jsonStringField? reasoning "summary" == some "auto") "expected default reasoning summary"
+  | none => fail "expected mapped reasoning object"
+  let offNullPayload := LeanAgent.AI.Api.OpenAIResponses.requestToJsonWithOptions
+    { responsesCodexModel with thinkingLevelMap := #[{ level := .off, mapped := none }] }
+    context
+    {}
+  assertTrue
+    (LeanAgent.Json.optVal? offNullPayload "reasoning" == none)
+    "expected off=null to suppress reasoning object"
+  let offMappedPayload := LeanAgent.AI.Api.OpenAIResponses.requestToJsonWithOptions
+    { responsesCodexModel with thinkingLevelMap := #[{ level := .off, mapped := some "none" }] }
+    context
+    {}
+  match LeanAgent.Json.optVal? offMappedPayload "reasoning" with
+  | some reasoning =>
+      assertTrue (jsonStringField? reasoning "effort" == some "none") "expected mapped off effort"
+  | none => fail "expected mapped off reasoning object"
+  let copilotPayload := LeanAgent.AI.Api.OpenAIResponses.requestToJsonWithOptions
+    { responsesCodexModel with provider := "github-copilot" }
+    context
+    {}
+  assertTrue
+    (LeanAgent.Json.optVal? copilotPayload "reasoning" == none)
+    "expected GitHub Copilot default request to omit reasoning object"
 
 def testOpenAIResponsesRequestClampsMaxTokens : IO Unit := do
   let model :=
@@ -2730,6 +2787,7 @@ def main : IO UInt32 := do
     testOpenAICompletionsIncludesToolsWhenPresent
     testOpenAICompletionsIncludesEmptyToolsForToolHistory
     testOpenAICompletionsSerializesOptions
+    testOpenAICompletionsUsesMappedReasoningEffort
     testOpenAICompletionsPromptCacheKey
     testOpenAICompletionsPromptCacheLongRetention
     testOpenAICompletionsPromptCacheClampsKey
@@ -2749,6 +2807,7 @@ def main : IO UInt32 := do
     testOpenAIResponsesSharedConvertsTools
     testGitHubCopilotDynamicHeaders
     testOpenAIResponsesRequestPayload
+    testOpenAIResponsesRequestUsesThinkingLevelMap
     testOpenAIResponsesRequestClampsMaxTokens
     testOpenAIResponsesServiceTierCostMultiplier
     testOpenAIResponsesParsesResponse

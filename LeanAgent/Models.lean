@@ -57,17 +57,6 @@ structure ModelCompat where
   thinkingFormat : Option String := none
 deriving Repr, BEq
 
-instance : Repr LeanAgent.AI.ThinkingLevel where
-  reprPrec level _ := LeanAgent.AI.ThinkingLevel.toString level
-
-instance : Repr LeanAgent.AI.ModelThinkingLevel where
-  reprPrec level _ := LeanAgent.AI.ModelThinkingLevel.toString level
-
-structure ThinkingLevelMapEntry where
-  level : LeanAgent.AI.ModelThinkingLevel
-  mapped : Option String := none
-deriving Repr, BEq
-
 structure ModelInfo where
   id : String
   name : String
@@ -78,7 +67,7 @@ structure ModelInfo where
   contextWindow : Nat := 0
   maxTokens : Nat := 0
   reasoning : Bool := false
-  thinkingLevelMap : Array ThinkingLevelMapEntry := #[]
+  thinkingLevelMap : Array LeanAgent.AI.ThinkingLevelMapEntry := #[]
   input : Array String := #["text"]
   supportsToolCalls : Bool := true
   supportsJsonOutput : Bool := true
@@ -520,6 +509,41 @@ def thinkingLevelMapValue? (model : ModelInfo) (level : LeanAgent.AI.ModelThinki
     Option (Option String) :=
   (model.thinkingLevelMap.find? fun entry => entry.level == level).map (fun entry => entry.mapped)
 
+def thinkingLevelPayloadValueD
+    (model : ModelInfo)
+    (level : LeanAgent.AI.ModelThinkingLevel)
+    (fallback : String) : String :=
+  match thinkingLevelMapValue? model level with
+  | some (some value) => value
+  | _ => fallback
+
+def offThinkingLevelPayloadValue? (model : ModelInfo) : Option String :=
+  match thinkingLevelMapValue? model .off with
+  | some (some value) => some value
+  | _ => none
+
+def openAICompletionsOptionsFromSimple
+    (model : ModelInfo)
+    (options : LeanAgent.AI.SimpleStreamOptions) :
+    LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsOptions :=
+  let apiOptions := LeanAgent.AI.Api.OpenAICompletions.optionsFromSimple options
+  let reasoningValue :=
+    match apiOptions.reasoningEffort with
+    | some effort => some (thinkingLevelPayloadValueD model (.level effort) effort.toString)
+    | none =>
+        match apiOptions.reasoning with
+        | some effort => some (thinkingLevelPayloadValueD model (.level effort) effort.toString)
+        | none => none
+  let offValue :=
+    if model.reasoning && reasoningValue.isNone then
+      offThinkingLevelPayloadValue? model
+    else
+      none
+  { apiOptions with
+    reasoningEffortValue := reasoningValue
+    offReasoningEffortValue := offValue
+  }
+
 def thinkingLevelIndex? : LeanAgent.AI.ModelThinkingLevel → Option Nat
   | .off => some 0
   | .level .minimal => some 1
@@ -661,7 +685,7 @@ def openAICompatibleStreams : ProviderStreams :=
             request
             model.api
             model.provider
-            (LeanAgent.AI.Api.OpenAICompletions.optionsFromSimple options)
+            (openAICompletionsOptionsFromSimple model options)
           pure (applyUsageCostToStream model stream)
   }
 

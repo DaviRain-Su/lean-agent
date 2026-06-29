@@ -56,6 +56,30 @@ def reasoningEffortString : LeanAgent.AI.ThinkingLevel → String
   | .xhigh => "high"
   | level => level.toString
 
+def thinkingLevelMapValue?
+    (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
+    (level : LeanAgent.AI.ModelThinkingLevel) : Option (Option String) :=
+  (model.thinkingLevelMap.find? fun entry => entry.level == level).map (fun entry => entry.mapped)
+
+def reasoningEffortPayloadValue
+    (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
+    (effort : LeanAgent.AI.ThinkingLevel) : String :=
+  match thinkingLevelMapValue? model (.level effort) with
+  | some (some value) => value
+  | _ => reasoningEffortString effort
+
+def offReasoningPayloadFields
+    (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel) : List (String × Lean.Json) :=
+  if model.provider == "github-copilot" then
+    []
+  else
+    match thinkingLevelMapValue? model .off with
+    | some none => []
+    | some (some effort) =>
+        [("reasoning", LeanAgent.Json.obj [("effort", LeanAgent.Json.str effort)])]
+    | none =>
+        [("reasoning", LeanAgent.Json.obj [("effort", LeanAgent.Json.str "none")])]
+
 def resolvedMaxTokens?
     (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
     (context : LeanAgent.AI.Context)
@@ -108,9 +132,12 @@ def reasoningFields
       | none => options.reasoning
     match effort?, options.reasoningSummary with
     | none, none =>
-        [("reasoning", LeanAgent.Json.obj [("effort", LeanAgent.Json.str "none")])]
+        offReasoningPayloadFields model
     | effort?, summary? =>
-        let effort := reasoningEffortString (effort?.getD .medium)
+        let effort :=
+          match effort? with
+          | some effort => reasoningEffortPayloadValue model effort
+          | none => "medium"
         let summary := summary?.getD "auto"
         [ ("reasoning",
             LeanAgent.Json.obj

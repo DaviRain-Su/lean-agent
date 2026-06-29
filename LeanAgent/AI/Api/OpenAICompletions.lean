@@ -35,6 +35,8 @@ deriving BEq
 structure OpenAICompletionsOptions extends LeanAgent.AI.SimpleStreamOptions where
   toolChoice : Option ToolChoice := none
   reasoningEffort : Option LeanAgent.AI.ThinkingLevel := none
+  reasoningEffortValue : Option String := none
+  offReasoningEffortValue : Option String := none
 
 def optionsFromSimple (options : LeanAgent.AI.SimpleStreamOptions) : OpenAICompletionsOptions :=
   { temperature := options.temperature
@@ -77,6 +79,11 @@ def ToolChoice.toJson : ToolChoice → Lean.Json
 def reasoningEffortString : LeanAgent.AI.ThinkingLevel → String
   | .xhigh => "high"
   | level => level.toString
+
+def requestReasoningEffortString
+    (options : OpenAICompletionsOptions)
+    (effort : LeanAgent.AI.ThinkingLevel) : String :=
+  options.reasoningEffortValue.getD (reasoningEffortString effort)
 
 def toolCallToJson (call : LeanAgent.ToolCall) : Lean.Json :=
   LeanAgent.Json.obj
@@ -152,8 +159,11 @@ def requestOptionFields (options : OpenAICompletionsOptions) : List (String × L
     | none => options.reasoning
   let reasoningFields :=
     match reasoning with
-    | some effort => [("reasoning_effort", LeanAgent.Json.str (reasoningEffortString effort))]
-    | none => []
+    | some effort => [("reasoning_effort", LeanAgent.Json.str (requestReasoningEffortString options effort))]
+    | none =>
+        match options.offReasoningEffortValue with
+        | some effort => [("reasoning_effort", LeanAgent.Json.str effort)]
+        | none => []
   temperatureFields ++ maxTokenFields ++ reasoningFields
 
 def cacheRetentionFromEnv? (env : Array (String × String)) : Option LeanAgent.AI.CacheRetention :=

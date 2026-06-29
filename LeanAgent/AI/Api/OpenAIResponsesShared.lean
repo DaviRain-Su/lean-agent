@@ -12,6 +12,7 @@ structure ResponsesModel extends TransformMessages.TargetModel where
   contextWindow : Nat := 0
   maxTokens : Nat := 0
   cost : LeanAgent.AI.UsageCost := {}
+  thinkingLevelMap : Array LeanAgent.AI.ThinkingLevelMapEntry := #[]
 deriving BEq
 
 structure ConvertResponsesMessagesOptions where

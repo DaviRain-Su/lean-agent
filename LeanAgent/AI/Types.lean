@@ -14,12 +14,17 @@ inductive ThinkingLevel where
   | medium
   | high
   | xhigh
-deriving BEq
+deriving Repr, BEq
 
 inductive ModelThinkingLevel where
   | off
   | level (level : ThinkingLevel)
-deriving BEq
+deriving Repr, BEq
+
+structure ThinkingLevelMapEntry where
+  level : ModelThinkingLevel
+  mapped : Option String := none
+deriving Repr, BEq
 
 inductive CacheRetention where
   | none
