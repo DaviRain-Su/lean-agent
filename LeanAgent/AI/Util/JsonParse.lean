@@ -86,6 +86,56 @@ def parseJsonWithRepair (json : String) : Except String Lean.Json :=
       else
         Lean.Json.parse repaired
 
+def isAsciiWhitespace (char : Char) : Bool :=
+  char == ' ' || char == '\n' || char == '\r' || char == '\t'
+
+def trimRightAscii (value : String) : String :=
+  String.ofList ((value.toList.reverse.dropWhile isAsciiWhitespace).reverse)
+
+def stripTrailingComma (value : String) : String :=
+  let trimmed := trimRightAscii value
+  match trimmed.toList.reverse with
+  | ',' :: rest => trimRightAscii (String.ofList rest.reverse)
+  | _ => value
+
+partial def danglingFieldPrefixLoop
+    (chars : List Char)
+    (acc : String)
+    (lastCut : Option String)
+    (inString escaped : Bool) : Option String :=
+  match chars with
+  | [] => lastCut
+  | char :: rest =>
+      let withChar := acc.push char
+      if inString then
+        if escaped then
+          danglingFieldPrefixLoop rest withChar lastCut true false
+        else if char == '\\' then
+          danglingFieldPrefixLoop rest withChar lastCut true true
+        else if char == '"' then
+          danglingFieldPrefixLoop rest withChar lastCut false false
+        else
+          danglingFieldPrefixLoop rest withChar lastCut true false
+      else if char == '"' then
+        danglingFieldPrefixLoop rest withChar lastCut true false
+      else if char == ',' then
+        danglingFieldPrefixLoop rest withChar (some (trimRightAscii acc)) false false
+      else if char == '{' || char == '[' then
+        danglingFieldPrefixLoop rest withChar (some withChar) false false
+      else
+        danglingFieldPrefixLoop rest withChar lastCut false false
+
+def stripDanglingField (value : String) : String :=
+  let trimmed := trimRightAscii value
+  match trimmed.toList.reverse with
+  | ':' :: rest =>
+      let beforeColon := String.ofList rest.reverse
+      (danglingFieldPrefixLoop beforeColon.toList "" none false false).getD value
+  | _ => value
+
+def preparePartialJson (json : String) : String :=
+  stripTrailingComma (stripDanglingField (stripTrailingComma json))
+
 def popMatching (closing : Char) : List Char → List Char
   | expected :: rest => if expected == closing then rest else expected :: rest
   | [] => []
@@ -126,7 +176,7 @@ def parseStreamingJson (partialJson : String) : Lean.Json :=
     match parseJsonWithRepair partialJson with
     | .ok parsed => parsed
     | .error _ =>
-        let completed := completePartialJson (repairJson partialJson)
+        let completed := completePartialJson (preparePartialJson (repairJson partialJson))
         match Lean.Json.parse completed with
         | .ok parsed => parsed
         | .error _ => LeanAgent.Json.obj []

@@ -3140,6 +3140,38 @@ def testJsonParseStreamingPartialObject : IO Unit := do
         "expected repaired tool arguments"
   | .error err => fail s!"expected repaired tool arguments: {err}"
 
+def testJsonParseStreamingDropsDanglingSegments : IO Unit := do
+  let trailingObjectComma := LeanAgent.AI.Util.JsonParse.parseStreamingJson "{\"path\":\"README.md\","
+  assertTrue
+    (LeanAgent.Json.optVal? trailingObjectComma "path" == some (LeanAgent.Json.str "README.md"))
+    "expected dangling object comma to be dropped"
+
+  let trailingArrayComma := LeanAgent.AI.Util.JsonParse.parseStreamingJson "{\"items\":[1,"
+  match jsonArrayField? trailingArrayComma "items" with
+  | some items =>
+      assertTrue (items.size == 1) "expected dangling array comma to be dropped"
+      assertTrue (items[0]? == some (LeanAgent.Json.nat 1)) "expected first array item"
+  | none => fail "expected parsed items array"
+
+  let danglingField := LeanAgent.AI.Util.JsonParse.parseStreamingJson "{\"a\":1,\"b\":"
+  assertTrue
+    (LeanAgent.Json.optVal? danglingField "a" == some (LeanAgent.Json.nat 1))
+    "expected complete field before dangling field to survive"
+  assertTrue
+    (LeanAgent.Json.optVal? danglingField "b" == none)
+    "expected dangling field to be omitted"
+
+  let nestedDanglingField := LeanAgent.AI.Util.JsonParse.parseStreamingJson "{\"a\":1,\"b\":{\"c\":"
+  assertTrue
+    (LeanAgent.Json.optVal? nestedDanglingField "a" == some (LeanAgent.Json.nat 1))
+    "expected outer complete field to survive"
+  match LeanAgent.Json.optVal? nestedDanglingField "b" with
+  | some nested =>
+      match nested.getObj? with
+      | .ok fields => assertTrue fields.toList.isEmpty "expected nested dangling field to be omitted"
+      | .error _ => fail "expected nested object"
+  | none => fail "expected nested object field"
+
 def validationToolForValue (schema : Lean.Json) : LeanAgent.AI.Tool :=
   { name := "echo"
     description := "Echo tool"
@@ -8075,6 +8107,7 @@ def main : IO UInt32 := do
     testHeadersUtilities
     testJsonParseRepairsMalformedStrings
     testJsonParseStreamingPartialObject
+    testJsonParseStreamingDropsDanglingSegments
     testSchemaStringEnum
     testValidationCoercesPlainJsonSchemas
     testValidationRejectsInvalidCoercions
