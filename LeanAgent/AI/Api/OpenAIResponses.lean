@@ -1,4 +1,5 @@
 import LeanAgent.AI.Api.OpenAIPromptCache
+import LeanAgent.AI.Api.GitHubCopilotHeaders
 import LeanAgent.AI.Api.OpenAIResponsesShared
 import LeanAgent.AI.EventStream
 import LeanAgent.AI.Types
@@ -135,7 +136,20 @@ def requestToJsonWithOptions
        ++ toolFields
        ++ reasoningFields model options)
 
-def requestHeaders (config : OpenAIResponsesConfig) (options : OpenAIResponsesOptions) :
+def copilotDynamicHeaders
+    (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
+    (context : LeanAgent.AI.Context) : Array (String × String) :=
+  if model.provider == "github-copilot" then
+    let hasImages := LeanAgent.AI.Api.GitHubCopilotHeaders.hasCopilotVisionInput context.messages
+    LeanAgent.AI.Api.GitHubCopilotHeaders.buildCopilotDynamicHeaders context.messages hasImages
+  else
+    #[]
+
+def requestHeaders
+    (config : OpenAIResponsesConfig)
+    (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
+    (context : LeanAgent.AI.Context)
+    (options : OpenAIResponsesOptions) :
     Array (String × String) :=
   let retention := resolveCacheRetention options
   let sessionHeaders :=
@@ -146,17 +160,21 @@ def requestHeaders (config : OpenAIResponsesConfig) (options : OpenAIResponsesOp
       | some sessionId => #[("session_id", sessionId), ("x-client-request-id", sessionId)]
       | none => #[]
   LeanAgent.AI.Util.Headers.merge
-    (LeanAgent.AI.Util.Headers.merge config.headers sessionHeaders)
+    (LeanAgent.AI.Util.Headers.merge
+      (LeanAgent.AI.Util.Headers.merge config.headers (copilotDynamicHeaders model context))
+      sessionHeaders)
     (LeanAgent.AI.Util.Headers.providerHeadersToArray options.headers)
 
 def runHttpJson
     (config : OpenAIResponsesConfig)
+    (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
+    (context : LeanAgent.AI.Context)
     (payload : Lean.Json)
     (options : OpenAIResponsesOptions := {}) : IO String := do
   let response ← LeanAgent.Http.postJsonResponse
     { url := responsesUrl config.baseUrl
       apiKey := config.apiKey
-      headers := requestHeaders config options
+      headers := requestHeaders config model context options
       timeoutSeconds := config.timeoutSeconds
       connectTimeoutSeconds := config.connectTimeoutSeconds
       maxResponseBytes := config.maxResponseBytes
@@ -798,7 +816,7 @@ def completeWithOptions
   let payload := requestToJsonWithOptions model context options false
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
   let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
-    (runHttpJson config payload options)
+    (runHttpJson config model context payload options)
   let timestamp ← IO.monoMsNow
   match parseResponse model.api model.provider model.id timestamp raw with
   | .ok response => pure response
@@ -812,7 +830,7 @@ def completeStreamWithOptions
   let payload := requestToJsonWithOptions model context options true
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
   let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
-    (runHttpJson config payload options)
+    (runHttpJson config model context payload options)
   let timestamp ← IO.monoMsNow
   match parseStreamingEventStream model.api model.provider model.id timestamp raw with
   | .ok stream => pure stream

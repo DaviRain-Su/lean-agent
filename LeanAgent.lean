@@ -1,4 +1,5 @@
 import LeanAgent.AI.Auth
+import LeanAgent.AI.Api.GitHubCopilotHeaders
 import LeanAgent.AI.Api.OpenAICompletions
 import LeanAgent.AI.Api.OpenAIPromptCache
 import LeanAgent.AI.Api.OpenAIResponses

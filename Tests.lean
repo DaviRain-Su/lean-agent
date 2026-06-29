@@ -486,6 +486,10 @@ def jsonStringField? (json : Lean.Json) (key : String) : Option String :=
 def responseItemWithType? (items : Array Lean.Json) (itemType : String) : Option Lean.Json :=
   items.find? fun item => jsonStringField? item "type" == some itemType
 
+def headerValueCaseInsensitive? (headers : Array (String × String)) (name : String) : Option String :=
+  headers.findSome? fun (headerName, value) =>
+    if headerName.toLower == name.toLower then some value else none
+
 def testTransformMessagesCrossModelHandoff : IO Unit := do
   let assistant : LeanAgent.AI.AssistantMessage :=
     { content :=
@@ -745,6 +749,32 @@ def testOpenAIResponsesSharedConvertsTools : IO Unit := do
       assertTrue (jsonStringField? encoded "name" == some "read") "expected tool name"
       assertTrue (LeanAgent.Json.optVal? encoded "strict" == some (LeanAgent.Json.bool true)) "expected strict flag"
   | none => fail "expected encoded tool"
+
+def testGitHubCopilotDynamicHeaders : IO Unit := do
+  let userOnly : Array LeanAgent.AI.Message :=
+    #[.user { content := #[LeanAgent.AI.text "hi"], timestamp := 1 }]
+  assertTrue
+    (LeanAgent.AI.Api.GitHubCopilotHeaders.inferCopilotInitiator userOnly == "user")
+    "expected user-initiated Copilot request"
+  let toolEnded : Array LeanAgent.AI.Message :=
+    userOnly.push
+      (.toolResult
+        { toolCallId := "call-1"
+          toolName := "render"
+          content := #[LeanAgent.AI.image "base64" "image/png"]
+          isError := false
+          timestamp := 2
+        })
+  assertTrue
+    (LeanAgent.AI.Api.GitHubCopilotHeaders.inferCopilotInitiator toolEnded == "agent")
+    "expected agent-initiated Copilot request after tool result"
+  assertTrue
+    (LeanAgent.AI.Api.GitHubCopilotHeaders.hasCopilotVisionInput toolEnded)
+    "expected Copilot vision input detection"
+  let headers := LeanAgent.AI.Api.GitHubCopilotHeaders.buildCopilotDynamicHeaders toolEnded true
+  assertTrue (headerValueCaseInsensitive? headers "X-Initiator" == some "agent") "expected X-Initiator header"
+  assertTrue (headerValueCaseInsensitive? headers "Openai-Intent" == some "conversation-edits") "expected Openai-Intent header"
+  assertTrue (headerValueCaseInsensitive? headers "Copilot-Vision-Request" == some "true") "expected vision header"
 
 def testOpenAIResponsesRequestPayload : IO Unit := do
   let longSession := String.ofList (List.replicate 67 'x')
@@ -1963,6 +1993,16 @@ def httpServerScript : String :=
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
     , "            return"
+    , "        if self.path == '/responses-copilot/responses':"
+    , "            request = json.loads(body)"
+    , "            text = '|'.join([self.headers.get('X-Initiator') or '', self.headers.get('Openai-Intent') or '', self.headers.get('Copilot-Vision-Request') or '', self.headers.get('session_id') or ''])"
+    , "            payload = json.dumps({'id': 'resp_copilot', 'status': 'completed', 'output': [{'type': 'message', 'id': 'msg_copilot', 'content': [{'type': 'output_text', 'text': text}]}]}).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'application/json')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/responses-stream/responses':"
     , "            request = json.loads(body)"
     , "            text = 'streamed' if request.get('stream') is True else 'not-streaming'"
@@ -2227,6 +2267,42 @@ def testOpenAIResponsesCompleteWithOptionsLocal : IO Unit := do
     assertTrue (response.usage.cacheRead == 1) "expected cache read tokens"
     assertTrue (response.usage.totalTokens == 8) "expected total tokens"
 
+def testOpenAIResponsesSendsCopilotDynamicHeaders : IO Unit := do
+  let port := 18090
+  withHttpServer port do
+    let copilotModel :=
+      { responsesCodexModel with
+        provider := "github-copilot"
+        input := #["text", "image"]
+      }
+    let context : LeanAgent.AI.Context :=
+      { systemPrompt := some "system"
+        messages :=
+          #[.user
+              { content :=
+                  #[ LeanAgent.AI.text "describe"
+                   , LeanAgent.AI.image "base64" "image/png"
+                   ]
+                timestamp := 1
+              }]
+      }
+    let response ← LeanAgent.AI.Api.OpenAIResponses.completeWithOptions
+      { apiKey := "test-key"
+        baseUrl := s!"http://127.0.0.1:{port}/responses-copilot"
+        timeoutSeconds := 5
+        connectTimeoutSeconds := 5
+        noProxy := some "*"
+        userAgent := "lean-agent-test/0.1.0"
+      }
+      copilotModel
+      context
+      { sessionId := some "session-vision" }
+    assertTrue (response.responseId == some "resp_copilot") "expected copilot response id"
+    assertTrue
+      (LeanAgent.AI.contentPlainText response.content ==
+        "user|conversation-edits|true|session-vision")
+      "expected Copilot dynamic and session headers"
+
 def testOpenAIResponsesStreamWithOptionsLocal : IO Unit := do
   let port := 18089
   withHttpServer port do
@@ -2314,6 +2390,7 @@ def main : IO UInt32 := do
     testOpenAIResponsesSharedNormalizesForeignToolCallIds
     testOpenAIResponsesSharedOmitsDifferentModelFcItemId
     testOpenAIResponsesSharedConvertsTools
+    testGitHubCopilotDynamicHeaders
     testOpenAIResponsesRequestPayload
     testOpenAIResponsesParsesResponse
     testOpenAIResponsesParsesStreamingTextAndUsage
@@ -2372,6 +2449,7 @@ def main : IO UInt32 := do
     testOpenAICompletionsStreamWithOptionsLocal
     testOpenAICompatibleStreamsUsesStreamingRuntime
     testOpenAIResponsesCompleteWithOptionsLocal
+    testOpenAIResponsesSendsCopilotDynamicHeaders
     testOpenAIResponsesStreamWithOptionsLocal
     testOpenAICompletionsProviderErrorDiagnostics
     IO.println "lean-agent tests passed"
