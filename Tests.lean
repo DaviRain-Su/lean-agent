@@ -2884,6 +2884,31 @@ def testDiagnosticsExtractsProviderError : IO Unit := do
   assertTrue (rendered.contains "rate limit exceeded") "expected extracted provider message"
   assertTrue (rendered.contains "type=rate_limit_error") "expected extracted provider type"
 
+def testDiagnosticsFormatsThrownJsonValues : IO Unit := do
+  assertTrue
+    (LeanAgent.AI.Util.Diagnostics.formatThrownJsonValue (LeanAgent.Json.str "plain") == "plain")
+    "expected thrown string value to format directly"
+  assertTrue
+    (LeanAgent.AI.Util.Diagnostics.formatThrownJsonValue (LeanAgent.Json.nat 42) == "42")
+    "expected thrown number value to format as JSON"
+  let thrownObject := LeanAgent.Json.obj [("message", LeanAgent.Json.str "not an Error instance")]
+  let info := LeanAgent.AI.Util.Diagnostics.extractThrownJsonError thrownObject
+  assertTrue (info.name == some "ThrownValue") "expected non-error thrown value name"
+  assertTrue (info.message == thrownObject.compress) "expected thrown object to use JSON string"
+  let diagnostic :=
+    LeanAgent.AI.Util.Diagnostics.createAssistantMessageDiagnosticFromJsonValue
+      "runtime_error"
+      thrownObject
+      (some (LeanAgent.Json.obj [("phase", LeanAgent.Json.str "parse")]))
+      123
+  assertTrue (diagnostic.type == "runtime_error") "expected diagnostic type"
+  assertTrue (diagnostic.timestamp == 123) "expected diagnostic timestamp"
+  match diagnostic.error with
+  | some error =>
+      assertTrue (error.name == some "ThrownValue") "expected diagnostic thrown-value name"
+      assertTrue (error.message == thrownObject.compress) "expected diagnostic thrown-value message"
+  | none => fail "expected diagnostic error"
+
 def testOpenAICompletionsParsesUsage : IO Unit := do
   let raw :=
     "{\"choices\":[{\"message\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":7,\"prompt_tokens_details\":{\"cached_tokens\":5,\"cache_write_tokens\":3},\"completion_tokens_details\":{\"reasoning_tokens\":2}}}"
@@ -8036,6 +8061,7 @@ def main : IO UInt32 := do
     testOpenAIResponsesParsesStreamingToolCall
     testOpenAIResponsesStreamingRequiresTerminalEvent
     testDiagnosticsExtractsProviderError
+    testDiagnosticsFormatsThrownJsonValues
     testOpenAICompletionsParsesUsage
     testShortHashMatchesPi
     testEstimateUtilities

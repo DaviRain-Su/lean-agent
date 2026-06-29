@@ -7,6 +7,10 @@ namespace LeanAgent.AI.Util.Diagnostics
 def formatThrownValue (value : String) : String :=
   value
 
+def formatThrownJsonValue : Lean.Json → String
+  | Lean.Json.str value => value
+  | value => value.compress
+
 def extractDiagnosticError
     (message : String)
     (name : Option String := none)
@@ -18,6 +22,11 @@ def extractDiagnosticError
     code := code
   }
 
+def extractThrownJsonError (value : Lean.Json) : DiagnosticErrorInfo :=
+  { name := some "ThrownValue"
+    message := formatThrownJsonValue value
+  }
+
 def createAssistantMessageDiagnostic
     (type : String)
     (errorMessage : String)
@@ -26,6 +35,17 @@ def createAssistantMessageDiagnostic
   { type := type
     timestamp := timestamp
     error := some (extractDiagnosticError errorMessage)
+    details := details
+  }
+
+def createAssistantMessageDiagnosticFromJsonValue
+    (type : String)
+    (error : Lean.Json)
+    (details : Option Lean.Json := none)
+    (timestamp : Nat) : AssistantMessageDiagnostic :=
+  { type := type
+    timestamp := timestamp
+    error := some (extractThrownJsonError error)
     details := details
   }
 
