@@ -53,9 +53,9 @@ def resolvedEnv (accountId : String) (gatewayId : Option String) : LeanAgent.AI.
 
 def resolveCloudflareEnv
     (kind : Kind)
+    (model : LeanAgent.AI.ModelRef)
     (ctx : LeanAgent.AI.Auth.AuthContext)
-    (credential : Option LeanAgent.AI.Auth.ApiKeyCredential)
-    (modelBaseUrl : Option String) :
+    (credential : Option LeanAgent.AI.Auth.ApiKeyCredential) :
     IO (Option LeanAgent.AI.Auth.AuthResult) := do
   let apiKey? ← resolveValue apiKeyEnv ctx credential
   let accountId? ← resolveValue accountIdEnv ctx credential
@@ -69,7 +69,7 @@ def resolveCloudflareEnv
       if kind.requiresGateway && gatewayId?.isNone then
         pure none
       else
-        match modelBaseUrl with
+        match model.baseUrl with
         | none => pure none
         | some template =>
             let baseUrl := resolveCloudflareBaseUrl template accountId gatewayId?
@@ -96,14 +96,14 @@ def resolveCloudflareEnv
 
 def cloudflareWorkersAIAuth : LeanAgent.AI.Auth.ApiKeyAuth :=
   { name := "Cloudflare API key"
-    resolve := fun ctx credential modelBaseUrl =>
-      resolveCloudflareEnv .workersAI ctx credential modelBaseUrl
+    resolve := fun model ctx credential =>
+      resolveCloudflareEnv .workersAI model ctx credential
   }
 
 def cloudflareAIGatewayAuth : LeanAgent.AI.Auth.ApiKeyAuth :=
   { name := "Cloudflare API key"
-    resolve := fun ctx credential modelBaseUrl =>
-      resolveCloudflareEnv .aiGateway ctx credential modelBaseUrl
+    resolve := fun model ctx credential =>
+      resolveCloudflareEnv .aiGateway model ctx credential
   }
 
 end LeanAgent.AI.Providers.CloudflareAuth

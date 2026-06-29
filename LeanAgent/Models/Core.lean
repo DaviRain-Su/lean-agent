@@ -551,7 +551,12 @@ def Collection.refresh (collection : Collection) (providerId : Option String := 
 def Collection.getAuth (collection : Collection) (model : ModelInfo) : IO (Option LeanAgent.AI.Auth.AuthResult) := do
   match ← collection.getProvider? model.provider with
   | some provider =>
-      LeanAgent.AI.Auth.resolveProviderAuth provider.id provider.auth collection.credentials collection.authContext
+      LeanAgent.AI.Auth.resolveProviderAuthForModel
+        model.toModelRef
+        provider.id
+        provider.auth
+        collection.credentials
+        collection.authContext
   | none => pure none
 
 def Collection.requireProvider (collection : Collection) (model : ModelInfo) : IO Provider := do
@@ -566,9 +571,13 @@ def Collection.applyAuth
     (options : LeanAgent.AI.SimpleStreamOptions) :
     IO (ModelInfo × LeanAgent.AI.SimpleStreamOptions) := do
   let resolution ←
-    LeanAgent.AI.Auth.resolveProviderAuth provider.id provider.auth collection.credentials collection.authContext
+    LeanAgent.AI.Auth.resolveProviderAuthForModel
+      model.toModelRef
+      provider.id
+      provider.auth
+      collection.credentials
+      collection.authContext
       { apiKey := options.apiKey, env := options.env }
-      (some model.baseUrl)
   let providerModelHeaders :=
     authHeadersToStreamHeaders provider.headers
       (authHeadersToStreamHeaders model.headers options.headers)

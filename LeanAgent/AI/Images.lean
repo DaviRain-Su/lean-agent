@@ -180,9 +180,13 @@ def Collection.getAuth
     (model : LeanAgent.AI.ImagesModel) : IO (Option LeanAgent.AI.Auth.AuthResult) := do
   match ← collection.getProvider? model.provider with
   | some provider =>
-      LeanAgent.AI.Auth.resolveProviderAuth provider.id provider.auth collection.credentials collection.authContext
+      LeanAgent.AI.Auth.resolveProviderAuthForModel
+        model.toModelRef
+        provider.id
+        provider.auth
+        collection.credentials
+        collection.authContext
         {}
-        (some model.baseUrl)
   | none => pure none
 
 def imageHeaderNames (headers : Array (String × Option String)) : Array String :=
@@ -203,9 +207,13 @@ def Collection.applyAuth
     (options : LeanAgent.AI.ImagesOptions) :
     IO (LeanAgent.AI.ImagesModel × LeanAgent.AI.ImagesOptions) := do
   let resolution ←
-    LeanAgent.AI.Auth.resolveProviderAuth provider.id provider.auth collection.credentials collection.authContext
+    LeanAgent.AI.Auth.resolveProviderAuthForModel
+      model.toModelRef
+      provider.id
+      provider.auth
+      collection.credentials
+      collection.authContext
       { apiKey := options.apiKey, env := options.env }
-      (some model.baseUrl)
   match resolution with
   | none => pure (model, options)
   | some resolution =>

@@ -7466,12 +7466,12 @@ def testImagesCollectionAppliesAuthAndOptions : IO Unit := do
     { apiKey :=
         some
           { name := "Image custom auth"
-            resolve := fun _ctx _credential modelBaseUrl => do
+            resolve := fun model _ctx _credential => do
               pure
                 (some
                   { auth :=
                       { apiKey := some "auth-key"
-                        baseUrl := some ((modelBaseUrl.getD "missing-base") ++ "/auth")
+                        baseUrl := some ((model.baseUrl.getD "missing-base") ++ "/auth")
                         headers := #[("X-Auth", "yes"), ("X-Trace", "auth")]
                       }
                     env := #[("AUTH_ENV", "auth")]

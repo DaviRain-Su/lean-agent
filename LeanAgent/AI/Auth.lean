@@ -189,7 +189,7 @@ structure CredentialStore where
 structure ApiKeyAuth where
   name : String
   login : Option (AuthLoginCallbacks → IO ApiKeyCredential) := none
-  resolve : AuthContext → Option ApiKeyCredential → Option String → IO (Option AuthResult)
+  resolve : LeanAgent.AI.ModelRef → AuthContext → Option ApiKeyCredential → IO (Option AuthResult)
 
 structure OAuthAuth where
   name : String
@@ -290,7 +290,7 @@ def envApiKeyAuth (name : String) (envVars : Array String) : ApiKeyAuth :=
     login := some fun callbacks => do
       let key ← callbacks.prompt (.secret s!"Enter {name}" none callbacks.signal)
       pure { key := some key }
-    resolve := fun ctx credential _modelBaseUrl => do
+    resolve := fun _model ctx credential => do
       match credential with
       | some credential =>
           match credential.key with
@@ -311,11 +311,11 @@ def envApiKeyAuth (name : String) (envVars : Array String) : ApiKeyAuth :=
   }
 
 def resolveApiKey
+    (model : LeanAgent.AI.ModelRef)
     (ctx : AuthContext)
     (apiKeyAuth : ApiKeyAuth)
-    (credential : Option ApiKeyCredential)
-    (modelBaseUrl : Option String := none) : IO (Option AuthResult) :=
-  apiKeyAuth.resolve ctx credential modelBaseUrl
+    (credential : Option ApiKeyCredential) : IO (Option AuthResult) :=
+  apiKeyAuth.resolve model ctx credential
 
 def oauthModelsError (message : String) : IO.Error :=
   IO.userError s!"ModelsError(oauth): {message}"
@@ -363,13 +363,21 @@ def resolveStoredOAuth
 def readCredential (credentials : CredentialStore) (providerId : String) : IO (Option Credential) :=
   credentials.read providerId
 
-def resolveProviderAuth
+def defaultAuthModelRef (providerId : String) (baseUrl : Option String := none) :
+    LeanAgent.AI.ModelRef :=
+  { id := ""
+    api := ""
+    provider := providerId
+    baseUrl := baseUrl
+  }
+
+def resolveProviderAuthForModel
+    (model : LeanAgent.AI.ModelRef)
     (providerId : String)
     (auth : ProviderAuth)
     (credentials : CredentialStore)
     (ctx : AuthContext)
-    (overrides : AuthOverrides := {})
-    (modelBaseUrl : Option String := none) : IO (Option AuthResult) := do
+    (overrides : AuthOverrides := {}) : IO (Option AuthResult) := do
   let requestCtx :=
     if overrides.env.isEmpty then
       ctx
@@ -377,7 +385,7 @@ def resolveProviderAuth
       overlayEnvAuthContext ctx overrides.env
   match overrides.apiKey, auth.apiKey with
   | some apiKey, some apiKeyAuth =>
-      resolveApiKey requestCtx apiKeyAuth (some { key := some apiKey, env := overrides.env }) modelBaseUrl
+      resolveApiKey model requestCtx apiKeyAuth (some { key := some apiKey, env := overrides.env })
   | _, _ =>
       match ← readCredential credentials providerId with
       | some (.apiKey credential) =>
@@ -388,7 +396,7 @@ def resolveProviderAuth
                   credential
                 else
                   { credential with env := providerEnvMerge credential.env overrides.env }
-              resolveApiKey requestCtx apiKeyAuth credential modelBaseUrl
+              resolveApiKey model requestCtx apiKeyAuth credential
           | none => pure none
       | some (.oauth credential) =>
           match auth.oauth with
@@ -396,8 +404,23 @@ def resolveProviderAuth
           | none => pure none
       | none =>
           match auth.apiKey with
-          | some apiKeyAuth => resolveApiKey requestCtx apiKeyAuth none modelBaseUrl
+          | some apiKeyAuth => resolveApiKey model requestCtx apiKeyAuth none
           | none => pure none
+
+def resolveProviderAuth
+    (providerId : String)
+    (auth : ProviderAuth)
+    (credentials : CredentialStore)
+    (ctx : AuthContext)
+    (overrides : AuthOverrides := {})
+    (modelBaseUrl : Option String := none) : IO (Option AuthResult) := do
+  resolveProviderAuthForModel
+    (defaultAuthModelRef providerId modelBaseUrl)
+    providerId
+    auth
+    credentials
+    ctx
+    overrides
 
 def InMemoryCredentialStore.mk : IO CredentialStore := do
   let credentials ← Std.Mutex.new (Array.empty : Array (String × Credential))

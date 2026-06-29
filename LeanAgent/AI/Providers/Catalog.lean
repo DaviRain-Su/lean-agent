@@ -28,7 +28,7 @@ def googleVertexHasAdcCredentials
 
 def googleVertexApiKeyAuth : LeanAgent.AI.Auth.ApiKeyAuth :=
   { name := "Google Cloud credentials"
-    resolve := fun ctx credential _modelBaseUrl => do
+    resolve := fun _model ctx credential => do
       let credentialEnv := credential.map (fun value => value.env) |>.getD #[]
       match credential.bind (fun value => value.key) with
       | some key =>
@@ -100,7 +100,7 @@ def amazonBedrockAmbientAuthSource?
 
 def amazonBedrockApiKeyAuth : LeanAgent.AI.Auth.ApiKeyAuth :=
   { name := "AWS credentials"
-    resolve := fun ctx credential _modelBaseUrl => do
+    resolve := fun _model ctx credential => do
       let credentialEnv := credential.map (fun value => value.env) |>.getD #[]
       match credential.bind (fun value => value.key) with
       | some key =>
