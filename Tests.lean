@@ -7178,6 +7178,35 @@ def testMistralConversationsStreamWithOptionsLocal : IO Unit := do
         | _ => false)
       "expected Mistral local text delta"
 
+def testCompatMistralTypedLegacyAliasLocal : IO Unit := do
+  let port := 18101
+  withHttpServer port do
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := LeanAgent.Models.mistralDefaultModel
+        name := "Devstral"
+        provider := LeanAgent.Models.mistralProviderId
+        api := LeanAgent.AI.Api.MistralConversations.api
+        baseUrl := s!"http://127.0.0.1:{port}/mistral"
+        input := #["text", "image"]
+      }
+    let stream ← LeanAgent.AI.Compat.Aliases.streamMistral
+      model
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+      { apiKey := some "mistral-key"
+        sessionId := some "session-typed"
+        toolChoice := some .required
+        reasoningEffort := some "high"
+        promptMode := some "reasoning"
+        headers := #[("X-Trace", some "trace-mistral")]
+      }
+    assertTrue stream.isComplete "expected compat Mistral typed legacy alias stream"
+    assertTrue
+      (LeanAgent.AI.contentPlainText stream.result.content ==
+        "devstral-medium-latest|True|Bearer mistral-key|session-typed|session-typed|high|reasoning|trace-mistral|system")
+      "expected compat Mistral typed alias to preserve provider-specific options"
+
 def testCompatAzureOpenAIResponsesBuiltinDispatch : IO Unit := do
   let port := 18095
   withHttpServer port do
@@ -7427,6 +7456,7 @@ def main : IO UInt32 := do
     testGoogleGenerativeAIStreamWithOptionsLocal
     testGoogleVertexStreamWithOptionsLocal
     testMistralConversationsStreamWithOptionsLocal
+    testCompatMistralTypedLegacyAliasLocal
     testCompatAzureOpenAIResponsesBuiltinDispatch
     testCompatOpenAICodexResponsesBuiltinDispatch
     testOpenAICompletionsProviderErrorDiagnostics
