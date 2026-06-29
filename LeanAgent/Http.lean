@@ -9,7 +9,7 @@ It does not execute the `curl` command-line program.
 -/
 @[extern "lean_agent_http_post_json"]
 opaque postJsonRaw
-  (url apiKey payload noProxy userAgent : @& String)
+  (url apiKey payload noProxy userAgent extraHeaders : @& String)
   (timeoutSeconds connectTimeoutSeconds : UInt32)
   (maxResponseBytes : UInt64)
   : IO String
@@ -22,6 +22,7 @@ structure JsonPostConfig where
   maxResponseBytes : UInt64 := 33554432
   noProxy : Option String := none
   userAgent : String := "lean-agent/0.1.0"
+  headers : Array (String × String) := #[]
 
 structure JsonPostResponse where
   status : Nat
@@ -39,6 +40,20 @@ def parseStatusEnvelope (raw : String) : Except String JsonPostResponse :=
               body := String.intercalate "\n" bodyParts
             }
 
+def headerHasLineBreak (value : String) : Bool :=
+  value.contains "\n" || value.contains "\r"
+
+def encodeHeader? (header : String × String) : Option String :=
+  let name := header.fst.trimAscii.toString
+  let value := header.snd
+  if name.isEmpty || headerHasLineBreak name || headerHasLineBreak value then
+    none
+  else
+    some (name ++ ": " ++ value)
+
+def encodeHeaders (headers : Array (String × String)) : String :=
+  String.intercalate "\n" (headers.toList.filterMap encodeHeader?)
+
 def postJsonResponse (config : JsonPostConfig) (payload : String) : IO JsonPostResponse := do
   let raw ← postJsonRaw
     config.url
@@ -46,6 +61,7 @@ def postJsonResponse (config : JsonPostConfig) (payload : String) : IO JsonPostR
     payload
     (config.noProxy.getD "")
     config.userAgent
+    (encodeHeaders config.headers)
     config.timeoutSeconds
     config.connectTimeoutSeconds
     config.maxResponseBytes

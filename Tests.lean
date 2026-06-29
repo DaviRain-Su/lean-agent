@@ -825,6 +825,14 @@ def httpServerScript : String :=
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
     , "            return"
+    , "        if self.path == '/headers-openai/chat/completions':"
+    , "            payload = json.dumps({'choices': [{'message': {'content': self.headers.get('X-Trace') or ''}, 'finish_reason': 'stop'}]}).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'application/json')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/large':"
     , "            payload = b'x' * 1024"
     , "            self.send_response(200)"
@@ -838,6 +846,7 @@ def httpServerScript : String :=
     , "            'body': body,"
     , "            'auth': self.headers.get('Authorization'),"
     , "            'ua': self.headers.get('User-Agent'),"
+    , "            'x_custom': self.headers.get('X-Custom'),"
     , "        }).encode('utf-8')"
     , "        self.send_response(201)"
     , "        self.send_header('Content-Type', 'application/json')"
@@ -924,6 +933,18 @@ def testHttpClientLocalPost : IO Unit := do
     assertTrue (response.body.contains "\"auth\": \"Bearer test-key\"") "expected authorization header"
     assertTrue (response.body.contains "\"ua\": \"lean-agent-test/0.1.0\"") "expected user agent header"
 
+def testHttpClientCustomHeaders : IO Unit := do
+  let port := 18084
+  withHttpServer port do
+    let response ← LeanAgent.Http.postJsonResponse
+      { (localHttpConfig port "/headers") with
+        headers := #[("X-Custom", "custom-value"), ("Authorization", "Bearer override-token")]
+      }
+      "{\"ping\":true}"
+    assertTrue (response.status == 201) "expected HTTP status 201"
+    assertTrue (response.body.contains "\"x_custom\": \"custom-value\"") "expected custom header"
+    assertTrue (response.body.contains "\"auth\": \"Bearer override-token\"") "expected authorization override"
+
 def testHttpClientResponseLimit : IO Unit := do
   let port := 18081
   withHttpServer port do
@@ -954,6 +975,21 @@ def testOpenAICompletionsRetriesTransientHttpFailure : IO Unit := do
         maxRetryDelayMs := some 0
       }
     assertTrue (response.content == "retried") "expected retried provider response"
+
+def testOpenAICompletionsSendsCustomHeaders : IO Unit := do
+  let port := 18085
+  withHttpServer port do
+    let response ← LeanAgent.AI.Api.OpenAICompletions.completeWithOptions
+      { apiKey := "test-key"
+        baseUrl := s!"http://127.0.0.1:{port}/headers-openai"
+        timeoutSeconds := 5
+        connectTimeoutSeconds := 5
+        noProxy := some "*"
+        userAgent := "lean-agent-test/0.1.0"
+      }
+      (basicProviderRequest)
+      { headers := #[("X-Trace", some "trace-1")] }
+    assertTrue (response.content == "trace-1") "expected OpenAI-compatible request header"
 
 def testOpenAICompletionsProviderErrorDiagnostics : IO Unit := do
   let port := 18083
@@ -1022,8 +1058,10 @@ def main : IO UInt32 := do
     testAgentSessionRejectsAssistantContinue
     testJsonEventShape
     testHttpClientLocalPost
+    testHttpClientCustomHeaders
     testHttpClientResponseLimit
     testOpenAICompletionsRetriesTransientHttpFailure
+    testOpenAICompletionsSendsCustomHeaders
     testOpenAICompletionsProviderErrorDiagnostics
     IO.println "lean-agent tests passed"
     pure 0

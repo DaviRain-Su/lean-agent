@@ -82,6 +82,91 @@ static CURLcode ensure_curl_global_init(void) {
     return init_code;
 }
 
+static int ascii_lower(int c) {
+    if (c >= 'A' && c <= 'Z') {
+        return c + ('a' - 'A');
+    }
+    return c;
+}
+
+static int header_line_matches(const char *line, size_t line_len, const char *name) {
+    size_t name_len = strlen(name);
+    size_t i = 0;
+    while (i < line_len && (line[i] == ' ' || line[i] == '\t')) {
+        i++;
+    }
+    if (i + name_len > line_len) {
+        return 0;
+    }
+    for (size_t j = 0; j < name_len; j++) {
+        if (ascii_lower((unsigned char)line[i + j]) != ascii_lower((unsigned char)name[j])) {
+            return 0;
+        }
+    }
+    i += name_len;
+    while (i < line_len && (line[i] == ' ' || line[i] == '\t')) {
+        i++;
+    }
+    return i < line_len && line[i] == ':';
+}
+
+static int header_block_has(const char *block, const char *name) {
+    const char *line = block;
+    while (*line != 0) {
+        const char *line_end = strchr(line, '\n');
+        size_t line_len = line_end == NULL ? strlen(line) : (size_t)(line_end - line);
+        if (line_len > 0 && line[line_len - 1] == '\r') {
+            line_len--;
+        }
+        if (header_line_matches(line, line_len, name)) {
+            return 1;
+        }
+        if (line_end == NULL) {
+            break;
+        }
+        line = line_end + 1;
+    }
+    return 0;
+}
+
+static int append_header_copy(struct curl_slist **headers, const char *line, size_t line_len) {
+    if (line_len == 0) {
+        return 1;
+    }
+    char *copy = malloc(line_len + 1);
+    if (copy == NULL) {
+        return 0;
+    }
+    memcpy(copy, line, line_len);
+    copy[line_len] = 0;
+    struct curl_slist *next_headers = curl_slist_append(*headers, copy);
+    free(copy);
+    if (next_headers == NULL) {
+        return 0;
+    }
+    *headers = next_headers;
+    return 1;
+}
+
+static int append_header_block(struct curl_slist **headers, const char *block) {
+    const char *line = block;
+    while (*line != 0) {
+        const char *line_end = strchr(line, '\n');
+        size_t line_len = line_end == NULL ? strlen(line) : (size_t)(line_end - line);
+        if (line_len > 0 && line[line_len - 1] == '\r') {
+            line_len--;
+        }
+        if (!append_header_copy(headers, line, line_len)) {
+            return 0;
+        }
+        if (line_end == NULL) {
+            break;
+        }
+        line = line_end + 1;
+    }
+    return 1;
+}
+
 #define SETOPT_OR_GOTO(option, value) do { \
     CURLcode opt_code = curl_easy_setopt(curl, option, value); \
     if (opt_code != CURLE_OK) { \
@@ -96,6 +181,7 @@ lean_obj_res lean_agent_http_post_json(
     lean_obj_arg lean_payload,
     lean_obj_arg lean_no_proxy,
     lean_obj_arg lean_user_agent,
+    lean_obj_arg lean_extra_headers,
     uint32_t timeout_seconds,
     uint32_t connect_timeout_seconds,
     uint64_t max_response_bytes
@@ -105,6 +191,7 @@ lean_obj_res lean_agent_http_post_json(
     const char *payload = lean_string_cstr(lean_payload);
     const char *no_proxy = lean_string_cstr(lean_no_proxy);
     const char *user_agent = lean_string_cstr(lean_user_agent);
+    const char *extra_headers = lean_string_cstr(lean_extra_headers);
     lean_obj_res result = NULL;
 
     if (max_response_bytes == 0) {
@@ -144,36 +231,39 @@ lean_obj_res lean_agent_http_post_json(
 
     char *auth_header = NULL;
     struct curl_slist *headers = NULL;
-    struct curl_slist *next_headers = curl_slist_append(headers, "Content-Type: application/json");
-    if (next_headers == NULL) {
+    if (!header_block_has(extra_headers, "Content-Type") &&
+        !append_header_copy(&headers, "Content-Type: application/json", strlen("Content-Type: application/json"))) {
         result = io_error("failed to allocate content-type header");
         goto cleanup;
     }
-    headers = next_headers;
 
-    next_headers = curl_slist_append(headers, "Accept: application/json");
-    if (next_headers == NULL) {
+    if (!header_block_has(extra_headers, "Accept") &&
+        !append_header_copy(&headers, "Accept: application/json", strlen("Accept: application/json"))) {
         result = io_error("failed to allocate accept header");
         goto cleanup;
     }
-    headers = next_headers;
 
-    size_t auth_prefix_len = strlen("Authorization: Bearer ");
-    size_t key_len = strlen(api_key);
-    auth_header = malloc(auth_prefix_len + key_len + 1);
-    if (auth_header == NULL) {
-        result = io_error("failed to allocate authorization header");
+    if (!header_block_has(extra_headers, "Authorization") && api_key[0] != 0) {
+        size_t auth_prefix_len = strlen("Authorization: Bearer ");
+        size_t key_len = strlen(api_key);
+        auth_header = malloc(auth_prefix_len + key_len + 1);
+        if (auth_header == NULL) {
+            result = io_error("failed to allocate authorization header");
+            goto cleanup;
+        }
+        memcpy(auth_header, "Authorization: Bearer ", auth_prefix_len);
+        memcpy(auth_header + auth_prefix_len, api_key, key_len);
+        auth_header[auth_prefix_len + key_len] = 0;
+        if (!append_header_copy(&headers, auth_header, strlen(auth_header))) {
+            result = io_error("failed to allocate authorization header");
+            goto cleanup;
+        }
+    }
+
+    if (!append_header_block(&headers, extra_headers)) {
+        result = io_error("failed to allocate custom headers");
         goto cleanup;
     }
-    memcpy(auth_header, "Authorization: Bearer ", auth_prefix_len);
-    memcpy(auth_header + auth_prefix_len, api_key, key_len);
-    auth_header[auth_prefix_len + key_len] = 0;
-    next_headers = curl_slist_append(headers, auth_header);
-    if (next_headers == NULL) {
-        result = io_error("failed to allocate authorization header");
-        goto cleanup;
-    }
-    headers = next_headers;
 
     SETOPT_OR_GOTO(CURLOPT_ERRORBUFFER, error_buffer);
     SETOPT_OR_GOTO(CURLOPT_URL, url);

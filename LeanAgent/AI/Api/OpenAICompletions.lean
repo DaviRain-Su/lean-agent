@@ -14,6 +14,7 @@ open LeanAgent
 structure OpenAICompatibleConfig where
   apiKey : String
   baseUrl : String := "https://api.openai.com/v1"
+  headers : Array (String × String) := #[]
   timeoutSeconds : UInt32 := 120
   connectTimeoutSeconds : UInt32 := 30
   maxResponseBytes : UInt64 := 33554432
@@ -199,10 +200,28 @@ def requestToJsonWithOptions
 def requestToJson (request : ProviderRequest) : Lean.Json :=
   requestToJsonWithOptions request
 
-def runHttpJson (config : OpenAICompatibleConfig) (payload : Lean.Json) : IO String := do
+def headerNameEq (a b : String) : Bool :=
+  a.toLower == b.toLower
+
+def mergeHeaders (base override : Array (String × String)) : Array (String × String) :=
+  let withoutOverridden := base.filter fun (name, _) =>
+    override.all fun (overrideName, _) => !headerNameEq name overrideName
+  withoutOverridden ++ override
+
+def optionHeaders (headers : Array (String × Option String)) : Array (String × String) :=
+  headers.filterMap fun (name, value) =>
+    match value with
+    | some value => some (name, value)
+    | none => none
+
+def runHttpJson
+    (config : OpenAICompatibleConfig)
+    (payload : Lean.Json)
+    (headers : Array (String × String) := #[]) : IO String := do
   let response ← LeanAgent.Http.postJsonResponse
     { url := chatCompletionsUrl config.baseUrl
       apiKey := config.apiKey
+      headers := mergeHeaders config.headers headers
       timeoutSeconds := config.timeoutSeconds
       connectTimeoutSeconds := config.connectTimeoutSeconds
       maxResponseBytes := config.maxResponseBytes
@@ -319,7 +338,7 @@ def completeWithOptions
   (options : OpenAICompletionsOptions := {}) : IO LeanAgent.ProviderResponse := do
   let payload := requestToJsonWithOptions request options config.baseUrl
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
-  let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy (runHttpJson config payload)
+  let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy (runHttpJson config payload (optionHeaders options.headers))
   match parseChatCompletion raw with
   | .ok response => pure response
   | .error err => throw (IO.userError s!"failed to parse provider response: {err}\n{raw}")
