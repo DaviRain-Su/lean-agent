@@ -24,8 +24,8 @@ Every row must move through this ledger before it is considered complete.
 | --- | --- | --- | --- |
 | HTTP transport | `LeanAgent.Http` | partial | Native libcurl JSON POST exists. No generic headers, streaming, retry, proxy helpers, or response headers yet. |
 | OpenAI-compatible chat completions | `LeanAgent.AI.Api.OpenAICompletions`, `LeanAgent.OpenAI` | partial | Protocol logic now lives under `AI.Api`; legacy `LeanAgent.OpenAI` is a compatibility wrapper. Non-streaming Chat Completions, tool calls, empty-tools omission, tool history handling, and basic option serialization exist. No live streaming, prompt cache, retries, response diagnostics, images, or Responses API. |
-| Static model catalog | `LeanAgent.Models` | partial | DeepSeek and OpenAI fallback only. No generated full catalog or dynamic refresh. |
-| Provider/model collection | `LeanAgent.Models` | partial | Runtime provider collection now supports registration, lookup, refresh hooks, auth application, and simple stream/complete dispatch. Full generated catalog, dynamic providers, and live streaming are missing. |
+| Static model catalog | `LeanAgent.Models` | partial | Starter catalog covers DeepSeek, OpenAI fallback, OpenRouter, Groq, xAI, Cerebras, Together, and Fireworks representative OpenAI-compatible models. Generated full catalog and dynamic refresh are missing. |
+| Provider/model collection | `LeanAgent.Models` | partial | Runtime provider collection now supports registration, lookup, refresh hooks, auth application, simple stream/complete dispatch, and default registration for the starter OpenAI-compatible provider family. Full generated catalog, dynamic providers, and live streaming are missing. |
 | Agent-facing messages | `LeanAgent.Core`, `LeanAgent.AI.Types` | partial | Pi-style message/content/usage types and legacy conversions exist. Runtime still uses simplified `Core.AgentMessage`. Diagnostics are missing. |
 | Images | `LeanAgent.AI.Types` | partial | Image content types exist. Image generation APIs and image model catalog are missing. |
 | OAuth/auth store | `LeanAgent.AI.Auth` | partial | Env API-key auth, auth context, in-memory credentials, and provider auth resolution exist. OAuth and file-backed stores are missing. |
@@ -66,7 +66,7 @@ Before starting OMP advanced work:
 | `src/compat.ts` | `LeanAgent.AI.Compat` | missing | Needs global API registry and legacy helpers. |
 | `src/cli.ts` | future `lean-agent ai ...` commands | missing | Not needed for core loop yet. |
 | `src/models.ts` | `LeanAgent.Models` | partial | Static catalog plus runtime `Provider`/`Collection`, `createModels`, `createProvider`, auth application, and simple completion dispatch. Generated catalog and full provider family are missing. |
-| `src/models.generated.ts` | generated Lean catalog or checked-in catalog | missing | Current catalog has only DeepSeek and OpenAI fallback. |
+| `src/models.generated.ts` | generated Lean catalog or checked-in catalog | partial | Lean has a hand-curated starter catalog for key OpenAI-compatible providers. Full generated catalog parity is missing. |
 | `src/types.ts` | `LeanAgent.AI.Types` | partial | Core content/message/usage/stream-option types exist. Provider-specific compat and full stream runtime still missing. |
 | `src/env-api-keys.ts` | `LeanAgent.AI.Auth` | partial | Env API-key auth exists for registered providers. Full provider env map and ambient credential probes are missing. |
 | `src/session-resources.ts` | `LeanAgent.AI.SessionResources` | missing | Needed for cross-provider handoff and session resources. |
@@ -166,17 +166,17 @@ should be generated or checked in as Lean data.
 | Ant Ling | `ant-ling.ts`, `ant-ling.models.ts` | `LeanAgent.AI.Providers.AntLing` | missing |
 | Anthropic | `anthropic.ts`, `anthropic.models.ts` | `LeanAgent.AI.Providers.Anthropic` | missing |
 | Azure OpenAI Responses | `azure-openai-responses.ts`, `azure-openai-responses.models.ts` | `LeanAgent.AI.Providers.AzureOpenAIResponses` | missing |
-| Cerebras | `cerebras.ts`, `cerebras.models.ts` | `LeanAgent.AI.Providers.Cerebras` | missing |
+| Cerebras | `cerebras.ts`, `cerebras.models.ts` | `LeanAgent.Models` | partial |
 | Cloudflare AI Gateway | `cloudflare-ai-gateway.ts`, `cloudflare-ai-gateway.models.ts` | `LeanAgent.AI.Providers.CloudflareAIGateway` | missing |
 | Cloudflare Workers AI | `cloudflare-workers-ai.ts`, `cloudflare-workers-ai.models.ts` | `LeanAgent.AI.Providers.CloudflareWorkersAI` | missing |
 | Cloudflare auth | `cloudflare-auth.ts` | `LeanAgent.AI.Providers.CloudflareAuth` | missing |
-| DeepSeek | `deepseek.ts`, `deepseek.models.ts` | `LeanAgent.AI.Providers.DeepSeek` | partial |
+| DeepSeek | `deepseek.ts`, `deepseek.models.ts` | `LeanAgent.Models` | partial |
 | Faux test provider | `faux.ts` | `LeanAgent.AI.Providers.Faux` | missing |
-| Fireworks | `fireworks.ts`, `fireworks.models.ts` | `LeanAgent.AI.Providers.Fireworks` | missing |
+| Fireworks | `fireworks.ts`, `fireworks.models.ts` | `LeanAgent.Models` | partial |
 | GitHub Copilot | `github-copilot.ts`, `github-copilot.models.ts` | `LeanAgent.AI.Providers.GitHubCopilot` | missing |
 | Google | `google.ts`, `google.models.ts` | `LeanAgent.AI.Providers.Google` | missing |
 | Google Vertex | `google-vertex.ts`, `google-vertex.models.ts` | `LeanAgent.AI.Providers.GoogleVertex` | missing |
-| Groq | `groq.ts`, `groq.models.ts` | `LeanAgent.AI.Providers.Groq` | missing |
+| Groq | `groq.ts`, `groq.models.ts` | `LeanAgent.Models` | partial |
 | Hugging Face | `huggingface.ts`, `huggingface.models.ts` | `LeanAgent.AI.Providers.HuggingFace` | missing |
 | Kimi Coding | `kimi-coding.ts`, `kimi-coding.models.ts` | `LeanAgent.AI.Providers.KimiCoding` | missing |
 | MiniMax | `minimax.ts`, `minimax.models.ts` | `LeanAgent.AI.Providers.MiniMax` | missing |
@@ -185,15 +185,15 @@ should be generated or checked in as Lean data.
 | Moonshot AI | `moonshotai.ts`, `moonshotai.models.ts` | `LeanAgent.AI.Providers.MoonshotAI` | missing |
 | Moonshot AI CN | `moonshotai-cn.ts`, `moonshotai-cn.models.ts` | `LeanAgent.AI.Providers.MoonshotAICN` | missing |
 | NVIDIA | `nvidia.ts`, `nvidia.models.ts` | `LeanAgent.AI.Providers.NVIDIA` | missing |
-| OpenAI | `openai.ts`, `openai.models.ts` | `LeanAgent.AI.Providers.OpenAI` | partial |
+| OpenAI | `openai.ts`, `openai.models.ts` | `LeanAgent.Models` | partial |
 | OpenAI Codex | `openai-codex.ts`, `openai-codex.models.ts` | `LeanAgent.AI.Providers.OpenAICodex` | missing |
 | OpenCode | `opencode.ts`, `opencode.models.ts` | `LeanAgent.AI.Providers.OpenCode` | missing |
 | OpenCode Go | `opencode-go.ts`, `opencode-go.models.ts` | `LeanAgent.AI.Providers.OpenCodeGo` | missing |
-| OpenRouter | `openrouter.ts`, `openrouter.models.ts` | `LeanAgent.AI.Providers.OpenRouter` | missing |
+| OpenRouter | `openrouter.ts`, `openrouter.models.ts` | `LeanAgent.Models` | partial |
 | OpenRouter images | `openrouter-images.ts` | `LeanAgent.AI.Providers.OpenRouterImages` | missing |
-| Together | `together.ts`, `together.models.ts` | `LeanAgent.AI.Providers.Together` | missing |
+| Together | `together.ts`, `together.models.ts` | `LeanAgent.Models` | partial |
 | Vercel AI Gateway | `vercel-ai-gateway.ts`, `vercel-ai-gateway.models.ts` | `LeanAgent.AI.Providers.VercelAIGateway` | missing |
-| xAI | `xai.ts`, `xai.models.ts` | `LeanAgent.AI.Providers.XAI` | missing |
+| xAI | `xai.ts`, `xai.models.ts` | `LeanAgent.Models` | partial |
 | Xiaomi | `xiaomi.ts`, `xiaomi.models.ts` | `LeanAgent.AI.Providers.Xiaomi` | missing |
 | Xiaomi Token Plan AMS | `xiaomi-token-plan-ams.ts`, `xiaomi-token-plan-ams.models.ts` | `LeanAgent.AI.Providers.XiaomiTokenPlanAMS` | missing |
 | Xiaomi Token Plan CN | `xiaomi-token-plan-cn.ts`, `xiaomi-token-plan-cn.models.ts` | `LeanAgent.AI.Providers.XiaomiTokenPlanCN` | missing |
@@ -293,12 +293,12 @@ Deliver:
 
 - Refactor `LeanAgent.OpenAI` into `LeanAgent.AI.Api.OpenAICompletions`. Status: implemented structurally; `LeanAgent.OpenAI` is now a compatibility wrapper.
 - Add prompt cache fields, retry, response diagnostics, tool choice behavior, empty tools behavior. Status: partial; tool choice and empty-tools behavior exist, prompt cache/retry/diagnostics are missing.
-- Add provider factories for DeepSeek, OpenAI, OpenRouter, Groq, xAI, Cerebras, Together, Fireworks where they share OpenAI-compatible protocol.
+- Add provider factories for DeepSeek, OpenAI, OpenRouter, Groq, xAI, Cerebras, Together, Fireworks where they share OpenAI-compatible protocol. Status: partial; default runtime catalog has representative OpenAI-compatible models for each, but provider modules and full generated catalogs are missing.
 
 Exit criteria:
 
-- DeepSeek remains the default path.
-- OpenAI-compatible Pi tests that do not require live network are ported.
+- DeepSeek remains the default path. Status: implemented; catalog selection still checks DeepSeek first.
+- OpenAI-compatible Pi tests that do not require live network are ported. Status: partial; payload and provider-family catalog tests exist, but full non-network Pi test coverage is incomplete.
 
 ### M5: Provider Protocol Expansion
 

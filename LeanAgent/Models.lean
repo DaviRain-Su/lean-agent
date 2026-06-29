@@ -18,6 +18,36 @@ def openAIModelEnv : String := "OPENAI_MODEL"
 def openAIDefaultModel : String := "gpt-4.1-mini"
 def openAIBaseUrl : String := "https://api.openai.com/v1"
 
+def openRouterProviderId : String := "openrouter"
+def openRouterApiKeyEnv : String := "OPENROUTER_API_KEY"
+def openRouterDefaultModel : String := "openai/gpt-oss-120b"
+def openRouterBaseUrl : String := "https://openrouter.ai/api/v1"
+
+def groqProviderId : String := "groq"
+def groqApiKeyEnv : String := "GROQ_API_KEY"
+def groqDefaultModel : String := "openai/gpt-oss-120b"
+def groqBaseUrl : String := "https://api.groq.com/openai/v1"
+
+def xaiProviderId : String := "xai"
+def xaiApiKeyEnv : String := "XAI_API_KEY"
+def xaiDefaultModel : String := "grok-code-fast-1"
+def xaiBaseUrl : String := "https://api.x.ai/v1"
+
+def cerebrasProviderId : String := "cerebras"
+def cerebrasApiKeyEnv : String := "CEREBRAS_API_KEY"
+def cerebrasDefaultModel : String := "gpt-oss-120b"
+def cerebrasBaseUrl : String := "https://api.cerebras.ai/v1"
+
+def togetherProviderId : String := "together"
+def togetherApiKeyEnv : String := "TOGETHER_API_KEY"
+def togetherDefaultModel : String := "openai/gpt-oss-120b"
+def togetherBaseUrl : String := "https://api.together.ai/v1"
+
+def fireworksProviderId : String := "fireworks"
+def fireworksApiKeyEnv : String := "FIREWORKS_API_KEY"
+def fireworksDefaultModel : String := "accounts/fireworks/models/glm-5p2"
+def fireworksBaseUrl : String := "https://api.fireworks.ai/inference/v1"
+
 structure ModelCompat where
   supportsStore : Bool := true
   supportsDeveloperRole : Bool := true
@@ -83,6 +113,113 @@ def openAIGpt41Mini : ModelInfo :=
     baseUrl := openAIBaseUrl
   }
 
+def cost (input output cacheRead cacheWrite : Float) : LeanAgent.AI.UsageCost :=
+  { input := input
+    output := output
+    cacheRead := cacheRead
+    cacheWrite := cacheWrite
+  }
+
+def openRouterCompat : ModelCompat :=
+  { thinkingFormat := some "openrouter" }
+
+def openRouterGptOss120B : ModelInfo :=
+  { id := openRouterDefaultModel
+    name := "OpenAI: gpt-oss-120b"
+    provider := openRouterProviderId
+    api := "openai-completions"
+    baseUrl := openRouterBaseUrl
+    cost := cost 0.039 0.18 0.0 0.0
+    contextWindow := 131072
+    maxTokens := 4096
+    reasoning := true
+    compat := openRouterCompat
+  }
+
+def groqGptOss120B : ModelInfo :=
+  { id := groqDefaultModel
+    name := "GPT OSS 120B"
+    provider := groqProviderId
+    api := "openai-completions"
+    baseUrl := groqBaseUrl
+    cost := cost 0.15 0.6 0.075 0.0
+    contextWindow := 131072
+    maxTokens := 65536
+    reasoning := true
+  }
+
+def xaiCompat : ModelCompat :=
+  { supportsStore := false
+    supportsDeveloperRole := false
+  }
+
+def xaiGrokCodeFast1 : ModelInfo :=
+  { id := xaiDefaultModel
+    name := "Grok Code Fast 1"
+    provider := xaiProviderId
+    api := "openai-completions"
+    baseUrl := xaiBaseUrl
+    cost := cost 0.2 1.5 0.02 0.0
+    contextWindow := 32768
+    maxTokens := 8192
+    compat := xaiCompat
+  }
+
+def cerebrasCompat : ModelCompat :=
+  { supportsStore := false
+    supportsDeveloperRole := false
+  }
+
+def cerebrasGptOss120B : ModelInfo :=
+  { id := cerebrasDefaultModel
+    name := "GPT OSS 120B"
+    provider := cerebrasProviderId
+    api := "openai-completions"
+    baseUrl := cerebrasBaseUrl
+    cost := cost 0.35 0.75 0.0 0.0
+    contextWindow := 131072
+    maxTokens := 40960
+    reasoning := true
+    compat := cerebrasCompat
+  }
+
+def togetherCompat : ModelCompat :=
+  { supportsStore := false
+    supportsDeveloperRole := false
+    thinkingFormat := some "openai"
+  }
+
+def togetherGptOss120B : ModelInfo :=
+  { id := togetherDefaultModel
+    name := "GPT OSS 120B"
+    provider := togetherProviderId
+    api := "openai-completions"
+    baseUrl := togetherBaseUrl
+    cost := cost 0.15 0.6 0.0 0.0
+    contextWindow := 131072
+    maxTokens := 131072
+    reasoning := true
+    compat := togetherCompat
+  }
+
+def fireworksCompat : ModelCompat :=
+  { supportsStore := false
+    supportsDeveloperRole := false
+  }
+
+def fireworksGlm52 : ModelInfo :=
+  { id := fireworksDefaultModel
+    name := "GLM 5.2"
+    provider := fireworksProviderId
+    api := "openai-completions"
+    baseUrl := fireworksBaseUrl
+    cost := cost 1.4 4.4 0.26 0.0
+    contextWindow := 1048576
+    maxTokens := 131072
+    reasoning := true
+    compat := fireworksCompat
+  }
+
 structure ProviderInfo where
   id : String
   name : String
@@ -116,12 +253,76 @@ def openAIProviderInfo : ProviderInfo :=
     models := #[openAIGpt41Mini]
   }
 
+def openRouterProviderInfo : ProviderInfo :=
+  { id := openRouterProviderId
+    name := "OpenRouter"
+    baseUrl := openRouterBaseUrl
+    apiKeyEnv := openRouterApiKeyEnv
+    defaultModel := openRouterDefaultModel
+    models := #[openRouterGptOss120B]
+  }
+
+def groqProviderInfo : ProviderInfo :=
+  { id := groqProviderId
+    name := "Groq"
+    baseUrl := groqBaseUrl
+    apiKeyEnv := groqApiKeyEnv
+    defaultModel := groqDefaultModel
+    models := #[groqGptOss120B]
+  }
+
+def xaiProviderInfo : ProviderInfo :=
+  { id := xaiProviderId
+    name := "xAI"
+    baseUrl := xaiBaseUrl
+    apiKeyEnv := xaiApiKeyEnv
+    defaultModel := xaiDefaultModel
+    models := #[xaiGrokCodeFast1]
+  }
+
+def cerebrasProviderInfo : ProviderInfo :=
+  { id := cerebrasProviderId
+    name := "Cerebras"
+    baseUrl := cerebrasBaseUrl
+    apiKeyEnv := cerebrasApiKeyEnv
+    defaultModel := cerebrasDefaultModel
+    models := #[cerebrasGptOss120B]
+  }
+
+def togetherProviderInfo : ProviderInfo :=
+  { id := togetherProviderId
+    name := "Together"
+    baseUrl := togetherBaseUrl
+    apiKeyEnv := togetherApiKeyEnv
+    defaultModel := togetherDefaultModel
+    models := #[togetherGptOss120B]
+  }
+
+def fireworksProviderInfo : ProviderInfo :=
+  { id := fireworksProviderId
+    name := "Fireworks"
+    baseUrl := fireworksBaseUrl
+    apiKeyEnv := fireworksApiKeyEnv
+    defaultModel := fireworksDefaultModel
+    models := #[fireworksGlm52]
+  }
+
 structure ProviderCatalog where
   providers : Array ProviderInfo := #[]
 deriving Repr, BEq
 
 def defaultCatalog : ProviderCatalog :=
-  { providers := #[deepSeekProviderInfo, openAIProviderInfo] }
+  { providers :=
+      #[ deepSeekProviderInfo
+       , openAIProviderInfo
+       , openRouterProviderInfo
+       , groqProviderInfo
+       , xaiProviderInfo
+       , cerebrasProviderInfo
+       , togetherProviderInfo
+       , fireworksProviderInfo
+       ]
+  }
 
 def ProviderCatalog.provider? (catalog : ProviderCatalog) (id : String) : Option ProviderInfo :=
   catalog.providers.find? (fun provider => provider.id == id)

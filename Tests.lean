@@ -292,6 +292,45 @@ def testModelCatalogDeepSeekDefaults : IO Unit := do
   let rendered := LeanAgent.Models.renderCatalog catalog
   assertTrue (rendered.contains "deepseek/deepseek-v4-pro") "expected rendered DeepSeek pro model"
 
+def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
+  let catalog := LeanAgent.Models.defaultCatalog
+  let expectedProviders :=
+    #[ LeanAgent.Models.deepSeekProviderId
+     , LeanAgent.Models.openAIProviderId
+     , LeanAgent.Models.openRouterProviderId
+     , LeanAgent.Models.groqProviderId
+     , LeanAgent.Models.xaiProviderId
+     , LeanAgent.Models.cerebrasProviderId
+     , LeanAgent.Models.togetherProviderId
+     , LeanAgent.Models.fireworksProviderId
+     ]
+  for providerId in expectedProviders do
+    match LeanAgent.Models.ProviderCatalog.provider? catalog providerId with
+    | some _ => pure ()
+    | none => fail s!"expected provider in catalog: {providerId}"
+  match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.groqApiKeyEnv with
+  | some provider =>
+      assertTrue (provider.id == LeanAgent.Models.groqProviderId) "expected Groq provider by env"
+      assertTrue (provider.defaultModel == LeanAgent.Models.groqDefaultModel) "expected Groq default model"
+  | none => fail "expected Groq provider by env"
+  let rendered := LeanAgent.Models.renderCatalog catalog
+  assertTrue (rendered.contains "openrouter/openai/gpt-oss-120b") "expected OpenRouter model"
+  assertTrue (rendered.contains "fireworks/accounts/fireworks/models/glm-5p2") "expected Fireworks OpenAI-compatible model"
+
+def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
+  let collection ← LeanAgent.Models.createDefaultModels
+  let providers ← collection.getProviders
+  assertTrue (providers.size == 8) "expected default provider family"
+  match ← collection.getModel? LeanAgent.Models.openRouterProviderId LeanAgent.Models.openRouterDefaultModel with
+  | some model =>
+      assertTrue (model.api == "openai-completions") "expected OpenRouter OpenAI-compatible API"
+      assertTrue model.reasoning "expected OpenRouter reasoning metadata"
+  | none => fail "expected OpenRouter model in default runtime collection"
+  match ← collection.getModel? LeanAgent.Models.fireworksProviderId LeanAgent.Models.fireworksDefaultModel with
+  | some model =>
+      assertTrue (model.baseUrl == LeanAgent.Models.fireworksBaseUrl) "expected Fireworks OpenAI-compatible base URL"
+  | none => fail "expected Fireworks model in default runtime collection"
+
 def fakeAuthContext : LeanAgent.AI.Auth.AuthContext :=
   { env := fun name =>
       pure
@@ -730,6 +769,8 @@ def main : IO UInt32 := do
     testOpenAICompletionsIncludesEmptyToolsForToolHistory
     testOpenAICompletionsSerializesOptions
     testModelCatalogDeepSeekDefaults
+    testOpenAICompatibleProviderFamilyCatalog
+    testDefaultModelsRegistersOpenAICompatibleFamily
     testModelsAuthEnvApiKeyResolution
     testModelsAuthStoredCredentialWins
     testModelsCollectionDispatchesWithAuth
