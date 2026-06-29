@@ -27,7 +27,7 @@ def openAIKeyEnv : String := LeanAgent.Models.openAIKeyEnv
 def openAIModelEnv : String := LeanAgent.Models.openAIModelEnv
 def openAIDefaultModel : String := LeanAgent.Models.openAIDefaultModel
 def openAIBaseUrl : String := LeanAgent.Models.openAIBaseUrl
-def leanAgentNoProxyEnv : String := "LEAN_AGENT_NO_PROXY"
+def leanAgentNoProxyEnv : String := LeanAgent.Models.leanAgentNoProxyEnv
 
 def usage : String :=
   String.intercalate "\n"
@@ -91,56 +91,6 @@ def promptFromOptions (opts : CliOptions) : IO String := do
       let stdin ← IO.getStdin
       stdin.getLine
 
-def envOrDefault (name fallback : String) : IO String := do
-  match ← IO.getEnv name with
-  | some value =>
-      if value.trimAscii.isEmpty then pure fallback else pure value
-  | none => pure fallback
-
-def envIsSet (name : String) : IO Bool := do
-  match ← IO.getEnv name with
-  | some value => pure (!value.trimAscii.isEmpty)
-  | none => pure false
-
-def resolveApiKeyEnv (opts : CliOptions) : IO String := do
-  match opts.apiKeyEnv with
-  | some name => pure name
-  | none =>
-      if ← envIsSet deepSeekApiKeyEnv then
-        pure deepSeekApiKeyEnv
-      else
-        pure openAIKeyEnv
-
-def resolveBaseUrl (opts : CliOptions) (apiKeyEnv : String) : String :=
-  match opts.baseUrl with
-  | some url => url
-  | none =>
-      match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? LeanAgent.Models.defaultCatalog apiKeyEnv with
-      | some provider => provider.baseUrl
-      | none => openAIBaseUrl
-
-def resolveModel (opts : CliOptions) (apiKeyEnv : String) : IO String := do
-  match opts.model with
-  | some model => pure model
-  | none =>
-      match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? LeanAgent.Models.defaultCatalog apiKeyEnv with
-      | some provider =>
-          match provider.modelEnv with
-          | some modelEnv => envOrDefault modelEnv provider.defaultModel
-          | none => pure provider.defaultModel
-      | none => envOrDefault openAIModelEnv openAIDefaultModel
-
-def resolveNoProxy (baseUrl : String) : IO (Option String) := do
-  match ← IO.getEnv leanAgentNoProxyEnv with
-  | some value =>
-      let trimmed := value.trimAscii.toString
-      pure (if trimmed.isEmpty then none else some trimmed)
-  | none =>
-      if baseUrl.startsWith deepSeekBaseUrl then
-        pure (some "api.deepseek.com")
-      else
-        pure none
-
 def resolveWorkingDir (opts : CliOptions) : IO System.FilePath := do
   let raw ←
     (match opts.cwd with
@@ -162,12 +112,6 @@ structure Runtime where
   session : LeanAgent.Session.AgentSession
   jsonEvents : Bool
 
-def apiKeyValue (apiKeyEnv : String) : IO String := do
-  match ← IO.getEnv apiKeyEnv with
-  | some value =>
-      if value.trimAscii.isEmpty then pure "" else pure value
-  | none => pure ""
-
 def runtimeFromOptions (opts : CliOptions) : IO (Except String Runtime) := do
   if opts.noSession && (opts.session.isSome || opts.resume.isSome) then
     return .error "--no-session cannot be combined with --session or --resume"
@@ -180,21 +124,20 @@ def runtimeFromOptions (opts : CliOptions) : IO (Except String Runtime) := do
   if opts.continueRun && opts.session.isNone && opts.resume.isNone then
     return .error "--continue requires --resume or --session"
   let cwd ← resolveWorkingDir opts
-  let apiKeyEnv ← resolveApiKeyEnv opts
-  let baseUrl := resolveBaseUrl opts apiKeyEnv
-  let model ← resolveModel opts apiKeyEnv
-  let noProxy ← resolveNoProxy baseUrl
-  let apiKey ← apiKeyValue apiKeyEnv
-  if apiKey.isEmpty then
-    pure (.error s!"missing API key: set {apiKeyEnv} or pass --api-key-env")
-  else
+  match ← LeanAgent.Models.resolveSelection
+      { model := opts.model
+        baseUrl := opts.baseUrl
+        apiKeyEnv := opts.apiKeyEnv
+      } with
+  | .error err => pure (.error err)
+  | .ok selection =>
     let extensions ← LeanAgent.Project.loadExtensions cwd
-    let provider := LeanAgent.Models.provider baseUrl apiKey noProxy
+    let provider := LeanAgent.Models.legacyProviderFromSelection selection
     let tools := LeanAgent.CodingTools.defaultTools cwd
     let system := LeanAgent.Project.applySystemAppendix defaultSystemPrompt extensions
     let agentConfig : AgentLoopConfig :=
       { provider := provider
-        model := model
+        model := selection.model
         system := system
         tools := tools
         maxTurns := opts.maxTurns
@@ -206,11 +149,11 @@ def runtimeFromOptions (opts : CliOptions) : IO (Except String Runtime) := do
           match opts.session with
           | some path => LeanAgent.Session.Persistence.create path
           | none => LeanAgent.Session.Persistence.ephemeral
-    let session ← LeanAgent.Session.create agentConfig cwd model persistence
+    let session ← LeanAgent.Session.create agentConfig cwd selection.model persistence
     pure
       (.ok
         { cwd := cwd
-          model := model
+          model := selection.model
           extensions := extensions
           session := session
           jsonEvents := opts.jsonEvents

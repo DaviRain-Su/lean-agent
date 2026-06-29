@@ -173,7 +173,7 @@ structure UsageCost where
   cacheRead : Float := 0.0
   cacheWrite : Float := 0.0
   total : Float := 0.0
-deriving BEq
+deriving Repr, BEq
 
 structure Usage where
   input : Nat := 0

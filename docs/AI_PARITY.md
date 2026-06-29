@@ -25,10 +25,10 @@ Every row must move through this ledger before it is considered complete.
 | HTTP transport | `LeanAgent.Http` | partial | Native libcurl JSON POST exists. No generic headers, streaming, retry, proxy helpers, or response headers yet. |
 | OpenAI-compatible chat completions | `LeanAgent.OpenAI` | partial | Non-streaming Chat Completions with tool calls exists. No streaming events, prompt cache, reasoning details, images, retries, or Responses API. |
 | Static model catalog | `LeanAgent.Models` | partial | DeepSeek and OpenAI fallback only. No generated full catalog or dynamic refresh. |
-| Provider/model collection | `LeanAgent.Models` | partial | Static lookup only. No `Models` runtime collection, auth application, or mixed API dispatch. |
+| Provider/model collection | `LeanAgent.Models` | partial | Runtime provider collection now supports registration, lookup, refresh hooks, auth application, and simple stream/complete dispatch. Full generated catalog, dynamic providers, and live streaming are missing. |
 | Agent-facing messages | `LeanAgent.Core`, `LeanAgent.AI.Types` | partial | Pi-style message/content/usage types and legacy conversions exist. Runtime still uses simplified `Core.AgentMessage`. Diagnostics are missing. |
 | Images | `LeanAgent.AI.Types` | partial | Image content types exist. Image generation APIs and image model catalog are missing. |
-| OAuth/auth store | none | missing | Env lookup exists in CLI only, not Pi-style auth resolution. |
+| OAuth/auth store | `LeanAgent.AI.Auth` | partial | Env API-key auth, auth context, in-memory credentials, and provider auth resolution exist. OAuth and file-backed stores are missing. |
 | Compat/global API registry | none | missing | No `compat` registry or legacy global entrypoint. |
 
 ## Implementation Gates
@@ -53,7 +53,7 @@ Before starting OMP advanced work:
 | --- | ---: | --- | --- |
 | Root entrypoints and package API | 16 | `LeanAgent.AI`, `LeanAgent.Models`, `LeanAgent.Compat`, docs | partial |
 | API protocol implementations | 28 | `LeanAgent.AI.Api.*` | partial |
-| Auth | 5 | `LeanAgent.AI.Auth.*` | missing |
+| Auth | 5 | `LeanAgent.AI.Auth.*` | partial |
 | Providers and model catalogs | 74 | `LeanAgent.AI.Providers.*`, generated/catalog data | partial |
 | Utils | 14 | `LeanAgent.AI.Util.*` | missing |
 | Tests | 83+ | `Tests.lean`, future focused test modules | partial |
@@ -65,10 +65,10 @@ Before starting OMP advanced work:
 | `src/index.ts` | `LeanAgent.AI` or `LeanAgent.lean` exports | partial | Lean root exports modules, but not Pi AI public surface. |
 | `src/compat.ts` | `LeanAgent.AI.Compat` | missing | Needs global API registry and legacy helpers. |
 | `src/cli.ts` | future `lean-agent ai ...` commands | missing | Not needed for core loop yet. |
-| `src/models.ts` | `LeanAgent.Models` | partial | Static catalog only. Runtime `Models` collection missing. |
+| `src/models.ts` | `LeanAgent.Models` | partial | Static catalog plus runtime `Provider`/`Collection`, `createModels`, `createProvider`, auth application, and simple completion dispatch. Generated catalog and full provider family are missing. |
 | `src/models.generated.ts` | generated Lean catalog or checked-in catalog | missing | Current catalog has only DeepSeek and OpenAI fallback. |
 | `src/types.ts` | `LeanAgent.AI.Types` | partial | Core content/message/usage/stream-option types exist. Provider-specific compat and full stream runtime still missing. |
-| `src/env-api-keys.ts` | `LeanAgent.AI.Auth.Env` | missing | Env lookup is still in CLI. |
+| `src/env-api-keys.ts` | `LeanAgent.AI.Auth` | partial | Env API-key auth exists for registered providers. Full provider env map and ambient credential probes are missing. |
 | `src/session-resources.ts` | `LeanAgent.AI.SessionResources` | missing | Needed for cross-provider handoff and session resources. |
 | `src/legacy-api-aliases.ts` | `LeanAgent.AI.Compat.Aliases` | missing | Needed only when compat API is implemented. |
 | `src/oauth.ts` | `LeanAgent.AI.OAuth` | missing | Depends on auth and device-code support. |
@@ -100,26 +100,26 @@ before expanding provider behavior.
 
 | Pi source | Lean target | Status | Notes |
 | --- | --- | --- | --- |
-| `Provider` interface | `LeanAgent.Models.Provider` | missing | Need provider as runtime unit with model list and stream/complete. |
-| `Models` interface | `LeanAgent.Models.Collection` | missing | Need collection with registration, lookup, refresh, auth, stream, complete. |
-| `MutableModels` | `LeanAgent.Models.Collection` | missing | Needed for custom providers and tests. |
-| `createModels` | `LeanAgent.Models.Collection` | missing | Constructor with credential store/auth context. |
-| `createProvider` | `LeanAgent.Models.Provider` | missing | Needs single API and mixed API dispatch. |
-| `hasApi` | `LeanAgent.Models` | missing | Runtime checked API narrowing. |
-| `calculateCost` | `LeanAgent.AI.Usage` | missing | Must follow Pi usage cost semantics. |
-| `getSupportedThinkingLevels` | `LeanAgent.Models.Thinking` | missing | Needs thinking level map. |
-| `clampThinkingLevel` | `LeanAgent.Models.Thinking` | missing | Needed before UI/model selector. |
-| `modelsAreEqual` | `LeanAgent.Models` | missing | Small helper. |
+| `Provider` interface | `LeanAgent.Models.Provider` | partial | Runtime unit has id/name/base metadata, auth, model listing, refresh hook, and `streamSimple`/`completeSimple`. Generic typed stream APIs and live async streams are missing. |
+| `Models` interface | `LeanAgent.Models.Collection` | partial | Collection supports provider registration, lookup, best-effort model listing, refresh, auth application, `streamSimple`, and `completeSimple`. |
+| `MutableModels` | `LeanAgent.Models.Collection` | implemented | `setProvider`, `deleteProvider`, and `clearProviders` exist with tests through runtime dispatch. |
+| `createModels` | `LeanAgent.Models.Collection` | implemented | Constructor accepts credential store/auth context and defaults to in-memory credentials. |
+| `createProvider` | `LeanAgent.Models.Provider` | partial | Single/mapped API dispatch and refresh state exist. Lazy error streams and full mixed-API parity are still missing. |
+| `hasApi` | `LeanAgent.Models` | implemented | Runtime API equality helper exists. |
+| `calculateCost` | `LeanAgent.Models` | implemented | Pi-style per-million token cost calculation exists, including 1h cache-write multiplier. |
+| `getSupportedThinkingLevels` | `LeanAgent.Models` | partial | Basic reasoning/off mapping exists. Model-specific thinking-level maps are missing. |
+| `clampThinkingLevel` | `LeanAgent.Models` | partial | Basic clamp exists. Model-specific map/null suppression is missing. |
+| `modelsAreEqual` | `LeanAgent.Models` | implemented | Compares provider and model id. |
 
 ## Auth Layer
 
 | Pi source | Lean target | Status | Notes |
 | --- | --- | --- | --- |
-| `auth/types.ts` | `LeanAgent.AI.Auth.Types` | missing | Defines provider auth and resolution results. |
-| `auth/context.ts` | `LeanAgent.AI.Auth.Context` | missing | Default auth context. |
-| `auth/credential-store.ts` | `LeanAgent.AI.Auth.CredentialStore` | missing | Start with in-memory and file-backed stores. |
-| `auth/helpers.ts` | `LeanAgent.AI.Auth.Helpers` | missing | Env API key auth and keyless/ambient helpers. |
-| `auth/resolve.ts` | `LeanAgent.AI.Auth.Resolve` | missing | Apply auth to model/options and surface auth errors. |
+| `auth/types.ts` | `LeanAgent.AI.Auth` | partial | API-key credential, auth result, provider auth, auth context, and credential store contracts exist. OAuth contracts are missing. |
+| `auth/context.ts` | `LeanAgent.AI.Auth` | partial | Default env/file-existence context exists with `~` expansion. Browser-specific behavior is not relevant yet. |
+| `auth/credential-store.ts` | `LeanAgent.AI.Auth` | partial | In-memory credential store exists. Serialized/file-backed storage is missing. |
+| `auth/helpers.ts` | `LeanAgent.AI.Auth` | partial | Env API-key auth helper exists. OAuth/lazy OAuth and ambient provider helpers are missing. |
+| `auth/resolve.ts` | `LeanAgent.AI.Auth` | partial | API-key provider auth resolution with request overrides exists. OAuth refresh/error codes are missing. |
 
 ## API Protocol Implementations
 
@@ -239,7 +239,7 @@ Initial Lean parity should port tests in this order:
 | Pi tests | Lean target | Status | Why first |
 | --- | --- | --- | --- |
 | `models-runtime.test.ts`, `providers.test.ts`, `supports-xhigh.test.ts`, `xhigh.test.ts` | model catalog and thinking tests | partial | Protects provider/model registry. |
-| `env-api-keys.test.ts`, `compat-env.test.ts` | auth/env tests | missing | Moves auth out of CLI. |
+| `env-api-keys.test.ts`, `compat-env.test.ts` | auth/env tests | partial | Env API-key and stored credential precedence are covered. Full provider env map and compat env tests are missing. |
 | `stream.test.ts`, `empty.test.ts`, `abort.test.ts` | event stream tests | missing | Establishes stream contract. |
 | `openai-completions-*.test.ts` | OpenAI completions tests | partial | Hardens current DeepSeek/OpenAI path. |
 | `retry.test.ts`, `overflow.test.ts`, `validation.test.ts`, `unicode-surrogate.test.ts` | util tests | missing | Prevents subtle provider failures. |
@@ -278,14 +278,14 @@ Exit criteria:
 
 Deliver:
 
-- Runtime `Models` collection with provider registration, lookup, refresh no-op for static providers.
-- Env API key auth, in-memory credential store, auth resolution.
-- `createProvider` for single API dispatch.
+- Runtime `Models` collection with provider registration, lookup, refresh no-op for static providers. Status: partial; simple dispatch exists, full dynamic/lazy behavior is missing.
+- Env API key auth, in-memory credential store, auth resolution. Status: partial; OAuth and persistent stores are missing.
+- `createProvider` for single API dispatch. Status: partial; API-map dispatch exists, but full mixed-provider parity is not complete.
 
 Exit criteria:
 
-- `Main.lean` no longer owns provider-specific auth/default resolution.
-- Tests mapped from `models-runtime.test.ts`, `env-api-keys.test.ts`, and `providers.test.ts`.
+- `Main.lean` no longer owns provider-specific auth/default resolution. Status: implemented for current DeepSeek/OpenAI CLI selection.
+- Tests mapped from `models-runtime.test.ts`, `env-api-keys.test.ts`, and `providers.test.ts`. Status: partial; auth resolution, stored credential precedence, runtime lookup/dispatch, and cost calculation are covered.
 
 ### M4: OpenAI-Compatible API Family
 

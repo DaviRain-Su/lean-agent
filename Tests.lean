@@ -225,6 +225,105 @@ def testModelCatalogDeepSeekDefaults : IO Unit := do
   let rendered := LeanAgent.Models.renderCatalog catalog
   assertTrue (rendered.contains "deepseek/deepseek-v4-pro") "expected rendered DeepSeek pro model"
 
+def fakeAuthContext : LeanAgent.AI.Auth.AuthContext :=
+  { env := fun name =>
+      pure
+        (if name == "FAKE_API_KEY" then
+          some "env-secret"
+        else
+          none)
+    fileExists := fun _ => pure false
+  }
+
+def fakeProviderAuth : LeanAgent.AI.Auth.ProviderAuth :=
+  { apiKey := some (LeanAgent.AI.Auth.envApiKeyAuth "Fake API key" #["FAKE_API_KEY"]) }
+
+def testModelsAuthEnvApiKeyResolution : IO Unit := do
+  let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+  match ← LeanAgent.AI.Auth.resolveProviderAuth "fake" fakeProviderAuth store fakeAuthContext with
+  | some result =>
+      assertTrue (result.auth.apiKey == some "env-secret") "expected env API key"
+      assertTrue (result.source == some "FAKE_API_KEY") "expected env key source"
+  | none => fail "expected auth result from env"
+
+def testModelsAuthStoredCredentialWins : IO Unit := do
+  let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+  let _ ← store.modify "fake" fun _ =>
+    pure (some (.apiKey { key := some "stored-secret" }))
+  match ← LeanAgent.AI.Auth.resolveProviderAuth "fake" fakeProviderAuth store fakeAuthContext with
+  | some result =>
+      assertTrue (result.auth.apiKey == some "stored-secret") "expected stored credential to win"
+      assertTrue (result.source == some "stored credential") "expected stored credential source"
+  | none => fail "expected auth result from stored credential"
+
+def fakeRuntimeModel : LeanAgent.Models.ModelInfo :=
+  { id := "fake-model"
+    name := "Fake Model"
+    provider := "fake"
+    api := "fake-api"
+    baseUrl := "https://fake.test"
+  }
+
+def fakeRuntimeStreams (seenApiKey : IO.Ref (Option String)) : LeanAgent.Models.ProviderStreams :=
+  { streamSimple := fun model _context options => do
+      seenApiKey.set options.apiKey
+      let timestamp ← IO.monoMsNow
+      let message : LeanAgent.AI.AssistantMessage :=
+        { content := #[LeanAgent.AI.text "runtime-ok"]
+          api := model.api
+          provider := model.provider
+          model := model.id
+          timestamp := timestamp
+        }
+      pure (LeanAgent.AI.fromMessage message)
+  }
+
+def testModelsCollectionDispatchesWithAuth : IO Unit := do
+  let seenApiKey ← IO.mkRef (none : Option String)
+  let collection ← LeanAgent.Models.createModels none fakeAuthContext
+  let provider ← LeanAgent.Models.createProvider
+    { id := "fake"
+      name := some "Fake"
+      auth := fakeProviderAuth
+      models := #[fakeRuntimeModel]
+      apis := #[{ api := "fake-api", streams := fakeRuntimeStreams seenApiKey }]
+    }
+  collection.setProvider provider
+  match ← collection.getModel? "fake" "fake-model" with
+  | some model => assertTrue (model.id == "fake-model") "expected runtime model lookup"
+  | none => fail "expected runtime model lookup"
+  let message ← collection.completeSimple
+    fakeRuntimeModel
+    { systemPrompt := some "system"
+      messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 0 }]
+    }
+  assertTrue (LeanAgent.AI.contentPlainText message.content == "runtime-ok") "expected runtime stream result"
+  assertTrue ((← seenApiKey.get) == some "env-secret") "expected collection to inject auth"
+
+def testModelsCalculateCost : IO Unit := do
+  let model :=
+    { fakeRuntimeModel with
+      cost :=
+        { input := 1.0
+          output := 2.0
+          cacheRead := 0.5
+          cacheWrite := 3.0
+        }
+    }
+  let usage : LeanAgent.AI.Usage :=
+    { input := 1000000
+      output := 2000000
+      cacheRead := 1000000
+      cacheWrite := 3000000
+      cacheWrite1h := some 1000000
+    }
+  let cost := LeanAgent.Models.calculateCost model usage
+  assertTrue (cost.input == 1.0) "expected input cost"
+  assertTrue (cost.output == 4.0) "expected output cost"
+  assertTrue (cost.cacheRead == 0.5) "expected cache read cost"
+  assertTrue (cost.cacheWrite == 8.0) "expected cache write cost"
+  assertTrue (cost.total == 13.5) "expected total cost"
+
 def testAIContentBlockJsonRoundTrip : IO Unit := do
   let block : LeanAgent.AI.ContentBlock :=
     .toolCall
@@ -560,6 +659,10 @@ def main : IO UInt32 := do
     testSessionJsonlRoundTrip
     testOpenAIAssistantOmitsEmptyToolCalls
     testModelCatalogDeepSeekDefaults
+    testModelsAuthEnvApiKeyResolution
+    testModelsAuthStoredCredentialWins
+    testModelsCollectionDispatchesWithAuth
+    testModelsCalculateCost
     testAIContentBlockJsonRoundTrip
     testAIMessageJsonRoundTrip
     testAIMessageLegacyConversion

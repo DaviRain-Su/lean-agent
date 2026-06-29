@@ -1,3 +1,4 @@
+import LeanAgent.AI.Auth
 import LeanAgent.AI.EventStream
 import LeanAgent.AI.Types
 import LeanAgent.CodingTools
