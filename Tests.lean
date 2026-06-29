@@ -5815,6 +5815,36 @@ def testCompatRegisterFauxProviderDispatchesAndUnregisters : IO Unit := do
   assertTrue failed "expected unregistered faux provider dispatch to fail"
   LeanAgent.AI.Compat.resetApiProviders
 
+def testCompatStaticCatalogPassthroughs : IO Unit := do
+  let providers := LeanAgent.AI.Compat.getProviders
+  assertTrue (providers.contains LeanAgent.Models.deepSeekProviderId)
+    "expected compat providers passthrough to include DeepSeek"
+  assertTrue (providers.contains LeanAgent.AI.Providers.CloudflareAIGateway.providerId)
+    "expected compat providers passthrough to include Cloudflare AI Gateway"
+  let deepSeekModels := LeanAgent.AI.Compat.getModels LeanAgent.Models.deepSeekProviderId
+  assertTrue (deepSeekModels.any (fun model => model.id == LeanAgent.Models.deepSeekDefaultModel))
+    "expected compat models passthrough to include DeepSeek default"
+  match LeanAgent.AI.Compat.getModel?
+      LeanAgent.Models.deepSeekProviderId
+      LeanAgent.Models.deepSeekDefaultModel with
+  | some model =>
+      assertTrue (model.api == "openai-completions") "expected compat model passthrough api"
+      assertTrue model.reasoning "expected compat model passthrough metadata"
+  | none => fail "expected compat getModel? passthrough"
+  let model ← LeanAgent.AI.Compat.getModel
+    LeanAgent.Models.openAIProviderId
+    LeanAgent.Models.openAIDefaultModel
+  assertTrue (model.provider == LeanAgent.Models.openAIProviderId) "expected compat getModel result"
+  let failed ←
+    try
+      let _ ← LeanAgent.AI.Compat.getModel "missing-provider" "missing-model"
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains "Unknown built-in model")
+        "expected compat getModel missing model error"
+      pure true
+  assertTrue failed "expected compat getModel to reject missing model"
+
 def testAIContentBlockJsonRoundTrip : IO Unit := do
   let block : LeanAgent.AI.ContentBlock :=
     .toolCall

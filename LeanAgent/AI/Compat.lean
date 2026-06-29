@@ -1,5 +1,6 @@
 import LeanAgent.AI.EnvApiKeys
 import LeanAgent.AI.Providers.Faux
+import LeanAgent.AI.Providers.All
 import LeanAgent.Models
 
 namespace LeanAgent.AI.Compat
@@ -119,6 +120,20 @@ def registerFauxProvider
     }
     (some sourceId)
   pure { handle := handle, sourceId := sourceId }
+
+def getProviders : Array String :=
+  LeanAgent.AI.Providers.All.getBuiltinProviders
+
+def getModels (providerId : String) : Array LeanAgent.Models.ModelInfo :=
+  LeanAgent.AI.Providers.All.getBuiltinModels providerId
+
+def getModel? (providerId modelId : String) : Option LeanAgent.Models.ModelInfo :=
+  LeanAgent.AI.Providers.All.getBuiltinModel? providerId modelId
+
+def getModel (providerId modelId : String) : IO LeanAgent.Models.ModelInfo := do
+  match getModel? providerId modelId with
+  | some model => pure model
+  | none => throw (IO.userError s!"Unknown built-in model: {providerId}/{modelId}")
 
 def providerEnvApiKey? (model : LeanAgent.Models.ModelInfo) (env : LeanAgent.AI.Auth.ProviderEnv) :
     IO (Option String) :=
