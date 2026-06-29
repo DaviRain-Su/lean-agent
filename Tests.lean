@@ -2513,6 +2513,46 @@ def testCloudflareProviderFactoriesExposeModelsAndAuth : IO Unit := do
         "expected AI Gateway factory auth to suppress Authorization"
   | none => fail "expected AI Gateway GPT-4o mini model"
 
+def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
+  let providerIds := LeanAgent.AI.Providers.All.getBuiltinProviders
+  assertTrue (providerIds.contains LeanAgent.Models.deepSeekProviderId)
+    "expected all providers to include DeepSeek catalog provider"
+  assertTrue (providerIds.contains LeanAgent.AI.Providers.CloudflareWorkersAI.providerId)
+    "expected all providers to include Cloudflare Workers AI"
+  assertTrue (providerIds.contains LeanAgent.AI.Providers.CloudflareAIGateway.providerId)
+    "expected all providers to include Cloudflare AI Gateway"
+  match LeanAgent.AI.Providers.All.getBuiltinModel?
+    LeanAgent.Models.deepSeekProviderId
+    LeanAgent.Models.deepSeekDefaultModel with
+  | some model =>
+      assertTrue (model.provider == LeanAgent.Models.deepSeekProviderId) "expected DeepSeek builtin model"
+  | none => fail "expected DeepSeek builtin model lookup"
+  match LeanAgent.AI.Providers.All.getBuiltinModel?
+    LeanAgent.AI.Providers.CloudflareAIGateway.providerId
+    "gpt-4o-mini" with
+  | some model =>
+      assertTrue (model.api == "openai-responses") "expected Gateway Responses builtin model"
+  | none => fail "expected Cloudflare AI Gateway builtin model lookup"
+  let collection ← LeanAgent.AI.Providers.All.builtinModels none fakeCloudflareAuthContext
+  let providers ← collection.getProviders
+  assertTrue (providers.size == 10) "expected implemented builtin text providers"
+  match ← collection.getProvider? LeanAgent.AI.Providers.CloudflareWorkersAI.providerId with
+  | some _ => pure ()
+  | none => fail "expected Workers AI provider in builtin collection"
+  match ← collection.getModel?
+    LeanAgent.AI.Providers.CloudflareAIGateway.providerId
+    "gpt-4o-mini" with
+  | some model =>
+      assertTrue (model.baseUrl == LeanAgent.AI.Api.Cloudflare.aiGatewayOpenAIBaseUrl)
+        "expected Gateway model in builtin collection"
+  | none => fail "expected Gateway model in builtin collection"
+  let imageCollection ← LeanAgent.AI.Providers.All.builtinImagesModels
+  let imageProviders ← imageCollection.getProviders
+  assertTrue (imageProviders.size == 1) "expected implemented builtin image provider"
+  match ← imageCollection.getProvider? LeanAgent.AI.Api.OpenRouterImages.providerId with
+  | some _ => pure ()
+  | none => fail "expected OpenRouter image provider in builtin image collection"
+
 def testEnvApiKeysProviderMap : IO Unit := do
   assertTrue
     (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "github-copilot" == some #["COPILOT_GITHUB_TOKEN"])
@@ -4545,6 +4585,7 @@ def main : IO UInt32 := do
     testCloudflareAIGatewayAuthResolution
     testCloudflareStoredCredentialResolution
     testCloudflareProviderFactoriesExposeModelsAndAuth
+    testBuiltinProvidersAllAggregatesImplementedProviders
     testEnvApiKeysProviderMap
     testEnvApiKeysPrefersAnthropicOAuthToken
     testEnvApiKeysAmbientAuthMarkers

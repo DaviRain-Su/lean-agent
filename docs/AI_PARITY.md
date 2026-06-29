@@ -51,7 +51,7 @@ Before starting OMP advanced work:
 
 | Group | Pi files | Lean target | Current status |
 | --- | ---: | --- | --- |
-| Root entrypoints and package API | 16 | `LeanAgent.AI`, `LeanAgent.Models`, `LeanAgent.Compat`, docs | partial |
+| Root entrypoints and package API | 16 | `LeanAgent.AI`, `LeanAgent.Models`, `LeanAgent.AI.Providers.All`, `LeanAgent.Compat`, docs | partial |
 | API protocol implementations | 28 | `LeanAgent.AI.Api.*` | partial |
 | Auth | 5 | `LeanAgent.AI.Auth.*` | partial |
 | Providers and model catalogs | 74 | `LeanAgent.AI.Providers.*`, generated/catalog data | partial |
@@ -62,7 +62,7 @@ Before starting OMP advanced work:
 
 | Pi source | Lean target | Status | Notes |
 | --- | --- | --- | --- |
-| `src/index.ts` | `LeanAgent.AI` or `LeanAgent.lean` exports | partial | Lean root exports core AI modules, OAuth registry helpers, and image dispatch modules, but not the full Pi AI public surface. |
+| `src/index.ts` | `LeanAgent.AI` or `LeanAgent.lean` exports | partial | Lean root exports core AI modules, OAuth registry helpers, provider all-entrypoint helpers, and image dispatch modules, but not the full Pi AI public surface. |
 | `src/compat.ts` | `LeanAgent.AI.Compat` | partial | Global registry, simple dispatch, and legacy alias support exist. Full legacy surface, static catalog passthroughs, image exports, faux compat registration, typed full-stream options, and all builtin APIs are still missing. |
 | `src/cli.ts` | future `lean-agent ai ...` commands | missing | Not needed for core loop yet. |
 | `src/models.ts` | `LeanAgent.Models` | partial | Static catalog plus runtime `Provider`/`Collection`, `createModels`, `createProvider`, auth application, and simple completion dispatch. Generated catalog and full provider family are missing. |
@@ -161,7 +161,7 @@ should be generated or checked in as Lean data.
 
 | Provider | Pi files | Lean target | Status |
 | --- | --- | --- | --- |
-| All builtins | `providers/all.ts` | `LeanAgent.AI.Providers.All` | missing |
+| All builtins | `providers/all.ts` | `LeanAgent.AI.Providers.All` | partial |
 | Amazon Bedrock | `amazon-bedrock.ts`, `amazon-bedrock.models.ts` | `LeanAgent.AI.Providers.AmazonBedrock` | missing |
 | Ant Ling | `ant-ling.ts`, `ant-ling.models.ts` | `LeanAgent.AI.Providers.AntLing` | missing |
 | Anthropic | `anthropic.ts`, `anthropic.models.ts` | `LeanAgent.AI.Providers.Anthropic` | missing |

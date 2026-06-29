@@ -20,6 +20,7 @@ import LeanAgent.AI.OAuth
 import LeanAgent.AI.OAuth.GitHubCopilot
 import LeanAgent.AI.OAuth.PKCE
 import LeanAgent.AI.OAuth.Page
+import LeanAgent.AI.Providers.All
 import LeanAgent.AI.Providers.CloudflareAIGateway
 import LeanAgent.AI.Providers.CloudflareAuth
 import LeanAgent.AI.Providers.CloudflareWorkersAI
