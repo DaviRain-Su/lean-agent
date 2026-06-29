@@ -835,6 +835,25 @@ def testOpenAIResponsesRequestClampsMaxTokens : IO Unit := do
     (LeanAgent.Json.optVal? payload "max_output_tokens" == some (LeanAgent.Json.nat 902))
     "expected Responses max_output_tokens to be context-clamped"
 
+def testOpenAIResponsesServiceTierCostMultiplier : IO Unit := do
+  let usage : LeanAgent.AI.Usage := { input := 1000000, output := 1000000, totalTokens := 2000000 }
+  let model :=
+    { responsesCodexModel with
+      cost := { input := 1.0, output := 2.0 }
+    }
+  let priority := LeanAgent.AI.Api.OpenAIResponses.applyUsageCost model (some "priority") usage
+  assertTrue (priority.cost.input == 2.5) "expected gpt-5.5 priority input multiplier"
+  assertTrue (priority.cost.output == 5.0) "expected gpt-5.5 priority output multiplier"
+  assertTrue (priority.cost.total == 7.5) "expected gpt-5.5 priority total multiplier"
+  let flex := LeanAgent.AI.Api.OpenAIResponses.applyUsageCost { model with id := "gpt-5.4" } (some "flex") usage
+  assertTrue (flex.cost.input == 0.5) "expected flex input multiplier"
+  assertTrue (flex.cost.output == 1.0) "expected flex output multiplier"
+  assertTrue (flex.cost.total == 1.5) "expected flex total multiplier"
+  let normal := LeanAgent.AI.Api.OpenAIResponses.applyUsageCost { model with id := "gpt-5.4" } none usage
+  assertTrue (normal.cost.input == 1.0) "expected default input cost"
+  assertTrue (normal.cost.output == 2.0) "expected default output cost"
+  assertTrue (normal.cost.total == 3.0) "expected default total cost"
+
 def testOpenAIResponsesParsesResponse : IO Unit := do
   let raw :=
     "{ \"id\":\"resp_1\", \"status\":\"completed\", \"output\":[" ++
@@ -2439,6 +2458,10 @@ def testOpenAICompatibleStreamsClampMaxTokens : IO Unit := do
 def testOpenAIResponsesCompleteWithOptionsLocal : IO Unit := do
   let port := 18088
   withHttpServer port do
+    let pricedModel :=
+      { responsesCodexModel with
+        cost := { input := 1000000.0, output := 2000000.0 }
+      }
     let context : LeanAgent.AI.Context :=
       { systemPrompt := some "system"
         messages :=
@@ -2455,11 +2478,12 @@ def testOpenAIResponsesCompleteWithOptionsLocal : IO Unit := do
         noProxy := some "*"
         userAgent := "lean-agent-test/0.1.0"
       }
-      responsesCodexModel
+      pricedModel
       context
       { sessionId := some "session-123"
         cacheRetention := some .short
         headers := #[("X-Trace", some "trace-1")]
+        serviceTier := some "priority"
       }
     assertTrue (response.responseId == some "resp_http") "expected responses response id"
     assertTrue (LeanAgent.AI.contentPlainText response.content == "ok|session-123|session-123|trace-1")
@@ -2467,6 +2491,9 @@ def testOpenAIResponsesCompleteWithOptionsLocal : IO Unit := do
     assertTrue (response.usage.input == 5) "expected cached token subtraction"
     assertTrue (response.usage.cacheRead == 1) "expected cache read tokens"
     assertTrue (response.usage.totalTokens == 8) "expected total tokens"
+    assertTrue (response.usage.cost.input == 12.5) "expected priority input cost multiplier"
+    assertTrue (response.usage.cost.output == 10.0) "expected priority output cost multiplier"
+    assertTrue (response.usage.cost.total == 22.5) "expected priority total cost multiplier"
 
 def testOpenAIResponsesPayloadAndResponseHooks : IO Unit := do
   let port := 18093
@@ -2550,6 +2577,11 @@ def testOpenAIResponsesSendsCopilotDynamicHeaders : IO Unit := do
 def testOpenAIResponsesStreamWithOptionsLocal : IO Unit := do
   let port := 18089
   withHttpServer port do
+    let pricedModel :=
+      { responsesCodexModel with
+        id := "gpt-5.4"
+        cost := { input := 1000000.0, output := 2000000.0 }
+      }
     let context : LeanAgent.AI.Context :=
       { systemPrompt := some "system"
         messages :=
@@ -2566,12 +2598,16 @@ def testOpenAIResponsesStreamWithOptionsLocal : IO Unit := do
         noProxy := some "*"
         userAgent := "lean-agent-test/0.1.0"
       }
-      responsesCodexModel
+      pricedModel
       context
+      { serviceTier := some "flex" }
     assertTrue stream.isComplete "expected completed responses stream"
     assertTrue (stream.result.responseId == some "resp_stream_http") "expected streamed response id"
     assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "streamed") "expected streamed response text"
     assertTrue (stream.result.usage.totalTokens == 6) "expected streaming usage"
+    assertTrue (stream.result.usage.cost.input == 2.0) "expected flex input cost multiplier"
+    assertTrue (stream.result.usage.cost.output == 2.0) "expected flex output cost multiplier"
+    assertTrue (stream.result.usage.cost.total == 4.0) "expected flex total cost multiplier"
     assertTrue
       (stream.events.any fun
         | .textDelta _ "stream" _ => true
@@ -2637,6 +2673,7 @@ def main : IO UInt32 := do
     testGitHubCopilotDynamicHeaders
     testOpenAIResponsesRequestPayload
     testOpenAIResponsesRequestClampsMaxTokens
+    testOpenAIResponsesServiceTierCostMultiplier
     testOpenAIResponsesParsesResponse
     testOpenAIResponsesParsesStreamingTextAndUsage
     testOpenAIResponsesParsesStreamingToolCall

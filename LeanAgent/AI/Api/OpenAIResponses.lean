@@ -272,6 +272,86 @@ def parseUsage? (json : Lean.Json) : LeanAgent.AI.Usage :=
   | some usage => parseUsage usage
   | none => {}
 
+def perMillionCost (rate : Float) (tokens : Nat) : Float :=
+  (rate / 1000000.0) * Float.ofNat tokens
+
+def usageCostForRates (rates : LeanAgent.AI.UsageCost) (usage : LeanAgent.AI.Usage) :
+    LeanAgent.AI.UsageCost :=
+  let longWrite := usage.cacheWrite1h.getD 0
+  let shortWrite := usage.cacheWrite - longWrite
+  let input := perMillionCost rates.input usage.input
+  let output := perMillionCost rates.output usage.output
+  let cacheRead := perMillionCost rates.cacheRead usage.cacheRead
+  let cacheWrite :=
+    ((rates.cacheWrite * Float.ofNat shortWrite) + (rates.input * 2.0 * Float.ofNat longWrite)) /
+      1000000.0
+  { input := input
+    output := output
+    cacheRead := cacheRead
+    cacheWrite := cacheWrite
+    total := input + output + cacheRead + cacheWrite
+  }
+
+def serviceTierCostMultiplier
+    (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
+    (serviceTier? : Option String) : Float :=
+  match serviceTier? with
+  | some "flex" => 0.5
+  | some "priority" => if model.id == "gpt-5.5" then 2.5 else 2.0
+  | _ => 1.0
+
+def scaleUsageCost (cost : LeanAgent.AI.UsageCost) (multiplier : Float) : LeanAgent.AI.UsageCost :=
+  let input := cost.input * multiplier
+  let output := cost.output * multiplier
+  let cacheRead := cost.cacheRead * multiplier
+  let cacheWrite := cost.cacheWrite * multiplier
+  { input := input
+    output := output
+    cacheRead := cacheRead
+    cacheWrite := cacheWrite
+    total := input + output + cacheRead + cacheWrite
+  }
+
+def applyUsageCost
+    (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
+    (serviceTier? : Option String)
+    (usage : LeanAgent.AI.Usage) : LeanAgent.AI.Usage :=
+  let baseCost := usageCostForRates model.cost usage
+  let multiplier := serviceTierCostMultiplier model serviceTier?
+  { usage with cost := scaleUsageCost baseCost multiplier }
+
+def applyMessageUsageCost
+    (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
+    (options : OpenAIResponsesOptions)
+    (message : LeanAgent.AI.AssistantMessage) : LeanAgent.AI.AssistantMessage :=
+  { message with usage := applyUsageCost model options.serviceTier message.usage }
+
+def withEventMessage
+    (message : LeanAgent.AI.AssistantMessage) :
+    LeanAgent.AI.AssistantMessageEvent → LeanAgent.AI.AssistantMessageEvent
+  | .start _ => .start message
+  | .textStart index _ => .textStart index message
+  | .textDelta index delta _ => .textDelta index delta message
+  | .textEnd index content _ => .textEnd index content message
+  | .thinkingStart index _ => .thinkingStart index message
+  | .thinkingDelta index delta _ => .thinkingDelta index delta message
+  | .thinkingEnd index content _ => .thinkingEnd index content message
+  | .toolCallStart index _ => .toolCallStart index message
+  | .toolCallDelta index delta _ => .toolCallDelta index delta message
+  | .toolCallEnd index call _ => .toolCallEnd index call message
+  | .done reason _ => .done reason message
+  | .error reason _ => .error reason message
+
+def applyStreamUsageCost
+    (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
+    (options : OpenAIResponsesOptions)
+    (stream : LeanAgent.AI.AssistantMessageEventStream) :
+    LeanAgent.AI.AssistantMessageEventStream :=
+  let message := applyMessageUsageCost model options stream.finalResult
+  { events := stream.events.map (withEventMessage message)
+    finalResult := message
+  }
+
 def mapStopReason (status? : Option String) : LeanAgent.AI.StopReason :=
   match status? with
   | some "completed" => .stop
@@ -859,7 +939,7 @@ def completeWithOptions
     (runHttpJson config model context payload options)
   let timestamp ← IO.monoMsNow
   match parseResponse model.api model.provider model.id timestamp raw with
-  | .ok response => pure response
+  | .ok response => pure (applyMessageUsageCost model options response)
   | .error err => throw (IO.userError s!"failed to parse provider response: {err}\n{raw}")
 
 def completeStreamWithOptions
@@ -874,7 +954,7 @@ def completeStreamWithOptions
     (runHttpJson config model context payload options)
   let timestamp ← IO.monoMsNow
   match parseStreamingEventStream model.api model.provider model.id timestamp raw with
-  | .ok stream => pure stream
+  | .ok stream => pure (applyStreamUsageCost model options stream)
   | .error err => throw (IO.userError s!"failed to parse streaming provider response: {err}\n{raw}")
 
 end LeanAgent.AI.Api.OpenAIResponses

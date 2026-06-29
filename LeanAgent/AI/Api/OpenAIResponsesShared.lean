@@ -11,6 +11,7 @@ structure ResponsesModel extends TransformMessages.TargetModel where
   supportsDeveloperRole : Bool := true
   contextWindow : Nat := 0
   maxTokens : Nat := 0
+  cost : LeanAgent.AI.UsageCost := {}
 deriving BEq
 
 structure ConvertResponsesMessagesOptions where
