@@ -73,6 +73,23 @@ def anthropicOAuthTokenEnv : String := "ANTHROPIC_OAUTH_TOKEN"
 def anthropicDefaultModel : String := "claude-sonnet-4-5"
 def anthropicBaseUrl : String := "https://api.anthropic.com"
 
+def kimiCodingProviderId : String := "kimi-coding"
+def kimiCodingApiKeyEnv : String := "KIMI_API_KEY"
+def kimiCodingDefaultModel : String := "k2p7"
+def kimiCodingBaseUrl : String := "https://api.kimi.com/coding"
+def kimiCodingHeaders : LeanAgent.AI.Auth.ProviderHeaders :=
+  #[("User-Agent", "KimiCLI/1.5")]
+
+def minimaxProviderId : String := "minimax"
+def minimaxApiKeyEnv : String := "MINIMAX_API_KEY"
+def minimaxDefaultModel : String := "MiniMax-M2.7"
+def minimaxBaseUrl : String := "https://api.minimax.io/anthropic"
+
+def minimaxCNProviderId : String := "minimax-cn"
+def minimaxCNApiKeyEnv : String := "MINIMAX_CN_API_KEY"
+def minimaxCNDefaultModel : String := "MiniMax-M2.7"
+def minimaxCNBaseUrl : String := "https://api.minimaxi.com/anthropic"
+
 def googleProviderId : String := "google"
 def googleApiKeyEnv : String := "GEMINI_API_KEY"
 def googleDefaultModel : String := "gemini-2.5-flash"
@@ -260,6 +277,26 @@ def catalogOpenAICompatibleModel
     maxTokens := maxTokens
     reasoning := reasoning
     compat := compat
+    thinkingLevelMap := thinkingLevelMap
+    input := input
+  }
+
+def catalogAnthropicMessagesModel
+    (providerId baseUrl id name : String)
+    (inputCost outputCost cacheReadCost cacheWriteCost : Float)
+    (contextWindow maxTokens : Nat)
+    (reasoning : Bool := true)
+    (thinkingLevelMap : Array LeanAgent.AI.ThinkingLevelMapEntry := #[])
+    (input : Array String := #["text"]) : ModelInfo :=
+  { id := id
+    name := name
+    provider := providerId
+    api := LeanAgent.AI.Api.AnthropicMessages.api
+    baseUrl := baseUrl
+    cost := cost inputCost outputCost cacheReadCost cacheWriteCost
+    contextWindow := contextWindow
+    maxTokens := maxTokens
+    reasoning := reasoning
     thinkingLevelMap := thinkingLevelMap
     input := input
   }
@@ -745,6 +782,24 @@ def anthropicSonnet37 : ModelInfo :=
     input := #["text", "image"]
   }
 
+def kimiCodingModels : Array ModelInfo :=
+  #[ catalogAnthropicMessagesModel kimiCodingProviderId kimiCodingBaseUrl "k2p7" "Kimi K2.7 Code" 0.0 0.0 0.0 0.0 262144 32768 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel kimiCodingProviderId kimiCodingBaseUrl "kimi-for-coding" "Kimi For Coding" 0.0 0.0 0.0 0.0 262144 32768 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel kimiCodingProviderId kimiCodingBaseUrl "kimi-k2-thinking" "Kimi K2 Thinking" 0.0 0.0 0.0 0.0 262144 32768 true #[] #["text"]
+   ]
+
+def minimaxModels : Array ModelInfo :=
+  #[ catalogAnthropicMessagesModel minimaxProviderId minimaxBaseUrl "MiniMax-M2.7" "MiniMax-M2.7" 0.3 1.2 0.06 0.375 204800 131072 true #[] #["text"]
+   , catalogAnthropicMessagesModel minimaxProviderId minimaxBaseUrl "MiniMax-M2.7-highspeed" "MiniMax-M2.7-highspeed" 0.6 2.4 0.06 0.375 204800 131072 true #[] #["text"]
+   , catalogAnthropicMessagesModel minimaxProviderId minimaxBaseUrl "MiniMax-M3" "MiniMax-M3" 0.6 2.4 0.12 0.0 512000 128000 true #[] #["text", "image"]
+   ]
+
+def minimaxCNModels : Array ModelInfo :=
+  #[ catalogAnthropicMessagesModel minimaxCNProviderId minimaxCNBaseUrl "MiniMax-M2.7" "MiniMax-M2.7" 0.3 1.2 0.06 0.375 204800 131072 true #[] #["text"]
+   , catalogAnthropicMessagesModel minimaxCNProviderId minimaxCNBaseUrl "MiniMax-M2.7-highspeed" "MiniMax-M2.7-highspeed" 0.6 2.4 0.06 0.375 204800 131072 true #[] #["text"]
+   , catalogAnthropicMessagesModel minimaxCNProviderId minimaxCNBaseUrl "MiniMax-M3" "MiniMax-M3" 0.6 2.4 0.12 0.0 512000 128000 true #[] #["text", "image"]
+   ]
+
 def googleModel
     (id name : String)
     (inputCost outputCost cacheReadCost cacheWriteCost : Float)
@@ -1167,6 +1222,7 @@ structure ProviderInfo where
   id : String
   name : String
   baseUrl : String
+  headers : LeanAgent.AI.Auth.ProviderHeaders := #[]
   apiKeyEnv : String
   apiKeyEnvs : Array String := #[]
   modelEnv : Option String := none
@@ -1385,6 +1441,34 @@ def anthropicProviderInfo : ProviderInfo :=
     models := #[anthropicSonnet45, anthropicHaiku45, anthropicOpus45, anthropicSonnet37]
   }
 
+def kimiCodingProviderInfo : ProviderInfo :=
+  { id := kimiCodingProviderId
+    name := "Kimi For Coding"
+    baseUrl := kimiCodingBaseUrl
+    headers := kimiCodingHeaders
+    apiKeyEnv := kimiCodingApiKeyEnv
+    defaultModel := kimiCodingDefaultModel
+    models := kimiCodingModels
+  }
+
+def minimaxProviderInfo : ProviderInfo :=
+  { id := minimaxProviderId
+    name := "MiniMax"
+    baseUrl := minimaxBaseUrl
+    apiKeyEnv := minimaxApiKeyEnv
+    defaultModel := minimaxDefaultModel
+    models := minimaxModels
+  }
+
+def minimaxCNProviderInfo : ProviderInfo :=
+  { id := minimaxCNProviderId
+    name := "MiniMax CN"
+    baseUrl := minimaxCNBaseUrl
+    apiKeyEnv := minimaxCNApiKeyEnv
+    defaultModel := minimaxCNDefaultModel
+    models := minimaxCNModels
+  }
+
 def googleProviderInfo : ProviderInfo :=
   { id := googleProviderId
     name := "Google"
@@ -1450,6 +1534,9 @@ def defaultCatalog : ProviderCatalog :=
      , zaiProviderInfo
      , zaiCodingCNProviderInfo
      , anthropicProviderInfo
+     , kimiCodingProviderInfo
+     , minimaxProviderInfo
+     , minimaxCNProviderInfo
      , googleProviderInfo
      , googleVertexProviderInfo
      , mistralProviderInfo
@@ -2300,6 +2387,7 @@ def createCatalogProvider (info : ProviderInfo) : IO Provider :=
     { id := info.id
       name := some info.name
       baseUrl := some info.baseUrl
+      headers := info.headers
       auth := authForProviderInfo info
       models := info.models
       apis :=
@@ -2433,7 +2521,8 @@ def Collection.applyAuth
       { apiKey := options.apiKey, env := options.env }
       (some model.baseUrl)
   match resolution with
-  | none => pure (model, options)
+  | none =>
+      pure (model, { options with headers := authHeadersToStreamHeaders provider.headers options.headers })
   | some resolution =>
       let requestModel :=
         match resolution.auth.baseUrl with
@@ -2446,7 +2535,9 @@ def Collection.applyAuth
       let requestOptions :=
         { options with
           apiKey := apiKey
-          headers := authHeadersToStreamHeaders resolution.auth.headers options.headers
+          headers :=
+            authHeadersToStreamHeaders provider.headers
+              (authHeadersToStreamHeaders resolution.auth.headers options.headers)
           env := LeanAgent.AI.Auth.providerEnvMerge resolution.env options.env
         }
       pure (requestModel, requestOptions)

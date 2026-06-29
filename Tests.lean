@@ -2963,6 +2963,9 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
      , LeanAgent.Models.zaiProviderId
      , LeanAgent.Models.zaiCodingCNProviderId
      , LeanAgent.Models.anthropicProviderId
+     , LeanAgent.Models.kimiCodingProviderId
+     , LeanAgent.Models.minimaxProviderId
+     , LeanAgent.Models.minimaxCNProviderId
      , LeanAgent.Models.googleProviderId
      , LeanAgent.Models.googleVertexProviderId
      , LeanAgent.Models.mistralProviderId
@@ -3008,6 +3011,9 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
   assertTrue (rendered.contains "zai/glm-5.2") "expected Z.AI model"
   assertTrue (rendered.contains "zai-coding-cn/glm-5.2") "expected Z.AI Coding CN model"
   assertTrue (rendered.contains "anthropic/claude-sonnet-4-5") "expected Anthropic model"
+  assertTrue (rendered.contains "kimi-coding/k2p7") "expected Kimi Coding model"
+  assertTrue (rendered.contains "minimax/MiniMax-M2.7") "expected MiniMax model"
+  assertTrue (rendered.contains "minimax-cn/MiniMax-M2.7") "expected MiniMax CN model"
   assertTrue (rendered.contains "google/gemini-2.5-flash") "expected Google Gemini model"
   assertTrue (rendered.contains "google-vertex/gemini-2.5-flash") "expected Google Vertex model"
   assertTrue (rendered.contains "mistral/devstral-medium-latest") "expected Mistral model"
@@ -3028,6 +3034,9 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
     "expected generated Xiaomi Token Plan SGP model catalog"
   assertTrue (LeanAgent.Models.zaiModels.size == 6) "expected generated Z.AI model catalog"
   assertTrue (LeanAgent.Models.zaiCodingCNModels.size == 6) "expected generated Z.AI Coding CN model catalog"
+  assertTrue (LeanAgent.Models.kimiCodingModels.size == 3) "expected generated Kimi Coding model catalog"
+  assertTrue (LeanAgent.Models.minimaxModels.size == 3) "expected generated MiniMax model catalog"
+  assertTrue (LeanAgent.Models.minimaxCNModels.size == 3) "expected generated MiniMax CN model catalog"
   match LeanAgent.Models.ProviderCatalog.model? catalog LeanAgent.Models.antLingProviderId "Ring-2.6-1T" with
   | some model =>
       assertTrue model.reasoning "expected Ant Ling Ring reasoning metadata"
@@ -3063,6 +3072,18 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
       assertTrue (provider.defaultModel == LeanAgent.Models.zaiCodingCNDefaultModel)
         "expected Z.AI Coding CN default model"
   | none => fail "expected Z.AI Coding CN provider by env"
+  match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.kimiCodingApiKeyEnv with
+  | some provider =>
+      assertTrue (provider.id == LeanAgent.Models.kimiCodingProviderId) "expected Kimi Coding provider by env"
+      assertTrue (provider.headers == LeanAgent.Models.kimiCodingHeaders)
+        "expected Kimi Coding provider headers"
+  | none => fail "expected Kimi Coding provider by env"
+  match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.minimaxCNApiKeyEnv with
+  | some provider =>
+      assertTrue (provider.id == LeanAgent.Models.minimaxCNProviderId) "expected MiniMax CN provider by env"
+      assertTrue (provider.defaultModel == LeanAgent.Models.minimaxCNDefaultModel)
+        "expected MiniMax CN default model"
+  | none => fail "expected MiniMax CN provider by env"
   match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.googleApiKeyEnv with
   | some provider =>
       assertTrue (provider.id == LeanAgent.Models.googleProviderId) "expected Google provider by env"
@@ -3097,7 +3118,7 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
 def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
   let collection ← LeanAgent.Models.createDefaultModels
   let providers ← collection.getProviders
-  assertTrue (providers.size == 26) "expected default provider family"
+  assertTrue (providers.size == 29) "expected default provider family"
   match ← collection.getModel? LeanAgent.Models.openAIProviderId LeanAgent.Models.openAIDefaultModel with
   | some model =>
       assertTrue (model.api == "openai-responses") "expected OpenAI Responses API"
@@ -3157,6 +3178,18 @@ def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
       assertTrue (model.compat.thinkingFormat == some "zai") "expected Z.AI Coding CN thinking compat"
       assertTrue (model.maxTokens == 131072) "expected Z.AI Coding CN max tokens"
   | none => fail "expected Z.AI Coding CN model in default runtime collection"
+  match ← collection.getModel? LeanAgent.Models.kimiCodingProviderId LeanAgent.Models.kimiCodingDefaultModel with
+  | some model =>
+      assertTrue (model.api == LeanAgent.AI.Api.AnthropicMessages.api)
+        "expected Kimi Coding Anthropic Messages API"
+      assertTrue (model.input.contains "image") "expected Kimi Coding image input metadata"
+  | none => fail "expected Kimi Coding model in default runtime collection"
+  match ← collection.getModel? LeanAgent.Models.minimaxProviderId "MiniMax-M3" with
+  | some model =>
+      assertTrue (model.api == LeanAgent.AI.Api.AnthropicMessages.api)
+        "expected MiniMax Anthropic Messages API"
+      assertTrue (model.contextWindow == 512000) "expected MiniMax M3 context metadata"
+  | none => fail "expected MiniMax model in default runtime collection"
   match ← collection.getModel? LeanAgent.Models.anthropicProviderId LeanAgent.Models.anthropicDefaultModel with
   | some model =>
       assertTrue (model.api == LeanAgent.AI.Api.AnthropicMessages.api) "expected Anthropic Messages API"
@@ -3193,6 +3226,7 @@ def assertProviderFactoryMatchesInfo (mkProvider : IO LeanAgent.Models.Provider)
   let provider ← mkProvider
   assertTrue (provider.id == info.id) s!"expected provider id {info.id}"
   assertTrue (provider.name == info.name) s!"expected provider name {info.name}"
+  assertTrue (provider.headers == info.headers) s!"expected provider headers for {info.id}"
   let models ← provider.getModels
   assertTrue (models == info.models) s!"expected provider models for {info.id}"
   match provider.auth.apiKey with
@@ -3302,6 +3336,9 @@ def testOpenAICompatibleProviderFactoriesMatchCatalog : IO Unit := do
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.ZAI.provider LeanAgent.Models.zaiProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.ZAICodingCN.provider LeanAgent.Models.zaiCodingCNProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Anthropic.provider LeanAgent.Models.anthropicProviderInfo
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.KimiCoding.provider LeanAgent.Models.kimiCodingProviderInfo
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.MiniMax.provider LeanAgent.Models.minimaxProviderInfo
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.MiniMaxCN.provider LeanAgent.Models.minimaxCNProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Google.provider LeanAgent.Models.googleProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.GoogleVertex.provider LeanAgent.Models.googleVertexProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Mistral.provider LeanAgent.Models.mistralProviderInfo
@@ -3994,6 +4031,29 @@ def headerValueStringCI? (headers : Array (String × String)) (name : String) : 
   headers.findSome? fun (headerName, value) =>
     if headerName.toLower == name.toLower then some value else none
 
+def testCatalogProviderHeadersApplyThroughAuth : IO Unit := do
+  let provider ← LeanAgent.AI.Providers.KimiCoding.provider
+  let models ← provider.getModels
+  match models.find? (fun model => model.id == LeanAgent.Models.kimiCodingDefaultModel) with
+  | some model =>
+      let ctx : LeanAgent.AI.Auth.AuthContext :=
+        { env := fun name =>
+            pure (if name == LeanAgent.Models.kimiCodingApiKeyEnv then some "kimi-token" else none)
+          fileExists := fun _ => pure false
+        }
+      let collection ← LeanAgent.Models.createModels none ctx
+      let (_requestModel, options) ← collection.applyAuth provider model {}
+      assertTrue (options.apiKey == some "kimi-token") "expected Kimi Coding API key auth"
+      assertTrue
+        (headerValueOpt? options.headers "User-Agent" == some (some "KimiCLI/1.5"))
+        "expected Kimi Coding provider header to be inherited"
+      let (_requestModel, overrideOptions) ← collection.applyAuth provider model
+        { headers := #[("User-Agent", some "caller-agent")] }
+      assertTrue
+        (headerValueOpt? overrideOptions.headers "User-Agent" == some (some "caller-agent"))
+        "expected request header to override provider header"
+  | none => fail "expected Kimi Coding default model"
+
 def testCloudflareWorkersAIAuthResolution : IO Unit := do
   let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
   let auth : LeanAgent.AI.Auth.ProviderAuth :=
@@ -4132,6 +4192,12 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
     "expected all providers to include Mistral catalog provider"
   assertTrue (providerIds.contains LeanAgent.Models.amazonBedrockProviderId)
     "expected all providers to include Amazon Bedrock catalog provider"
+  assertTrue (providerIds.contains LeanAgent.Models.kimiCodingProviderId)
+    "expected all providers to include Kimi Coding catalog provider"
+  assertTrue (providerIds.contains LeanAgent.Models.minimaxProviderId)
+    "expected all providers to include MiniMax catalog provider"
+  assertTrue (providerIds.contains LeanAgent.Models.minimaxCNProviderId)
+    "expected all providers to include MiniMax CN catalog provider"
   let openAICompatibleAdditions :=
     #[ LeanAgent.Models.antLingProviderId
      , LeanAgent.Models.huggingFaceProviderId
@@ -4214,6 +4280,18 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
       assertTrue (model.provider == LeanAgent.Models.zaiProviderId) "expected Z.AI builtin model"
   | none => fail "expected Z.AI builtin model lookup"
   match LeanAgent.AI.Providers.All.getBuiltinModel?
+    LeanAgent.Models.kimiCodingProviderId
+    LeanAgent.Models.kimiCodingDefaultModel with
+  | some model =>
+      assertTrue (model.api == LeanAgent.AI.Api.AnthropicMessages.api) "expected Kimi Coding builtin model"
+  | none => fail "expected Kimi Coding builtin model lookup"
+  match LeanAgent.AI.Providers.All.getBuiltinModel?
+    LeanAgent.Models.minimaxCNProviderId
+    LeanAgent.Models.minimaxCNDefaultModel with
+  | some model =>
+      assertTrue (model.provider == LeanAgent.Models.minimaxCNProviderId) "expected MiniMax CN builtin model"
+  | none => fail "expected MiniMax CN builtin model lookup"
+  match LeanAgent.AI.Providers.All.getBuiltinModel?
     LeanAgent.AI.Providers.CloudflareAIGateway.providerId
     "gpt-4o-mini" with
   | some model =>
@@ -4221,7 +4299,7 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
   | none => fail "expected Cloudflare AI Gateway builtin model lookup"
   let collection ← LeanAgent.AI.Providers.All.builtinModels none fakeCloudflareAuthContext
   let providers ← collection.getProviders
-  assertTrue (providers.size == 28) "expected implemented builtin text providers"
+  assertTrue (providers.size == 31) "expected implemented builtin text providers"
   match ← collection.getProvider? LeanAgent.AI.Providers.CloudflareWorkersAI.providerId with
   | some _ => pure ()
   | none => fail "expected Workers AI provider in builtin collection"
@@ -4284,6 +4362,15 @@ def testEnvApiKeysProviderMap : IO Unit := do
     (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "zai-coding-cn" == some #["ZAI_CODING_CN_API_KEY"])
     "expected ZAI Coding CN env var"
   assertTrue
+    (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "kimi-coding" == some #[LeanAgent.Models.kimiCodingApiKeyEnv])
+    "expected Kimi Coding env var"
+  assertTrue
+    (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "minimax" == some #[LeanAgent.Models.minimaxApiKeyEnv])
+    "expected MiniMax env var"
+  assertTrue
+    (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "minimax-cn" == some #[LeanAgent.Models.minimaxCNApiKeyEnv])
+    "expected MiniMax CN env var"
+  assertTrue
     (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "google" == some #[LeanAgent.Models.googleApiKeyEnv])
     "expected Google Gemini env var"
   assertTrue
@@ -4312,6 +4399,10 @@ def testEnvApiKeysProviderMap : IO Unit := do
     "xiaomi-token-plan-sgp"
     #[("XIAOMI_TOKEN_PLAN_SGP_API_KEY", "xiaomi-token")]
   assertTrue (xiaomiKey == some "xiaomi-token") "expected configured Xiaomi Token Plan SGP API key"
+  let kimiKey ← LeanAgent.AI.EnvApiKeys.getEnvApiKey
+    "kimi-coding"
+    #[("KIMI_API_KEY", "kimi-token")]
+  assertTrue (kimiKey == some "kimi-token") "expected configured Kimi Coding API key"
   let missing ← LeanAgent.AI.EnvApiKeys.findEnvKeys "unknown-provider" #[]
   assertTrue (missing == none) "expected stable missing provider result"
 
@@ -6678,6 +6769,7 @@ def main : IO UInt32 := do
     testGitHubCopilotOAuthDomainAndBaseUrlHelpers
     testGitHubCopilotOAuthParsesAvailableModels
     testGitHubCopilotOAuthModifiesModelsFromCredential
+    testCatalogProviderHeadersApplyThroughAuth
     testCloudflareWorkersAIAuthResolution
     testCloudflareAIGatewayAuthResolution
     testCloudflareStoredCredentialResolution

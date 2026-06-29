@@ -12,6 +12,9 @@ import LeanAgent.AI.Providers.Google
 import LeanAgent.AI.Providers.GoogleVertex
 import LeanAgent.AI.Providers.Groq
 import LeanAgent.AI.Providers.HuggingFace
+import LeanAgent.AI.Providers.KimiCoding
+import LeanAgent.AI.Providers.MiniMax
+import LeanAgent.AI.Providers.MiniMaxCN
 import LeanAgent.AI.Providers.Mistral
 import LeanAgent.AI.Providers.MoonshotAI
 import LeanAgent.AI.Providers.MoonshotAICN
@@ -75,6 +78,9 @@ def catalogProviders : IO (Array LeanAgent.Models.Provider) := do
      , ← LeanAgent.AI.Providers.ZAI.provider
      , ← LeanAgent.AI.Providers.ZAICodingCN.provider
      , ← LeanAgent.AI.Providers.Anthropic.provider
+     , ← LeanAgent.AI.Providers.KimiCoding.provider
+     , ← LeanAgent.AI.Providers.MiniMax.provider
+     , ← LeanAgent.AI.Providers.MiniMaxCN.provider
      , ← LeanAgent.AI.Providers.Google.provider
      , ← LeanAgent.AI.Providers.GoogleVertex.provider
      , ← LeanAgent.AI.Providers.Mistral.provider
