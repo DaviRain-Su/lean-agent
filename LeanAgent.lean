@@ -1,5 +1,6 @@
 import LeanAgent.AI.Auth
 import LeanAgent.AI.Api.OpenAICompletions
+import LeanAgent.AI.Api.OpenAIPromptCache
 import LeanAgent.AI.EventStream
 import LeanAgent.AI.Types
 import LeanAgent.CodingTools

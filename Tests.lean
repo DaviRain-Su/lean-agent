@@ -275,6 +275,75 @@ def testOpenAICompletionsSerializesOptions : IO Unit := do
     "expected xhigh to clamp to high"
   assertTrue (LeanAgent.Json.optVal? json "tool_choice" == some (LeanAgent.Json.str "required")) "expected required tool choice"
 
+def testOpenAICompletionsPromptCacheKey : IO Unit := do
+  let options : LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsOptions :=
+    { sessionId := some "session-123" }
+  let json := LeanAgent.AI.Api.OpenAICompletions.requestToJsonWithOptions
+    (basicProviderRequest)
+    options
+    LeanAgent.Models.openAIBaseUrl
+  assertTrue
+    (LeanAgent.Json.optVal? json "prompt_cache_key" == some (LeanAgent.Json.str "session-123"))
+    "expected prompt cache key"
+  assertTrue (LeanAgent.Json.optVal? json "prompt_cache_retention" == none) "expected no prompt cache retention"
+
+def testOpenAICompletionsPromptCacheLongRetention : IO Unit := do
+  let options : LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsOptions :=
+    { cacheRetention := some .long
+      sessionId := some "session-456"
+    }
+  let json := LeanAgent.AI.Api.OpenAICompletions.requestToJsonWithOptions
+    (basicProviderRequest)
+    options
+    LeanAgent.Models.openAIBaseUrl
+  assertTrue
+    (LeanAgent.Json.optVal? json "prompt_cache_key" == some (LeanAgent.Json.str "session-456"))
+    "expected prompt cache key for long retention"
+  assertTrue
+    (LeanAgent.Json.optVal? json "prompt_cache_retention" == some (LeanAgent.Json.str "24h"))
+    "expected 24h prompt cache retention"
+
+def testOpenAICompletionsPromptCacheClampsKey : IO Unit := do
+  let longSession := String.ofList (List.replicate 67 'x')
+  let expected := String.ofList (List.replicate 64 'x')
+  let options : LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsOptions :=
+    { sessionId := some longSession }
+  let json := LeanAgent.AI.Api.OpenAICompletions.requestToJsonWithOptions
+    (basicProviderRequest)
+    options
+    LeanAgent.Models.openAIBaseUrl
+  assertTrue
+    (LeanAgent.Json.optVal? json "prompt_cache_key" == some (LeanAgent.Json.str expected))
+    "expected clamped prompt cache key"
+
+def testOpenAICompletionsPromptCacheNoneOmitsFields : IO Unit := do
+  let options : LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsOptions :=
+    { cacheRetention := some .none
+      sessionId := some "session-789"
+    }
+  let json := LeanAgent.AI.Api.OpenAICompletions.requestToJsonWithOptions
+    (basicProviderRequest)
+    options
+    LeanAgent.Models.openAIBaseUrl
+  assertTrue (LeanAgent.Json.optVal? json "prompt_cache_key" == none) "expected no prompt cache key"
+  assertTrue (LeanAgent.Json.optVal? json "prompt_cache_retention" == none) "expected no prompt cache retention"
+
+def testOpenAICompletionsPromptCacheEnvLongRetention : IO Unit := do
+  let options : LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsOptions :=
+    { sessionId := some "session-env"
+      env := #[("PI_CACHE_RETENTION", "long")]
+    }
+  let json := LeanAgent.AI.Api.OpenAICompletions.requestToJsonWithOptions
+    (basicProviderRequest)
+    options
+    LeanAgent.Models.openAIBaseUrl
+  assertTrue
+    (LeanAgent.Json.optVal? json "prompt_cache_key" == some (LeanAgent.Json.str "session-env"))
+    "expected env prompt cache key"
+  assertTrue
+    (LeanAgent.Json.optVal? json "prompt_cache_retention" == some (LeanAgent.Json.str "24h"))
+    "expected env 24h prompt cache retention"
+
 def testModelCatalogDeepSeekDefaults : IO Unit := do
   let catalog := LeanAgent.Models.defaultCatalog
   match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.deepSeekApiKeyEnv with
@@ -768,6 +837,11 @@ def main : IO UInt32 := do
     testOpenAICompletionsIncludesToolsWhenPresent
     testOpenAICompletionsIncludesEmptyToolsForToolHistory
     testOpenAICompletionsSerializesOptions
+    testOpenAICompletionsPromptCacheKey
+    testOpenAICompletionsPromptCacheLongRetention
+    testOpenAICompletionsPromptCacheClampsKey
+    testOpenAICompletionsPromptCacheNoneOmitsFields
+    testOpenAICompletionsPromptCacheEnvLongRetention
     testModelCatalogDeepSeekDefaults
     testOpenAICompatibleProviderFamilyCatalog
     testDefaultModelsRegistersOpenAICompatibleFamily

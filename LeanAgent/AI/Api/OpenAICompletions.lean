@@ -1,4 +1,5 @@
 import Lean
+import LeanAgent.AI.Api.OpenAIPromptCache
 import LeanAgent.AI.Types
 import LeanAgent.Core
 import LeanAgent.Http
@@ -129,7 +130,42 @@ def requestOptionFields (options : OpenAICompletionsOptions) : List (String × L
     | none => []
   temperatureFields ++ maxTokenFields ++ reasoningFields
 
-def requestToJsonWithOptions (request : ProviderRequest) (options : OpenAICompletionsOptions := {}) : Lean.Json :=
+def cacheRetentionFromEnv? (env : Array (String × String)) : Option LeanAgent.AI.CacheRetention :=
+  env.findSome? fun (name, value) =>
+    if name == "PI_CACHE_RETENTION" && value == "long" then
+      some .long
+    else
+      none
+
+def resolveCacheRetention (options : OpenAICompletionsOptions) : LeanAgent.AI.CacheRetention :=
+  match options.cacheRetention with
+  | some retention => retention
+  | none => (cacheRetentionFromEnv? options.env).getD .short
+
+def promptCacheFields (baseUrl : String) (options : OpenAICompletionsOptions) : List (String × Lean.Json) :=
+  let retention := resolveCacheRetention options
+  if retention == .none then
+    []
+  else
+    let supportsPromptCacheKey := baseUrl.contains "api.openai.com" || retention == .long
+    let keyFields :=
+      if supportsPromptCacheKey then
+        match LeanAgent.AI.Api.OpenAIPromptCache.clampKey options.sessionId with
+        | some key => [("prompt_cache_key", LeanAgent.Json.str key)]
+        | none => []
+      else
+        []
+    let retentionFields :=
+      if retention == .long then
+        [("prompt_cache_retention", LeanAgent.Json.str "24h")]
+      else
+        []
+    keyFields ++ retentionFields
+
+def requestToJsonWithOptions
+    (request : ProviderRequest)
+    (options : OpenAICompletionsOptions := {})
+    (baseUrl : String := "") : Lean.Json :=
   let messages :=
     #[LeanAgent.Json.obj [("role", LeanAgent.Json.str "system"), ("content", LeanAgent.Json.str request.system)]]
       ++ request.messages.map messageToJson
@@ -137,6 +173,7 @@ def requestToJsonWithOptions (request : ProviderRequest) (options : OpenAIComple
     ([ ("model", LeanAgent.Json.str request.model)
      , ("messages", LeanAgent.Json.arr messages)
      ] ++ requestOptionFields options
+       ++ promptCacheFields baseUrl options
        ++ requestToolFields request options)
 
 def requestToJson (request : ProviderRequest) : Lean.Json :=
@@ -216,7 +253,7 @@ def completeWithOptions
     (config : OpenAICompatibleConfig)
     (request : ProviderRequest)
     (options : OpenAICompletionsOptions := {}) : IO LeanAgent.ProviderResponse := do
-  let payload := requestToJsonWithOptions request options
+  let payload := requestToJsonWithOptions request options config.baseUrl
   let raw ← runHttpJson config payload
   match parseChatCompletion raw with
   | .ok response => pure response
