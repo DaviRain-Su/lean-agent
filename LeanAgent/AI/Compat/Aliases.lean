@@ -16,6 +16,11 @@ abbrev OpenAIResponsesStream :=
     LeanAgent.AI.Api.OpenAIResponses.OpenAIResponsesOptions →
       IO LeanAgent.AI.AssistantMessageEventStream
 
+abbrev AzureOpenAIResponsesStream :=
+  LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
+    LeanAgent.AI.Api.AzureOpenAIResponses.AzureOpenAIResponsesOptions →
+      IO LeanAgent.AI.AssistantMessageEventStream
+
 def streamForApi (api : String) : AliasStream :=
   fun model context options => LeanAgent.AI.Compat.streamSimpleWithApi api model context options
 
@@ -44,6 +49,36 @@ def streamOpenAIResponsesWithOptions : OpenAIResponsesStream :=
       model.toResponsesModel
       context
       options
+
+def withEnvApiKeyForAzureOpenAIResponses
+    (model : LeanAgent.Models.ModelInfo)
+    (options : LeanAgent.AI.Api.AzureOpenAIResponses.AzureOpenAIResponsesOptions) :
+    IO LeanAgent.AI.Api.AzureOpenAIResponses.AzureOpenAIResponsesOptions := do
+  let simple ← LeanAgent.AI.Compat.withEnvApiKey
+    model
+    options.toOpenAIResponsesOptions.toSimpleStreamOptions
+  pure { options with apiKey := simple.apiKey }
+
+def streamAzureOpenAIResponsesWithOptions : AzureOpenAIResponsesStream :=
+  fun model context options => do
+    LeanAgent.AI.Compat.ensureApiMatches
+      { api := "azure-openai-responses"
+        streams := LeanAgent.Models.azureOpenAIResponsesStreams
+      }
+      model
+    let options ← withEnvApiKeyForAzureOpenAIResponses model options
+    match options.apiKey with
+    | none => throw (LeanAgent.Models.modelsError .auth s!"missing API key for provider {model.provider}")
+    | some apiKey =>
+        let config : LeanAgent.AI.Api.AzureOpenAIResponses.AzureOpenAIResponsesConfig :=
+          { apiKey := apiKey
+            baseUrl := model.baseUrl
+          }
+        LeanAgent.AI.Api.AzureOpenAIResponses.completeStreamWithOptions
+          config
+          model.toResponsesModel
+          context
+          options
 
 def withEnvApiKeyForMistral
     (model : LeanAgent.Models.ModelInfo)
@@ -85,11 +120,11 @@ def streamBedrockConverseStream : AliasStream :=
 def streamSimpleBedrockConverseStream : AliasStream :=
   streamBedrockConverseStream
 
-def streamAzureOpenAIResponses : AliasStream :=
-  streamForApi "azure-openai-responses"
+def streamAzureOpenAIResponses : AzureOpenAIResponsesStream :=
+  streamAzureOpenAIResponsesWithOptions
 
 def streamSimpleAzureOpenAIResponses : AliasStream :=
-  streamAzureOpenAIResponses
+  streamForApi "azure-openai-responses"
 
 def streamGoogle : AliasStream :=
   streamForApi "google-generative-ai"

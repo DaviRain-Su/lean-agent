@@ -7045,6 +7045,29 @@ def testAzureOpenAIResponsesStreamWithOptionsLocal : IO Unit := do
       (LeanAgent.AI.contentPlainText stream.result.content == "mini-deployment|True|azure-key||trace-azure")
       "expected Azure deployment, stream flag, api-key header, no bearer auth, and custom header"
 
+def testCompatAzureOpenAIResponsesTypedLegacyAliasLocal : IO Unit := do
+  let port := 18103
+  withHttpServer port do
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := "gpt-4o-mini"
+        name := "Azure GPT-4o mini"
+        provider := "azure-openai-responses"
+        api := "azure-openai-responses"
+        baseUrl := s!"http://127.0.0.1:{port}/azure-responses"
+      }
+    let stream ← LeanAgent.AI.Compat.Aliases.streamAzureOpenAIResponses
+      model
+      { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }] }
+      { apiKey := some "azure-key"
+        azureApiVersion := some "2025-01-01"
+        azureDeploymentName := some "mini-deployment"
+        headers := #[("X-Trace", some "trace-azure")]
+      }
+    assertTrue stream.isComplete "expected compat Azure Responses typed legacy alias stream"
+    assertTrue
+      (LeanAgent.AI.contentPlainText stream.result.content == "mini-deployment|True|azure-key||trace-azure")
+      "expected compat Azure Responses typed alias to preserve deployment options"
+
 def testAnthropicMessagesStreamWithOptionsLocal : IO Unit := do
   let port := 18096
   withHttpServer port do
@@ -7482,6 +7505,7 @@ def main : IO UInt32 := do
     testOpenAIResponsesStreamWithOptionsLocal
     testCompatOpenAIResponsesTypedLegacyAliasLocal
     testAzureOpenAIResponsesStreamWithOptionsLocal
+    testCompatAzureOpenAIResponsesTypedLegacyAliasLocal
     testAnthropicMessagesStreamWithOptionsLocal
     testGoogleGenerativeAIStreamWithOptionsLocal
     testGoogleVertexStreamWithOptionsLocal
