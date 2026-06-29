@@ -2589,6 +2589,49 @@ def testOpenAICompatibleStreamsClampMaxTokens : IO Unit := do
     assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "902")
       "expected OpenAI-compatible runtime max_tokens to be context-clamped"
 
+def testOpenAIResponsesDispatchesThroughModelsCollection : IO Unit := do
+  let port := 18095
+  withHttpServer port do
+    let providerId := "responses-test"
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := "gpt-5.5"
+        name := "GPT 5.5"
+        provider := providerId
+        api := "openai-responses"
+        baseUrl := s!"http://127.0.0.1:{port}/responses-stream"
+        cost := { input := 1000000.0, output := 2000000.0 }
+        contextWindow := 100000
+        maxTokens := 4096
+        reasoning := true
+      }
+    let provider ← LeanAgent.Models.createCatalogProvider
+      { id := providerId
+        name := "Responses Test"
+        baseUrl := model.baseUrl
+        apiKeyEnv := "RESPONSES_TEST_API_KEY"
+        defaultModel := model.id
+        models := #[model]
+      }
+    let collection ← LeanAgent.Models.createModels
+    collection.setProvider provider
+    let context : LeanAgent.AI.Context :=
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+    let stream ← collection.streamSimple
+      model
+      context
+      { apiKey := some "test-key" }
+    assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "streamed")
+      "expected Responses model to dispatch through Models collection"
+    assertTrue (stream.result.api == "openai-responses") "expected Responses runtime api"
+    assertTrue (stream.result.provider == providerId) "expected Responses runtime provider"
+    assertTrue (stream.result.usage.input == 4) "expected Responses input usage"
+    assertTrue (stream.result.usage.output == 2) "expected Responses output usage"
+    assertTrue (stream.result.usage.cost.input == 4.0) "expected Responses model input cost"
+    assertTrue (stream.result.usage.cost.output == 4.0) "expected Responses model output cost"
+    assertTrue (stream.result.usage.cost.total == 8.0) "expected Responses model total cost"
+
 def testOpenAIResponsesCompleteWithOptionsLocal : IO Unit := do
   let port := 18088
   withHttpServer port do
@@ -2876,6 +2919,7 @@ def main : IO UInt32 := do
     testOpenAICompatibleStreamsUsesStreamingRuntime
     testOpenAICompatibleStreamsApplyModelCost
     testOpenAICompatibleStreamsClampMaxTokens
+    testOpenAIResponsesDispatchesThroughModelsCollection
     testOpenAIResponsesCompleteWithOptionsLocal
     testOpenAIResponsesPayloadAndResponseHooks
     testOpenAIResponsesSendsCopilotDynamicHeaders

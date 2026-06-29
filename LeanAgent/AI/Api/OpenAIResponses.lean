@@ -32,6 +32,26 @@ structure OpenAIResponsesOptions extends LeanAgent.AI.SimpleStreamOptions where
   reasoningSummary : Option String := none
   serviceTier : Option String := none
 
+def optionsFromSimple (options : LeanAgent.AI.SimpleStreamOptions) : OpenAIResponsesOptions :=
+  { temperature := options.temperature
+    maxTokens := options.maxTokens
+    apiKey := options.apiKey
+    transport := options.transport
+    cacheRetention := options.cacheRetention
+    sessionId := options.sessionId
+    headers := options.headers
+    onPayload := options.onPayload
+    onResponse := options.onResponse
+    timeoutMs := options.timeoutMs
+    websocketConnectTimeoutMs := options.websocketConnectTimeoutMs
+    maxRetries := options.maxRetries
+    maxRetryDelayMs := options.maxRetryDelayMs
+    metadata := options.metadata
+    env := options.env
+    reasoning := options.reasoning
+    thinkingBudgets := options.thinkingBudgets
+  }
+
 def responsesUrl (baseUrl : String) : String :=
   if baseUrl.endsWith "/responses" then
     baseUrl

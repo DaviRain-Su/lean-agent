@@ -2,6 +2,7 @@ import LeanAgent.Core
 import LeanAgent.AI.Auth
 import LeanAgent.AI.Api.Lazy
 import LeanAgent.AI.Api.OpenAICompletions
+import LeanAgent.AI.Api.OpenAIResponses
 import LeanAgent.AI.Api.SimpleOptions
 import LeanAgent.AI.EventStream
 import LeanAgent.AI.Types
@@ -82,6 +83,20 @@ def ModelInfo.toModelRef (model : ModelInfo) : LeanAgent.AI.ModelRef :=
     api := model.api
     provider := model.provider
     baseUrl := some model.baseUrl
+  }
+
+def ModelInfo.toResponsesModel (model : ModelInfo) :
+    LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel :=
+  { id := model.id
+    provider := model.provider
+    api := model.api
+    input := model.input
+    reasoning := model.reasoning
+    supportsDeveloperRole := model.compat.supportsDeveloperRole
+    contextWindow := model.contextWindow
+    maxTokens := model.maxTokens
+    cost := model.cost
+    thinkingLevelMap := model.thinkingLevelMap
   }
 
 def deepSeekCompat : ModelCompat :=
@@ -689,6 +704,23 @@ def openAICompatibleStreams : ProviderStreams :=
           pure (applyUsageCostToStream model stream)
   }
 
+def openAIResponsesStreams : ProviderStreams :=
+  { streamSimple := fun model context options => do
+      let options := clampSimpleOptionsToContext model context options
+      match options.apiKey with
+      | none => throw (modelsError .auth s!"missing API key for provider {model.provider}")
+      | some apiKey =>
+          let config : LeanAgent.AI.Api.OpenAIResponses.OpenAIResponsesConfig :=
+            { apiKey := apiKey
+              baseUrl := model.baseUrl
+            }
+          LeanAgent.AI.Api.OpenAIResponses.completeStreamWithOptions
+            config
+            model.toResponsesModel
+            context
+            (LeanAgent.AI.Api.OpenAIResponses.optionsFromSimple options)
+  }
+
 def authForProviderInfo (info : ProviderInfo) : LeanAgent.AI.Auth.ProviderAuth :=
   { apiKey := some (LeanAgent.AI.Auth.envApiKeyAuth (info.name ++ " API key") #[info.apiKeyEnv]) }
 
@@ -699,7 +731,10 @@ def createCatalogProvider (info : ProviderInfo) : IO Provider :=
       baseUrl := some info.baseUrl
       auth := authForProviderInfo info
       models := info.models
-      apis := #[{ api := "openai-completions", streams := openAICompatibleStreams }]
+      apis :=
+        #[ { api := "openai-completions", streams := openAICompatibleStreams }
+         , { api := "openai-responses", streams := openAIResponsesStreams }
+         ]
     }
 
 def streamHeaderNames (headers : Array (String × Option String)) : Array String :=
