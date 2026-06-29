@@ -6991,6 +6991,35 @@ def testOpenAIResponsesStreamWithOptionsLocal : IO Unit := do
         | _ => false)
       "expected streamed text delta"
 
+def testCompatOpenAIResponsesTypedLegacyAliasLocal : IO Unit := do
+  let port := 18102
+  withHttpServer port do
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := "gpt-5.4"
+        name := "GPT 5.4"
+        provider := LeanAgent.Models.openAIProviderId
+        api := "openai-responses"
+        baseUrl := s!"http://127.0.0.1:{port}/responses-stream"
+        cost := { input := 1000000.0, output := 2000000.0 }
+        contextWindow := 100000
+        maxTokens := 4096
+      }
+    let stream ← LeanAgent.AI.Compat.Aliases.streamOpenAIResponses
+      model
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+      { apiKey := some "test-key"
+        serviceTier := some "flex"
+      }
+    assertTrue stream.isComplete "expected compat OpenAI Responses typed legacy alias stream"
+    assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "streamed")
+      "expected compat OpenAI Responses typed alias content"
+    assertTrue (stream.result.usage.cost.input == 2.0)
+      "expected compat OpenAI Responses typed alias flex input cost multiplier"
+    assertTrue (stream.result.usage.cost.output == 2.0)
+      "expected compat OpenAI Responses typed alias flex output cost multiplier"
+
 def testAzureOpenAIResponsesStreamWithOptionsLocal : IO Unit := do
   let port := 18094
   withHttpServer port do
@@ -7451,6 +7480,7 @@ def main : IO UInt32 := do
     testOpenAIResponsesPayloadAndResponseHooks
     testOpenAIResponsesSendsCopilotDynamicHeaders
     testOpenAIResponsesStreamWithOptionsLocal
+    testCompatOpenAIResponsesTypedLegacyAliasLocal
     testAzureOpenAIResponsesStreamWithOptionsLocal
     testAnthropicMessagesStreamWithOptionsLocal
     testGoogleGenerativeAIStreamWithOptionsLocal

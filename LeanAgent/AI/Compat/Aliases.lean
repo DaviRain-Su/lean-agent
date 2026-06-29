@@ -11,8 +11,39 @@ abbrev MistralStream :=
     LeanAgent.AI.Api.MistralConversations.MistralOptions →
       IO LeanAgent.AI.AssistantMessageEventStream
 
+abbrev OpenAIResponsesStream :=
+  LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
+    LeanAgent.AI.Api.OpenAIResponses.OpenAIResponsesOptions →
+      IO LeanAgent.AI.AssistantMessageEventStream
+
 def streamForApi (api : String) : AliasStream :=
   fun model context options => LeanAgent.AI.Compat.streamSimpleWithApi api model context options
+
+def withEnvApiKeyForOpenAIResponses
+    (model : LeanAgent.Models.ModelInfo)
+    (options : LeanAgent.AI.Api.OpenAIResponses.OpenAIResponsesOptions) :
+    IO LeanAgent.AI.Api.OpenAIResponses.OpenAIResponsesOptions := do
+  let simple ← LeanAgent.AI.Compat.withEnvApiKey model options.toSimpleStreamOptions
+  pure { options with apiKey := simple.apiKey }
+
+def streamOpenAIResponsesWithOptions : OpenAIResponsesStream :=
+  fun model context options => do
+    LeanAgent.AI.Compat.ensureApiMatches
+      { api := "openai-responses"
+        streams := LeanAgent.Models.openAIResponsesStreams
+      }
+      model
+    let options ← withEnvApiKeyForOpenAIResponses model options
+    let apiKey ← LeanAgent.Models.requireApiKeyOrHeaderAuth model.provider options.toSimpleStreamOptions
+    let config : LeanAgent.AI.Api.OpenAIResponses.OpenAIResponsesConfig :=
+      { apiKey := apiKey
+        baseUrl := model.baseUrl
+      }
+    LeanAgent.AI.Api.OpenAIResponses.completeStreamWithOptions
+      config
+      model.toResponsesModel
+      context
+      options
 
 def withEnvApiKeyForMistral
     (model : LeanAgent.Models.ModelInfo)
@@ -90,10 +121,10 @@ def streamOpenAICompletions : AliasStream :=
 def streamSimpleOpenAICompletions : AliasStream :=
   streamOpenAICompletions
 
-def streamOpenAIResponses : AliasStream :=
-  streamForApi "openai-responses"
+def streamOpenAIResponses : OpenAIResponsesStream :=
+  streamOpenAIResponsesWithOptions
 
 def streamSimpleOpenAIResponses : AliasStream :=
-  streamOpenAIResponses
+  streamForApi "openai-responses"
 
 end LeanAgent.AI.Compat.Aliases
