@@ -3204,6 +3204,64 @@ def testValidationRejectsInvalidCoercions : IO Unit := do
   assertValidationFails (LeanAgent.Json.obj [("type", LeanAgent.Json.str "integer")])
     (LeanAgent.Json.str "42.1")
 
+def testValidationChecksSchemaBounds : IO Unit := do
+  let stringSchema :=
+    LeanAgent.Json.obj
+      [ ("type", LeanAgent.Json.str "string")
+      , ("minLength", LeanAgent.Json.nat 2)
+      , ("maxLength", LeanAgent.Json.nat 4)
+      ]
+  assertValidationValue stringSchema (LeanAgent.Json.str "abc") (LeanAgent.Json.str "abc")
+  assertValidationFails stringSchema (LeanAgent.Json.str "a")
+  assertValidationFails stringSchema (LeanAgent.Json.str "abcde")
+
+  let arraySchema :=
+    LeanAgent.Json.obj
+      [ ("type", LeanAgent.Json.str "array")
+      , ("minItems", LeanAgent.Json.nat 2)
+      , ("maxItems", LeanAgent.Json.nat 3)
+      , ("items", LeanAgent.Json.obj [("type", LeanAgent.Json.str "integer")])
+      ]
+  assertValidationValue arraySchema
+    (LeanAgent.Json.arr #[LeanAgent.Json.str "1", LeanAgent.Json.nat 2])
+    (LeanAgent.Json.arr #[LeanAgent.Json.nat 1, LeanAgent.Json.nat 2])
+  assertValidationFails arraySchema (LeanAgent.Json.arr #[LeanAgent.Json.nat 1])
+  assertValidationFails arraySchema
+    (LeanAgent.Json.arr
+      #[LeanAgent.Json.nat 1, LeanAgent.Json.nat 2, LeanAgent.Json.nat 3, LeanAgent.Json.nat 4])
+
+  let numberSchema :=
+    LeanAgent.Json.obj
+      [ ("type", LeanAgent.Json.str "number")
+      , ("minimum", LeanAgent.Json.nat 2)
+      , ("maximum", LeanAgent.Json.nat 4)
+      ]
+  assertValidationValue numberSchema (LeanAgent.Json.str "3") (LeanAgent.Json.nat 3)
+  assertValidationFails numberSchema (LeanAgent.Json.nat 1)
+  assertValidationFails numberSchema (LeanAgent.Json.nat 5)
+
+  let exclusiveNumberSchema :=
+    LeanAgent.Json.obj
+      [ ("type", LeanAgent.Json.str "number")
+      , ("exclusiveMinimum", LeanAgent.Json.nat 2)
+      , ("exclusiveMaximum", LeanAgent.Json.nat 4)
+      ]
+  assertValidationValue exclusiveNumberSchema (LeanAgent.Json.nat 3) (LeanAgent.Json.nat 3)
+  assertValidationFails exclusiveNumberSchema (LeanAgent.Json.nat 2)
+  assertValidationFails exclusiveNumberSchema (LeanAgent.Json.nat 4)
+
+  let booleanExclusiveNumberSchema :=
+    LeanAgent.Json.obj
+      [ ("type", LeanAgent.Json.str "number")
+      , ("minimum", LeanAgent.Json.nat 2)
+      , ("exclusiveMinimum", Lean.Json.bool true)
+      , ("maximum", LeanAgent.Json.nat 4)
+      , ("exclusiveMaximum", Lean.Json.bool true)
+      ]
+  assertValidationValue booleanExclusiveNumberSchema (LeanAgent.Json.nat 3) (LeanAgent.Json.nat 3)
+  assertValidationFails booleanExclusiveNumberSchema (LeanAgent.Json.nat 2)
+  assertValidationFails booleanExclusiveNumberSchema (LeanAgent.Json.nat 4)
+
 def testValidationToolLookupAndRequired : IO Unit := do
   let tool : LeanAgent.AI.Tool :=
     { name := "read"
@@ -7872,6 +7930,7 @@ def main : IO UInt32 := do
     testSchemaStringEnum
     testValidationCoercesPlainJsonSchemas
     testValidationRejectsInvalidCoercions
+    testValidationChecksSchemaBounds
     testValidationToolLookupAndRequired
     testSanitizeUnicodeSurrogates
     testOverflowClassifiesProviderErrors

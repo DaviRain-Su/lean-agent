@@ -65,6 +65,24 @@ def tupleItemSchemas (schema : Lean.Json) : Array Lean.Json :=
 def additionalProperties? (schema : Lean.Json) : Option Lean.Json :=
   LeanAgent.Json.optVal? schema "additionalProperties"
 
+def natKeyword? (schema : Lean.Json) (key : String) : Option Nat :=
+  match LeanAgent.Json.optVal? schema key with
+  | some value =>
+      match value.getNat? with
+      | .ok nat => some nat
+      | .error _ => none
+  | none => none
+
+def boolKeyword? (schema : Lean.Json) (key : String) : Option Bool :=
+  match LeanAgent.Json.optVal? schema key with
+  | some (.bool value) => some value
+  | _ => none
+
+def numberKeyword? (schema : Lean.Json) (key : String) : Option Lean.JsonNumber :=
+  match LeanAgent.Json.optVal? schema key with
+  | some (.num value) => some value
+  | _ => none
+
 def enumerateList {α : Type} (items : List α) : List (Nat × α) :=
   let rec loop : List α → Nat → List (Nat × α)
     | [], _ => []
@@ -208,8 +226,93 @@ def requiredIssue (path key : String) : ValidationIssue :=
 def enumIssue (path : String) : ValidationIssue :=
   { path := path, message := "expected one of enum values" }
 
+def minLengthIssue (path : String) (minLength : Nat) : ValidationIssue :=
+  { path := path, message := s!"expected length >= {minLength}" }
+
+def maxLengthIssue (path : String) (maxLength : Nat) : ValidationIssue :=
+  { path := path, message := s!"expected length <= {maxLength}" }
+
+def minItemsIssue (path : String) (minItems : Nat) : ValidationIssue :=
+  { path := path, message := s!"expected array length >= {minItems}" }
+
+def maxItemsIssue (path : String) (maxItems : Nat) : ValidationIssue :=
+  { path := path, message := s!"expected array length <= {maxItems}" }
+
+def minimumIssue (path : String) (minimum : Lean.JsonNumber) : ValidationIssue :=
+  { path := path, message := s!"expected number >= {minimum}" }
+
+def maximumIssue (path : String) (maximum : Lean.JsonNumber) : ValidationIssue :=
+  { path := path, message := s!"expected number <= {maximum}" }
+
+def exclusiveMinimumIssue (path : String) (minimum : Lean.JsonNumber) : ValidationIssue :=
+  { path := path, message := s!"expected number > {minimum}" }
+
+def exclusiveMaximumIssue (path : String) (maximum : Lean.JsonNumber) : ValidationIssue :=
+  { path := path, message := s!"expected number < {maximum}" }
+
 def definedPropertyKeys (schema : Lean.Json) : List String :=
   propertySchemas schema |>.map Prod.fst
+
+def stringBoundIssues (schema : Lean.Json) (value path : String) : List ValidationIssue :=
+  let minIssues :=
+    match natKeyword? schema "minLength" with
+    | some minLength =>
+        if value.length < minLength then [minLengthIssue path minLength] else []
+    | none => []
+  let maxIssues :=
+    match natKeyword? schema "maxLength" with
+    | some maxLength =>
+        if value.length > maxLength then [maxLengthIssue path maxLength] else []
+    | none => []
+  minIssues ++ maxIssues
+
+def arrayBoundIssues (schema : Lean.Json) (values : Array Lean.Json) (path : String) :
+    List ValidationIssue :=
+  let minIssues :=
+    match natKeyword? schema "minItems" with
+    | some minItems =>
+        if values.size < minItems then [minItemsIssue path minItems] else []
+    | none => []
+  let maxIssues :=
+    match natKeyword? schema "maxItems" with
+    | some maxItems =>
+        if values.size > maxItems then [maxItemsIssue path maxItems] else []
+    | none => []
+  minIssues ++ maxIssues
+
+def numberBoundIssues (schema : Lean.Json) (value : Lean.JsonNumber) (path : String) :
+    List ValidationIssue :=
+  let minimumIssues :=
+    match numberKeyword? schema "minimum", boolKeyword? schema "exclusiveMinimum" with
+    | some _, some true => []
+    | some minimum, _ =>
+        if Lean.JsonNumber.lt value minimum then [minimumIssue path minimum] else []
+    | none, _ => []
+  let maximumIssues :=
+    match numberKeyword? schema "maximum", boolKeyword? schema "exclusiveMaximum" with
+    | some _, some true => []
+    | some maximum, _ =>
+        if Lean.JsonNumber.lt maximum value then [maximumIssue path maximum] else []
+    | none, _ => []
+  let exclusiveMinimumIssues :=
+    match numberKeyword? schema "exclusiveMinimum" with
+    | some minimum =>
+        if Lean.JsonNumber.lt minimum value then [] else [exclusiveMinimumIssue path minimum]
+    | none =>
+        match numberKeyword? schema "minimum", boolKeyword? schema "exclusiveMinimum" with
+        | some minimum, some true =>
+            if Lean.JsonNumber.lt minimum value then [] else [exclusiveMinimumIssue path minimum]
+        | _, _ => []
+  let exclusiveMaximumIssues :=
+    match numberKeyword? schema "exclusiveMaximum" with
+    | some maximum =>
+        if Lean.JsonNumber.lt value maximum then [] else [exclusiveMaximumIssue path maximum]
+    | none =>
+        match numberKeyword? schema "maximum", boolKeyword? schema "exclusiveMaximum" with
+        | some maximum, some true =>
+            if Lean.JsonNumber.lt value maximum then [] else [exclusiveMaximumIssue path maximum]
+        | _, _ => []
+  minimumIssues ++ maximumIssues ++ exclusiveMinimumIssues ++ exclusiveMaximumIssues
 
 partial def validateJsonAt (schema value : Lean.Json) (path : String := "root") :
     List ValidationIssue :=
@@ -225,6 +328,11 @@ partial def validateJsonAt (schema value : Lean.Json) (path : String := "root") 
       []
     else
       [enumIssue path]
+  let scalarIssues :=
+    match value with
+    | .str text => stringBoundIssues schema text path
+    | .num number => numberBoundIssues schema number path
+    | _ => []
   let objectIssues :=
     match value with
     | .obj fields =>
@@ -258,21 +366,24 @@ partial def validateJsonAt (schema value : Lean.Json) (path : String := "root") 
   let arrayIssues :=
     match value with
     | .arr values =>
-        match itemSchema? schema with
-        | some itemSchema =>
-            enumerateList values.toList |>.flatMap fun (index, item) =>
-              validateJsonAt itemSchema item (pathIndex path index)
-        | none =>
-            let tupleSchemas := tupleItemSchemas schema
-            if tupleSchemas.isEmpty then
-              []
-            else
+        let boundIssues := arrayBoundIssues schema values path
+        let itemIssues :=
+          match itemSchema? schema with
+          | some itemSchema =>
               enumerateList values.toList |>.flatMap fun (index, item) =>
-                match tupleSchemas[index]? with
-                | some itemSchema => validateJsonAt itemSchema item (pathIndex path index)
-                | none => []
+                validateJsonAt itemSchema item (pathIndex path index)
+          | none =>
+              let tupleSchemas := tupleItemSchemas schema
+              if tupleSchemas.isEmpty then
+                []
+              else
+                enumerateList values.toList |>.flatMap fun (index, item) =>
+                  match tupleSchemas[index]? with
+                  | some itemSchema => validateJsonAt itemSchema item (pathIndex path index)
+                  | none => []
+        boundIssues ++ itemIssues
     | _ => []
-  typeIssues ++ enumIssues ++ objectIssues ++ arrayIssues
+  typeIssues ++ enumIssues ++ scalarIssues ++ objectIssues ++ arrayIssues
 
 def validateJson (schema value : Lean.Json) : Except (List ValidationIssue) Lean.Json :=
   let coerced := coerceWithJsonSchema value schema

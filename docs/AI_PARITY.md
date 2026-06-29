@@ -221,8 +221,8 @@ should be generated or checked in as Lean data.
 | `utils/provider-env.ts` | `LeanAgent.AI.Util.ProviderEnv` | implemented | Scoped provider env lookup, ambient env fallback, empty-value suppression, and merge semantics exist. Bun-specific `/proc/self/environ` fallback is not applicable to Lean. |
 | `utils/retry.ts` | `LeanAgent.AI.Util.Retry` | partial | Retryable assistant/provider error classification, non-retryable quota guard, delay cap, and OpenAI-compatible request retry policy exist. Full Pi regex coverage and cross-provider retry integration are incomplete. |
 | `utils/sanitize-unicode.ts` | `LeanAgent.AI.Util.SanitizeUnicode` | partial | Lean string sanitizer preserves valid Unicode, and a UTF-16 code-unit helper removes unpaired high/low surrogates while preserving valid pairs. Provider serialization integration is not wired yet. |
-| `utils/typebox-helpers.ts` | `LeanAgent.AI.Schema` | partial | `stringEnum` helper exists for provider-compatible string enum schemas. Full TypeBox helper surface is not implemented. |
-| `utils/validation.ts` | `LeanAgent.AI.Validation`, `LeanAgent.AI.Schema` | partial | Tool lookup, argument validation, JSON Schema primitive coercion, required/object/array/enum checks, and formatted validation errors exist. Full TypeBox compiler/AJV behavior, symbol metadata, and all JSON Schema keywords are incomplete. |
+| `utils/typebox-helpers.ts` | `LeanAgent.AI.Schema` | implemented | Pi's provider-compatible `StringEnum` helper is exposed as `stringEnum`, including optional description/default fields. |
+| `utils/validation.ts` | `LeanAgent.AI.Validation`, `LeanAgent.AI.Schema` | partial | Tool lookup, argument validation, JSON Schema primitive coercion, required/object/array/enum checks, string/array length bounds, numeric inclusive/exclusive bounds, and formatted validation errors exist. Full TypeBox compiler/AJV behavior, symbol metadata, combinators, regex patterns, and all JSON Schema keywords are incomplete. |
 
 ## Images
 
