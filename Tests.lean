@@ -1022,6 +1022,107 @@ def testAnthropicMessagesParsesResponse : IO Unit := do
       | _ => fail "expected one Anthropic tool call"
   | .error err => fail s!"expected Anthropic parse success: {err}"
 
+def testAnthropicMessagesParsesStreamingEvents : IO Unit := do
+  let raw := String.intercalate "\n\n"
+    [ "event: message_start\n" ++
+      "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_stream\",\"model\":\"claude-sonnet-4-5\",\"usage\":{\"input_tokens\":3,\"output_tokens\":0,\"cache_read_input_tokens\":1}}}"
+    , "event: content_block_start\n" ++
+      "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"\"}}"
+    , "event: content_block_delta\n" ++
+      "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"plan\"}}"
+    , "event: content_block_delta\n" ++
+      "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"sig\"}}"
+    , "event: content_block_stop\n" ++
+      "data: {\"type\":\"content_block_stop\",\"index\":0}"
+    , "event: content_block_start\n" ++
+      "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}"
+    , "event: content_block_delta\n" ++
+      "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"hel\"}}"
+    , "event: content_block_delta\n" ++
+      "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"lo\"}}"
+    , "event: content_block_stop\n" ++
+      "data: {\"type\":\"content_block_stop\",\"index\":1}"
+    , "event: content_block_start\n" ++
+      "data: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tool_1\",\"name\":\"read\",\"input\":{}}}"
+    , "event: content_block_delta\n" ++
+      "data: {\"type\":\"content_block_delta\",\"index\":2,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}"
+    , "event: content_block_stop\n" ++
+      "data: {\"type\":\"content_block_stop\",\"index\":2}"
+    , "event: message_delta\n" ++
+      "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":5,\"cache_creation_input_tokens\":2,\"output_tokens_details\":{\"thinking_tokens\":1}}}"
+    , "event: message_stop\n" ++
+      "data: {\"type\":\"message_stop\"}"
+    , ""
+    ]
+  match LeanAgent.AI.Api.AnthropicMessages.parseStreamingEventStream
+      LeanAgent.AI.Api.AnthropicMessages.api
+      LeanAgent.Models.anthropicProviderId
+      LeanAgent.Models.anthropicDefaultModel
+      9
+      raw with
+  | .ok stream =>
+      assertTrue stream.isComplete "expected completed Anthropic stream"
+      assertTrue (stream.result.responseId == some "msg_stream") "expected streamed Anthropic response id"
+      assertTrue (stream.result.responseModel == none) "expected same response model to be omitted"
+      assertTrue (stream.result.stopReason == .toolUse) "expected streamed tool-use stop"
+      assertTrue (stream.result.usage.input == 3) "expected streamed input tokens"
+      assertTrue (stream.result.usage.output == 5) "expected streamed output tokens"
+      assertTrue (stream.result.usage.cacheRead == 1) "expected streamed cache read"
+      assertTrue (stream.result.usage.cacheWrite == 2) "expected streamed cache write"
+      assertTrue (stream.result.usage.reasoning == some 1) "expected streamed thinking tokens"
+      assertTrue (stream.result.usage.totalTokens == 11) "expected streamed total tokens"
+      assertTrue
+        (stream.result.content.any fun
+          | .thinking thinking => thinking.thinking == "plan" && thinking.thinkingSignature == some "sig"
+          | _ => false)
+        "expected streamed thinking block"
+      assertTrue
+        (LeanAgent.AI.contentPlainText stream.result.content == "plan\nhello")
+        "expected streamed text content"
+      match LeanAgent.AI.contentToolCalls stream.result.content |>.toList with
+      | [call] =>
+          assertTrue (call.id == "tool_1") "expected streamed tool id"
+          assertTrue (call.name == "read") "expected streamed tool name"
+          assertTrue (LeanAgent.Json.optVal? call.arguments "path" == some (LeanAgent.Json.str "README.md"))
+            "expected streamed tool arguments"
+      | _ => fail "expected one streamed tool call"
+      assertTrue
+        (stream.events.any fun
+          | .thinkingDelta _ "plan" _ => true
+          | _ => false)
+        "expected thinking delta event"
+      assertTrue
+        (stream.events.any fun
+          | .textDelta _ "hel" _ => true
+          | _ => false)
+        "expected text delta event"
+      assertTrue
+        (stream.events.any fun
+          | .toolCallDelta _ "{\"path\":\"README.md\"}" _ => true
+          | _ => false)
+        "expected tool-call delta event"
+  | .error err => fail s!"expected Anthropic streaming parse success: {err}"
+
+def testAnthropicMessagesStreamingRequiresMessageStop : IO Unit := do
+  let raw := String.intercalate "\n\n"
+    [ "event: message_start\n" ++
+      "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_stream\",\"model\":\"claude-sonnet-4-5\",\"usage\":{\"input_tokens\":1}}}"
+    , "event: content_block_start\n" ++
+      "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}"
+    , "event: content_block_delta\n" ++
+      "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}"
+    , ""
+    ]
+  match LeanAgent.AI.Api.AnthropicMessages.parseStreamingEventStream
+      LeanAgent.AI.Api.AnthropicMessages.api
+      LeanAgent.Models.anthropicProviderId
+      LeanAgent.Models.anthropicDefaultModel
+      9
+      raw with
+  | .ok _ => fail "expected Anthropic streaming parser to reject missing message_stop"
+  | .error err =>
+      assertTrue (err.contains "message_stop") "expected missing message_stop error"
+
 def testGitHubCopilotDynamicHeaders : IO Unit := do
   let userOnly : Array LeanAgent.AI.Message :=
     #[.user { content := #[LeanAgent.AI.text "hi"], timestamp := 1 }]
@@ -4033,6 +4134,29 @@ def httpServerScript : String :=
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
     , "            return"
+    , "        if self.path == '/anthropic-stream/v1/messages':"
+    , "            request = json.loads(body)"
+    , "            text = '|'.join([request.get('model') or '', str(request.get('stream')), self.headers.get('x-api-key') or '', self.headers.get('anthropic-version') or '', self.headers.get('X-Trace') or ''])"
+    , "            payload = ("
+    , "                'event: message_start\\n' +"
+    , "                'data: ' + json.dumps({'type': 'message_start', 'message': {'id': 'msg_anthropic_http', 'model': request.get('model') or '', 'usage': {'input_tokens': 4}}}) + '\\n\\n' +"
+    , "                'event: content_block_start\\n' +"
+    , "                'data: ' + json.dumps({'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}}) + '\\n\\n' +"
+    , "                'event: content_block_delta\\n' +"
+    , "                'data: ' + json.dumps({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': text}}) + '\\n\\n' +"
+    , "                'event: content_block_stop\\n' +"
+    , "                'data: ' + json.dumps({'type': 'content_block_stop', 'index': 0}) + '\\n\\n' +"
+    , "                'event: message_delta\\n' +"
+    , "                'data: ' + json.dumps({'type': 'message_delta', 'delta': {'stop_reason': 'end_turn'}, 'usage': {'output_tokens': 2}}) + '\\n\\n' +"
+    , "                'event: message_stop\\n' +"
+    , "                'data: ' + json.dumps({'type': 'message_stop'}) + '\\n\\n'"
+    , "            ).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'text/event-stream')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/large':"
     , "            payload = b'x' * 1024"
     , "            self.send_response(200)"
@@ -4696,6 +4820,39 @@ def testAzureOpenAIResponsesStreamWithOptionsLocal : IO Unit := do
       (LeanAgent.AI.contentPlainText stream.result.content == "mini-deployment|True|azure-key||trace-azure")
       "expected Azure deployment, stream flag, api-key header, no bearer auth, and custom header"
 
+def testAnthropicMessagesStreamWithOptionsLocal : IO Unit := do
+  let port := 18096
+  withHttpServer port do
+    let stream ← LeanAgent.AI.Api.AnthropicMessages.completeStreamWithOptions
+      { apiKey := "anthropic-key"
+        baseUrl := s!"http://127.0.0.1:{port}/anthropic-stream/v1"
+        timeoutSeconds := 5
+        connectTimeoutSeconds := 5
+        noProxy := some "*"
+        userAgent := "lean-agent-test/0.1.0"
+      }
+      anthropicModelRef
+      #["text", "image"]
+      64000
+      true
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+      { headers := #[("X-Trace", some "trace-anthropic")] }
+    assertTrue stream.isComplete "expected completed Anthropic stream"
+    assertTrue (stream.result.responseId == some "msg_anthropic_http") "expected Anthropic response id"
+    assertTrue
+      (LeanAgent.AI.contentPlainText stream.result.content ==
+        "claude-sonnet-4-5|True|anthropic-key|2023-06-01|trace-anthropic")
+      "expected Anthropic model, stream flag, x-api-key, version header, and custom header"
+    assertTrue (stream.result.usage.input == 4) "expected Anthropic local input usage"
+    assertTrue (stream.result.usage.output == 2) "expected Anthropic local output usage"
+    assertTrue
+      (stream.events.any fun
+        | .textDelta _ "claude-sonnet-4-5|True|anthropic-key|2023-06-01|trace-anthropic" _ => true
+        | _ => false)
+      "expected Anthropic local text delta"
+
 def testCompatAzureOpenAIResponsesBuiltinDispatch : IO Unit := do
   let port := 18095
   withHttpServer port do
@@ -4785,6 +4942,8 @@ def main : IO UInt32 := do
     testAnthropicMessagesRequestPayload
     testAnthropicMessagesHeaders
     testAnthropicMessagesParsesResponse
+    testAnthropicMessagesParsesStreamingEvents
+    testAnthropicMessagesStreamingRequiresMessageStop
     testGitHubCopilotDynamicHeaders
     testOpenAIResponsesRequestPayload
     testOpenAIResponsesRequestUsesThinkingLevelMap
@@ -4918,6 +5077,7 @@ def main : IO UInt32 := do
     testOpenAIResponsesSendsCopilotDynamicHeaders
     testOpenAIResponsesStreamWithOptionsLocal
     testAzureOpenAIResponsesStreamWithOptionsLocal
+    testAnthropicMessagesStreamWithOptionsLocal
     testCompatAzureOpenAIResponsesBuiltinDispatch
     testOpenAICompletionsProviderErrorDiagnostics
     IO.println "lean-agent tests passed"
