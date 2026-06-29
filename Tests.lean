@@ -1256,6 +1256,70 @@ def testAIEventStreamTextResult : IO Unit := do
       assertTrue (result == message) "expected done event to contain message"
   | _, _, _, _ => fail "unexpected text event sequence"
 
+def testAIEventStreamPartialSnapshots : IO Unit := do
+  let toolArgs := LeanAgent.Json.obj [("path", LeanAgent.Json.str "README.md")]
+  let message : LeanAgent.AI.AssistantMessage :=
+    { content :=
+        #[ LeanAgent.AI.text "hello"
+         , LeanAgent.AI.ContentBlock.toolCall
+            { id := "call-1", name := "read", arguments := toolArgs }
+         ]
+      api := "faux"
+      provider := "faux"
+      model := "faux-1"
+      stopReason := .toolUse
+      timestamp := 1
+    }
+  let stream := LeanAgent.AI.fromMessage message
+  match stream.events[0]? with
+  | some (LeanAgent.AI.AssistantMessageEvent.start snapshot) =>
+      assertTrue snapshot.content.isEmpty "expected start snapshot to have empty content"
+  | _ => fail "expected start event"
+  match stream.events[1]?, stream.events[2]?, stream.events[4]?, stream.events[5]? with
+  | some (LeanAgent.AI.AssistantMessageEvent.textStart 0 snapshot),
+    some (LeanAgent.AI.AssistantMessageEvent.textDelta 0 "hello" deltaSnapshot),
+    some (LeanAgent.AI.AssistantMessageEvent.toolCallStart 1 toolStartSnapshot),
+    some (LeanAgent.AI.AssistantMessageEvent.toolCallDelta 1 rawArgs toolDeltaSnapshot) =>
+      assertTrue
+        (snapshot.content == #[LeanAgent.AI.ContentBlock.text { text := "" }])
+        "expected text_start snapshot to contain empty text block"
+      assertTrue (LeanAgent.AI.contentPlainText deltaSnapshot.content == "hello")
+        "expected text_delta snapshot to contain accumulated text"
+      match LeanAgent.AI.contentToolCalls toolStartSnapshot.content |>.toList,
+            LeanAgent.AI.contentToolCalls toolDeltaSnapshot.content |>.toList with
+      | [startCall], [deltaCall] =>
+          assertTrue (startCall.arguments == LeanAgent.Json.obj []) "expected tool start empty args"
+          assertTrue (deltaCall.arguments == LeanAgent.Json.obj []) "expected tool delta empty/partial args"
+          assertTrue (rawArgs == toolArgs.compress) "expected tool delta payload"
+      | _, _ => fail "expected partial tool calls"
+  | _, _, _, _ => fail "unexpected partial event snapshots"
+  match stream.events[6]? with
+  | some (LeanAgent.AI.AssistantMessageEvent.toolCallEnd 1 call snapshot) =>
+      assertTrue (call.arguments == toolArgs) "expected final tool args on tool end"
+      match LeanAgent.AI.contentToolCalls snapshot.content |>.toList with
+      | [snapshotCall] => assertTrue (snapshotCall.arguments == toolArgs) "expected end snapshot final args"
+      | _ => fail "expected end snapshot tool call"
+  | _ => fail "expected tool call end event"
+
+def testAIEventStreamEmptyContentCompletes : IO Unit := do
+  let message : LeanAgent.AI.AssistantMessage :=
+    { content := #[]
+      api := "faux"
+      provider := "faux"
+      model := "faux-1"
+      stopReason := .stop
+      timestamp := 1
+    }
+  let stream := LeanAgent.AI.fromMessage message
+  assertTrue stream.isComplete "expected empty-content stream to complete"
+  assertTrue (stream.events.size == 2) "expected start and done events only"
+  match stream.events[0]?, stream.events[1]? with
+  | some (LeanAgent.AI.AssistantMessageEvent.start snapshot),
+    some (LeanAgent.AI.AssistantMessageEvent.done .stop result) =>
+      assertTrue snapshot.content.isEmpty "expected empty start snapshot"
+      assertTrue (result == message) "expected empty final message"
+  | _, _ => fail "unexpected empty-content event sequence"
+
 def testAIEventStreamToolUseResult : IO Unit := do
   let response : ProviderResponse :=
     { content := ""
@@ -1730,6 +1794,8 @@ def main : IO UInt32 := do
     testAIMessageJsonRoundTrip
     testAIMessageLegacyConversion
     testAIEventStreamTextResult
+    testAIEventStreamPartialSnapshots
+    testAIEventStreamEmptyContentCompletes
     testAIEventStreamToolUseResult
     testAIEventStreamLegacyProviderWrapper
     testAgentLoopUsesAssistantEventStreamBridge

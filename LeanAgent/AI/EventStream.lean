@@ -30,50 +30,92 @@ def AssistantMessageEventStream.isComplete (stream : AssistantMessageEventStream
   | some event => event.isComplete
   | none => false
 
-def textEvents (contentIndex : Nat) (content : String) (snapshot : AssistantMessage) : List AssistantMessageEvent :=
+def snapshotWithContent (message : AssistantMessage) (content : Array ContentBlock) : AssistantMessage :=
+  { message with content := content }
+
+def emptySnapshot (message : AssistantMessage) : AssistantMessage :=
+  snapshotWithContent message #[]
+
+def emptyToolCall (call : ToolCall) : ToolCall :=
+  { call with arguments := LeanAgent.Json.obj [] }
+
+def textEvents
+    (contentIndex : Nat)
+    (content : String)
+    (baseContent : Array ContentBlock)
+    (message : AssistantMessage) : List AssistantMessageEvent × Array ContentBlock :=
+  let startContent := baseContent.push (.text { text := "" })
+  let startSnapshot := snapshotWithContent message startContent
+  let endContent := baseContent.push (.text { text := content })
+  let endSnapshot := snapshotWithContent message endContent
   let delta :=
     if content.isEmpty then
       []
     else
-      [.textDelta contentIndex content snapshot]
-  [.textStart contentIndex snapshot] ++ delta ++ [.textEnd contentIndex content snapshot]
+      [.textDelta contentIndex content endSnapshot]
+  ([.textStart contentIndex startSnapshot] ++ delta ++ [.textEnd contentIndex content endSnapshot], endContent)
 
-def thinkingEvents (contentIndex : Nat) (content : String) (snapshot : AssistantMessage) : List AssistantMessageEvent :=
+def thinkingEvents
+    (contentIndex : Nat)
+    (content : String)
+    (baseContent : Array ContentBlock)
+    (message : AssistantMessage) : List AssistantMessageEvent × Array ContentBlock :=
+  let startContent := baseContent.push (.thinking { thinking := "" })
+  let startSnapshot := snapshotWithContent message startContent
+  let endContent := baseContent.push (.thinking { thinking := content })
+  let endSnapshot := snapshotWithContent message endContent
   let delta :=
     if content.isEmpty then
       []
     else
-      [.thinkingDelta contentIndex content snapshot]
-  [.thinkingStart contentIndex snapshot] ++ delta ++ [.thinkingEnd contentIndex content snapshot]
+      [.thinkingDelta contentIndex content endSnapshot]
+  ([.thinkingStart contentIndex startSnapshot] ++ delta ++ [.thinkingEnd contentIndex content endSnapshot], endContent)
 
-def toolCallEvents (contentIndex : Nat) (call : ToolCall) (snapshot : AssistantMessage) : List AssistantMessageEvent :=
+def toolCallEvents
+    (contentIndex : Nat)
+    (call : ToolCall)
+    (baseContent : Array ContentBlock)
+    (message : AssistantMessage) : List AssistantMessageEvent × Array ContentBlock :=
   let arguments := call.arguments.compress
+  let startContent := baseContent.push (.toolCall (emptyToolCall call))
+  let startSnapshot := snapshotWithContent message startContent
+  let endContent := baseContent.push (.toolCall call)
+  let endSnapshot := snapshotWithContent message endContent
   let delta :=
     if arguments.isEmpty then
       []
     else
-      [.toolCallDelta contentIndex arguments snapshot]
-  [.toolCallStart contentIndex snapshot] ++ delta ++ [.toolCallEnd contentIndex call snapshot]
+      [.toolCallDelta contentIndex arguments startSnapshot]
+  ([.toolCallStart contentIndex startSnapshot] ++ delta ++ [.toolCallEnd contentIndex call endSnapshot], endContent)
 
-def blockEvents (contentIndex : Nat) (block : ContentBlock) (snapshot : AssistantMessage) : List AssistantMessageEvent :=
+def blockEvents
+    (contentIndex : Nat)
+    (block : ContentBlock)
+    (baseContent : Array ContentBlock)
+    (message : AssistantMessage) : List AssistantMessageEvent × Array ContentBlock :=
   match block with
-  | .text content => textEvents contentIndex content.text snapshot
-  | .thinking content => thinkingEvents contentIndex content.thinking snapshot
-  | .toolCall call => toolCallEvents contentIndex call snapshot
-  | .image _ => []
+  | .text content => textEvents contentIndex content.text baseContent message
+  | .thinking content => thinkingEvents contentIndex content.thinking baseContent message
+  | .toolCall call => toolCallEvents contentIndex call baseContent message
+  | .image imageContent => ([], baseContent.push (.image imageContent))
 
-def contentEventsList (contentIndex : Nat) (content : List ContentBlock) (snapshot : AssistantMessage) :
-    List AssistantMessageEvent :=
+def contentEventsList
+    (contentIndex : Nat)
+    (content : List ContentBlock)
+    (baseContent : Array ContentBlock)
+    (message : AssistantMessage) : List AssistantMessageEvent :=
   match content with
   | [] => []
-  | block :: rest => blockEvents contentIndex block snapshot ++ contentEventsList (contentIndex + 1) rest snapshot
+  | block :: rest =>
+      let (events, nextContent) := blockEvents contentIndex block baseContent message
+      events ++ contentEventsList (contentIndex + 1) rest nextContent message
 
 def contentEvents (message : AssistantMessage) : Array AssistantMessageEvent :=
-  (contentEventsList 0 message.content.toList message).toArray
+  (contentEventsList 0 message.content.toList #[] message).toArray
 
 def fromMessage (message : AssistantMessage) : AssistantMessageEventStream :=
   let final := completionEvent message
-  { events := #[.start message] ++ contentEvents message ++ #[final]
+  { events := #[.start (emptySnapshot message)] ++ contentEvents message ++ #[final]
     finalResult := message
   }
 
