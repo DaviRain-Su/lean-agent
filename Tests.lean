@@ -3059,16 +3059,19 @@ def testProxyEnvResolution : IO Unit := do
         none)
   let resolved ← LeanAgent.AI.Util.Proxy.resolveHttpProxyUrlForTargetWith
     ambient "https://api.example.com/v1"
-  assertTrue (resolved == some "https://proxy.local:8443") "expected HTTPS proxy with inferred protocol"
+  assertTrue (resolved == some "https://proxy.local:8443/") "expected HTTPS proxy with normalized URL"
   let scopedProxy ← LeanAgent.AI.Util.Proxy.resolveHttpProxyUrlForTargetWith
     ambient "https://api.example.com/v1" #[("https_proxy", "http://scoped.local:9000")]
-  assertTrue (scopedProxy == some "http://scoped.local:9000") "expected scoped proxy to win"
+  assertTrue (scopedProxy == some "http://scoped.local:9000/") "expected scoped proxy to win"
   let scopedEmpty ← LeanAgent.AI.Util.Proxy.resolveHttpProxyUrlForTargetWith
     ambient "https://api.example.com/v1" #[("https_proxy", "")]
-  assertTrue (scopedEmpty == some "https://proxy.local:8443") "expected empty scoped proxy to fall back"
+  assertTrue (scopedEmpty == some "https://proxy.local:8443/") "expected empty scoped proxy to fall back"
   let fallback ← LeanAgent.AI.Util.Proxy.resolveHttpProxyUrlForTargetWith
     ambient "ws://socket.example.com"
-  assertTrue (fallback == some "http://fallback.local:8080") "expected ALL_PROXY fallback"
+  assertTrue (fallback == some "http://fallback.local:8080/") "expected ALL_PROXY fallback"
+  let queryProxy ← LeanAgent.AI.Util.Proxy.resolveHttpProxyUrlForTargetWith
+    ambient "https://api.example.com/v1" #[("https_proxy", "http://scoped.local:9000?via=env")]
+  assertTrue (queryProxy == some "http://scoped.local:9000/?via=env") "expected URL-style query normalization"
 
 def testProxyNoProxyMatching : IO Unit := do
   assertTrue

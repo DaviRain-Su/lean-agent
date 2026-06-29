@@ -135,6 +135,26 @@ def shouldProxyHostnameWith
 def addProtocolIfMissing (protocol proxy : String) : String :=
   if proxy.contains "://" then proxy else protocol ++ "://" ++ proxy
 
+def insertSlashBeforeQueryOrFragmentLoop (acc chars : List Char) : String :=
+  match chars with
+  | [] => String.ofList (acc.reverse ++ ['/'])
+  | '?' :: rest => String.ofList (acc.reverse ++ ['/', '?'] ++ rest)
+  | '#' :: rest => String.ofList (acc.reverse ++ ['/', '#'] ++ rest)
+  | char :: rest => insertSlashBeforeQueryOrFragmentLoop (char :: acc) rest
+
+def insertSlashBeforeQueryOrFragment (value : String) : String :=
+  insertSlashBeforeQueryOrFragmentLoop [] value.toList
+
+def normalizeProxyUrlString (proxy : String) : String :=
+  match proxy.splitOn "://" with
+  | scheme :: restParts =>
+      let rest := String.intercalate "://" restParts
+      if rest.isEmpty || rest.contains "/" then
+        proxy
+      else
+        scheme ++ "://" ++ insertSlashBeforeQueryOrFragment rest
+  | _ => proxy
+
 def getProxyForUrlWith
     (ambient : String → IO (Option String))
     (targetUrl : String)
@@ -167,7 +187,7 @@ def resolveHttpProxyUrlForTargetWith
         if parsed.protocol != "http" && parsed.protocol != "https" then
           throw (IO.userError s!"{unsupportedProxyProtocolMessage} Got {parsed.protocol}:")
         else
-          pure (some proxy)
+          pure (some (normalizeProxyUrlString proxy))
 
 def resolveHttpProxyUrlForTarget
     (targetUrl : String)
