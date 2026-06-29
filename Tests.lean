@@ -823,6 +823,13 @@ def anthropicModelRef : LeanAgent.AI.ModelRef :=
     baseUrl := some LeanAgent.Models.anthropicBaseUrl
   }
 
+def googleModelRef : LeanAgent.AI.ModelRef :=
+  { id := LeanAgent.Models.googleDefaultModel
+    api := LeanAgent.AI.Api.GoogleGenerativeAI.api
+    provider := LeanAgent.Models.googleProviderId
+    baseUrl := some LeanAgent.Models.googleBaseUrl
+  }
+
 def jsonArrayField? (json : Lean.Json) (key : String) : Option (Array Lean.Json) :=
   match LeanAgent.Json.optVal? json key with
   | some value =>
@@ -1122,6 +1129,247 @@ def testAnthropicMessagesStreamingRequiresMessageStop : IO Unit := do
   | .ok _ => fail "expected Anthropic streaming parser to reject missing message_stop"
   | .error err =>
       assertTrue (err.contains "message_stop") "expected missing message_stop error"
+
+def testGoogleGenerativeAIRequestPayload : IO Unit := do
+  let assistant : LeanAgent.AI.AssistantMessage :=
+    { content :=
+        #[ .toolCall
+            { id := "call/read|item"
+              name := "read"
+              arguments := LeanAgent.Json.obj [("path", LeanAgent.Json.str "README.md")]
+            }
+         ]
+      api := LeanAgent.AI.Api.GoogleGenerativeAI.api
+      provider := LeanAgent.Models.googleProviderId
+      model := LeanAgent.Models.googleDefaultModel
+      stopReason := .toolUse
+      timestamp := 2
+    }
+  let context : LeanAgent.AI.Context :=
+    { systemPrompt := some "Be precise."
+      messages :=
+        #[ .user
+            { content :=
+                #[ LeanAgent.AI.text "hello"
+                 , LeanAgent.AI.image "aGVsbG8=" "image/png"
+                 ]
+              timestamp := 1
+            }
+         , .assistant assistant
+         , .toolResult
+            { toolCallId := "call/read|item"
+              toolName := "read"
+              content := #[LeanAgent.AI.text "file contents"]
+              isError := false
+              timestamp := 3
+            }
+         ]
+      tools :=
+        #[ { name := "read"
+             description := "Read a file"
+             parameters :=
+              LeanAgent.Json.obj
+                [ ("type", LeanAgent.Json.str "object")
+                , ("properties", LeanAgent.Json.obj [("path", LeanAgent.Json.obj [("type", LeanAgent.Json.str "string")])])
+                , ("required", LeanAgent.Json.arr #[LeanAgent.Json.str "path"])
+                ]
+           }
+         ]
+    }
+  let payload := LeanAgent.AI.Api.GoogleGenerativeAI.requestToJsonWithOptions
+    googleModelRef
+    #["text", "image"]
+    true
+    context
+    { maxTokens := some 123
+      temperature := some 0.2
+      thinkingEnabled := some true
+      thinkingBudgetTokens := some 2048
+      toolChoice := some .any
+    }
+  match LeanAgent.Json.optVal? payload "systemInstruction" with
+  | some system =>
+      match jsonArrayField? system "parts" with
+      | some parts =>
+          match parts[0]? with
+          | some part => assertTrue (jsonStringField? part "text" == some "Be precise.") "expected Google system text"
+          | none => fail "expected Google system part"
+      | none => fail "expected Google system parts"
+  | none => fail "expected Google systemInstruction"
+  match LeanAgent.Json.optVal? payload "generationConfig" with
+  | some config =>
+      assertTrue (LeanAgent.Json.optVal? config "maxOutputTokens" == some (LeanAgent.Json.nat 123))
+        "expected Google max output tokens"
+      match LeanAgent.Json.optVal? config "thinkingConfig" with
+      | some thinking =>
+          assertTrue (LeanAgent.Json.optVal? thinking "includeThoughts" == some (Lean.Json.bool true))
+            "expected Google includeThoughts"
+          assertTrue (LeanAgent.Json.optVal? thinking "thinkingBudget" == some (LeanAgent.Json.nat 2048))
+            "expected Google thinking budget"
+      | none => fail "expected Google thinkingConfig"
+  | none => fail "expected Google generationConfig"
+  match jsonArrayField? payload "contents" with
+  | some contents =>
+      assertTrue (contents.size == 3) "expected Google user, model, function response contents"
+      match contents[0]? with
+      | some userMessage =>
+          assertTrue (jsonStringField? userMessage "role" == some "user") "expected Google user role"
+          match jsonArrayField? userMessage "parts" with
+          | some parts =>
+              match parts[0]?, parts[1]? with
+              | some textPart, some imagePart =>
+                  assertTrue (jsonStringField? textPart "text" == some "hello") "expected Google user text"
+                  assertTrue (LeanAgent.Json.optVal? imagePart "inlineData" |>.isSome) "expected Google inline data"
+              | _, _ => fail "expected Google text and image parts"
+          | none => fail "expected Google user parts"
+      | none => fail "expected Google user content"
+      match contents[1]? with
+      | some modelMessage =>
+          assertTrue (jsonStringField? modelMessage "role" == some "model") "expected Google model role"
+          match jsonArrayField? modelMessage "parts" with
+          | some parts =>
+              match parts[0]? with
+              | some part =>
+                  match LeanAgent.Json.optVal? part "functionCall" with
+                  | some functionCall =>
+                      assertTrue (jsonStringField? functionCall "name" == some "read")
+                        "expected Google functionCall name"
+                      assertTrue (jsonStringField? functionCall "id" == none)
+                        "expected Gemini functionCall id to be omitted"
+                  | none => fail "expected Google functionCall"
+              | none => fail "expected Google model part"
+          | none => fail "expected Google model parts"
+      | none => fail "expected Google model content"
+      match contents[2]? with
+      | some toolMessage =>
+          match jsonArrayField? toolMessage "parts" with
+          | some parts =>
+              match parts[0]? with
+              | some part =>
+                  match LeanAgent.Json.optVal? part "functionResponse" with
+                  | some response =>
+                      assertTrue (jsonStringField? response "name" == some "read")
+                        "expected Google functionResponse name"
+                      assertTrue (jsonStringField? response "id" == none)
+                        "expected Gemini functionResponse id to be omitted"
+                  | none => fail "expected Google functionResponse"
+              | none => fail "expected Google tool part"
+          | none => fail "expected Google tool parts"
+      | none => fail "expected Google tool content"
+  | none => fail "expected Google contents"
+  match jsonArrayField? payload "tools" with
+  | some tools =>
+      match tools[0]? with
+      | some group =>
+          match jsonArrayField? group "functionDeclarations" with
+          | some declarations =>
+              match declarations[0]? with
+              | some tool => assertTrue (jsonStringField? tool "name" == some "read") "expected Google tool name"
+              | none => fail "expected Google function declaration"
+          | none => fail "expected Google function declarations"
+      | none => fail "expected Google tool group"
+  | none => fail "expected Google tools"
+  match LeanAgent.Json.optVal? payload "toolConfig" with
+  | some toolConfig =>
+      match LeanAgent.Json.optVal? toolConfig "functionCallingConfig" with
+      | some functionCallingConfig =>
+          assertTrue (jsonStringField? functionCallingConfig "mode" == some "ANY")
+            "expected Google tool choice mode"
+      | none => fail "expected Google functionCallingConfig"
+  | none => fail "expected Google toolConfig"
+
+def testGoogleGenerativeAIParsesResponse : IO Unit := do
+  let raw :=
+    "{ \"responseId\":\"resp_google\", \"modelVersion\":\"gemini-2.5-flash\", \"candidates\":[{" ++
+    "\"content\":{\"parts\":[" ++
+    "{\"thought\":true,\"text\":\"think\",\"thoughtSignature\":\"c2ln\"}," ++
+    "{\"text\":\"hello\"}," ++
+    "{\"functionCall\":{\"name\":\"read\",\"args\":{\"path\":\"README.md\"}}}" ++
+    "]},\"finishReason\":\"STOP\"}]," ++
+    "\"usageMetadata\":{\"promptTokenCount\":10,\"cachedContentTokenCount\":2,\"candidatesTokenCount\":5,\"thoughtsTokenCount\":3,\"totalTokenCount\":18}}"
+  match LeanAgent.AI.Api.GoogleGenerativeAI.parseResponse
+      LeanAgent.AI.Api.GoogleGenerativeAI.api
+      LeanAgent.Models.googleProviderId
+      LeanAgent.Models.googleDefaultModel
+      7
+      raw with
+  | .ok response =>
+      assertTrue (response.responseId == some "resp_google") "expected Google response id"
+      assertTrue (response.responseModel == none) "expected same Google modelVersion to be omitted"
+      assertTrue (response.stopReason == .toolUse) "expected Google tool-use stop"
+      assertTrue (response.usage.input == 8) "expected Google cached input subtraction"
+      assertTrue (response.usage.output == 8) "expected Google output plus thinking tokens"
+      assertTrue (response.usage.cacheRead == 2) "expected Google cache read"
+      assertTrue (response.usage.reasoning == some 3) "expected Google thinking tokens"
+      assertTrue (response.usage.totalTokens == 18) "expected Google total tokens"
+      assertTrue
+        (response.content.any fun
+          | .thinking thinking => thinking.thinking == "think" && thinking.thinkingSignature == some "c2ln"
+          | _ => false)
+        "expected Google thinking block"
+      assertTrue
+        (response.content.any fun
+          | .text text => text.text == "hello"
+          | _ => false)
+        "expected Google text block"
+      match LeanAgent.AI.contentToolCalls response.content |>.toList with
+      | [call] =>
+          assertTrue (call.id == "read_2") "expected generated Google tool id"
+          assertTrue (call.name == "read") "expected Google tool name"
+          assertTrue (LeanAgent.Json.optVal? call.arguments "path" == some (LeanAgent.Json.str "README.md"))
+            "expected Google tool args"
+      | _ => fail "expected one Google tool call"
+  | .error err => fail s!"expected Google parse success: {err}"
+
+def testGoogleGenerativeAIParsesStreamingEvents : IO Unit := do
+  let raw := String.intercalate "\n\n"
+    [ "data: {\"responseId\":\"resp_stream\",\"modelVersion\":\"gemini-2.5-flash\",\"candidates\":[{\"content\":{\"parts\":[{\"thought\":true,\"text\":\"plan\",\"thoughtSignature\":\"c2ln\"}]}}],\"usageMetadata\":{\"promptTokenCount\":4,\"cachedContentTokenCount\":1}}"
+    , "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hel\"}]}}]}"
+    , "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"lo\"}]}}]}"
+    , "data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"read\",\"args\":{\"path\":\"README.md\"}}}],\"role\":\"model\"},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":4,\"cachedContentTokenCount\":1,\"candidatesTokenCount\":2,\"thoughtsTokenCount\":1,\"totalTokenCount\":7}}"
+    , ""
+    ]
+  match LeanAgent.AI.Api.GoogleGenerativeAI.parseStreamingEventStream
+      LeanAgent.AI.Api.GoogleGenerativeAI.api
+      LeanAgent.Models.googleProviderId
+      LeanAgent.Models.googleDefaultModel
+      9
+      raw with
+  | .ok stream =>
+      assertTrue stream.isComplete "expected completed Google stream"
+      assertTrue (stream.result.responseId == some "resp_stream") "expected streamed Google response id"
+      assertTrue (stream.result.responseModel == none) "expected same streamed model to be omitted"
+      assertTrue (stream.result.stopReason == .toolUse) "expected streamed Google tool-use stop"
+      assertTrue (stream.result.usage.input == 3) "expected streamed Google input"
+      assertTrue (stream.result.usage.output == 3) "expected streamed Google output plus thinking"
+      assertTrue (stream.result.usage.cacheRead == 1) "expected streamed Google cache read"
+      assertTrue (stream.result.usage.reasoning == some 1) "expected streamed Google thinking tokens"
+      assertTrue
+        (LeanAgent.AI.contentPlainText stream.result.content == "plan\nhello")
+        "expected streamed Google text content"
+      match LeanAgent.AI.contentToolCalls stream.result.content |>.toList with
+      | [call] =>
+          assertTrue (call.id == "read_1") "expected streamed generated Google tool id"
+          assertTrue (call.name == "read") "expected streamed Google tool name"
+          assertTrue (LeanAgent.Json.optVal? call.arguments "path" == some (LeanAgent.Json.str "README.md"))
+            "expected streamed Google tool arguments"
+      | _ => fail "expected one streamed Google tool call"
+      assertTrue
+        (stream.events.any fun
+          | .thinkingDelta _ "plan" _ => true
+          | _ => false)
+        "expected Google thinking delta"
+      assertTrue
+        (stream.events.any fun
+          | .textDelta _ "hel" _ => true
+          | _ => false)
+        "expected Google text delta"
+      assertTrue
+        (stream.events.any fun
+          | .toolCallEnd _ call _ => call.name == "read"
+          | _ => false)
+        "expected Google tool-call end"
+  | .error err => fail s!"expected Google streaming parse success: {err}"
 
 def testGitHubCopilotDynamicHeaders : IO Unit := do
   let userOnly : Array LeanAgent.AI.Message :=
@@ -2013,6 +2261,7 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
      , LeanAgent.Models.togetherProviderId
      , LeanAgent.Models.fireworksProviderId
      , LeanAgent.Models.anthropicProviderId
+     , LeanAgent.Models.googleProviderId
      ]
   for providerId in expectedProviders do
     match LeanAgent.Models.ProviderCatalog.provider? catalog providerId with
@@ -2027,15 +2276,21 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
   assertTrue (rendered.contains "openrouter/openai/gpt-oss-120b") "expected OpenRouter model"
   assertTrue (rendered.contains "fireworks/accounts/fireworks/models/glm-5p2") "expected Fireworks OpenAI-compatible model"
   assertTrue (rendered.contains "anthropic/claude-sonnet-4-5") "expected Anthropic model"
+  assertTrue (rendered.contains "google/gemini-2.5-flash") "expected Google Gemini model"
   match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.anthropicOAuthTokenEnv with
   | some provider =>
       assertTrue (provider.id == LeanAgent.Models.anthropicProviderId) "expected Anthropic OAuth token env"
   | none => fail "expected Anthropic OAuth token env"
+  match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.googleApiKeyEnv with
+  | some provider =>
+      assertTrue (provider.id == LeanAgent.Models.googleProviderId) "expected Google provider by env"
+      assertTrue (provider.defaultModel == LeanAgent.Models.googleDefaultModel) "expected Google default model"
+  | none => fail "expected Google provider by env"
 
 def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
   let collection ← LeanAgent.Models.createDefaultModels
   let providers ← collection.getProviders
-  assertTrue (providers.size == 9) "expected default provider family"
+  assertTrue (providers.size == 10) "expected default provider family"
   match ← collection.getModel? LeanAgent.Models.openRouterProviderId LeanAgent.Models.openRouterDefaultModel with
   | some model =>
       assertTrue (model.api == "openai-completions") "expected OpenRouter OpenAI-compatible API"
@@ -2050,6 +2305,12 @@ def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
       assertTrue (model.api == LeanAgent.AI.Api.AnthropicMessages.api) "expected Anthropic Messages API"
       assertTrue model.reasoning "expected Anthropic reasoning metadata"
   | none => fail "expected Anthropic model in default runtime collection"
+  match ← collection.getModel? LeanAgent.Models.googleProviderId LeanAgent.Models.googleDefaultModel with
+  | some model =>
+      assertTrue (model.api == LeanAgent.AI.Api.GoogleGenerativeAI.api) "expected Google Generative AI API"
+      assertTrue model.reasoning "expected Google reasoning metadata"
+      assertTrue (model.input.contains "image") "expected Google image input metadata"
+  | none => fail "expected Google model in default runtime collection"
 
 def assertProviderFactoryMatchesInfo (mkProvider : IO LeanAgent.Models.Provider)
     (info : LeanAgent.Models.ProviderInfo) : IO Unit := do
@@ -2083,6 +2344,7 @@ def testOpenAICompatibleProviderFactoriesMatchCatalog : IO Unit := do
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Together.provider LeanAgent.Models.togetherProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Fireworks.provider LeanAgent.Models.fireworksProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Anthropic.provider LeanAgent.Models.anthropicProviderInfo
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Google.provider LeanAgent.Models.googleProviderInfo
 
 def testLegacySelectionRejectsAnthropicProvider : IO Unit := do
   match ← LeanAgent.Models.resolveSelection { apiKeyEnv := some LeanAgent.Models.anthropicApiKeyEnv } with
@@ -2090,6 +2352,11 @@ def testLegacySelectionRejectsAnthropicProvider : IO Unit := do
   | .error err =>
       assertTrue (err.contains "legacy CLI path currently supports only openai-completions")
         "expected unsupported provider API error"
+  match ← LeanAgent.Models.resolveSelection { apiKeyEnv := some LeanAgent.Models.googleApiKeyEnv } with
+  | .ok _ => fail "expected legacy CLI selection to reject Google"
+  | .error err =>
+      assertTrue (err.contains "legacy CLI path currently supports only openai-completions")
+        "expected unsupported Google provider API error"
 
 def fakeAuthContext : LeanAgent.AI.Auth.AuthContext :=
   { env := fun name =>
@@ -2877,6 +3144,8 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
     "expected all providers to include DeepSeek catalog provider"
   assertTrue (providerIds.contains LeanAgent.Models.anthropicProviderId)
     "expected all providers to include Anthropic catalog provider"
+  assertTrue (providerIds.contains LeanAgent.Models.googleProviderId)
+    "expected all providers to include Google catalog provider"
   assertTrue (providerIds.contains LeanAgent.AI.Providers.CloudflareWorkersAI.providerId)
     "expected all providers to include Cloudflare Workers AI"
   assertTrue (providerIds.contains LeanAgent.AI.Providers.CloudflareAIGateway.providerId)
@@ -2894,6 +3163,12 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
       assertTrue (model.api == LeanAgent.AI.Api.AnthropicMessages.api) "expected Anthropic builtin model"
   | none => fail "expected Anthropic builtin model lookup"
   match LeanAgent.AI.Providers.All.getBuiltinModel?
+    LeanAgent.Models.googleProviderId
+    LeanAgent.Models.googleDefaultModel with
+  | some model =>
+      assertTrue (model.api == LeanAgent.AI.Api.GoogleGenerativeAI.api) "expected Google builtin model"
+  | none => fail "expected Google builtin model lookup"
+  match LeanAgent.AI.Providers.All.getBuiltinModel?
     LeanAgent.AI.Providers.CloudflareAIGateway.providerId
     "gpt-4o-mini" with
   | some model =>
@@ -2901,7 +3176,7 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
   | none => fail "expected Cloudflare AI Gateway builtin model lookup"
   let collection ← LeanAgent.AI.Providers.All.builtinModels none fakeCloudflareAuthContext
   let providers ← collection.getProviders
-  assertTrue (providers.size == 11) "expected implemented builtin text providers"
+  assertTrue (providers.size == 12) "expected implemented builtin text providers"
   match ← collection.getProvider? LeanAgent.AI.Providers.CloudflareWorkersAI.providerId with
   | some _ => pure ()
   | none => fail "expected Workers AI provider in builtin collection"
@@ -2926,6 +3201,9 @@ def testEnvApiKeysProviderMap : IO Unit := do
   assertTrue
     (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "zai-coding-cn" == some #["ZAI_CODING_CN_API_KEY"])
     "expected ZAI Coding CN env var"
+  assertTrue
+    (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "google" == some #[LeanAgent.Models.googleApiKeyEnv])
+    "expected Google Gemini env var"
   assertTrue
     (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "unknown-provider" == none)
     "expected unknown provider to have no env vars"
@@ -4134,6 +4412,22 @@ def httpServerScript : String :=
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
     , "            return"
+    , "        if self.path == '/google-stream/models/gemini-2.5-flash:streamGenerateContent?alt=sse':"
+    , "            request = json.loads(body)"
+    , "            contents = request.get('contents') or []"
+    , "            first_parts = contents[0].get('parts') if contents else []"
+    , "            first_text = first_parts[0].get('text') if first_parts else ''"
+    , "            text = '|'.join([first_text or '', str('generationConfig' in request), self.headers.get('x-goog-api-key') or '', self.headers.get('X-Trace') or ''])"
+    , "            payload = ("
+    , "                'data: ' + json.dumps({'responseId': 'resp_google_http', 'modelVersion': 'gemini-2.5-flash', 'candidates': [{'content': {'parts': [{'text': text[:10]}]}}], 'usageMetadata': {'promptTokenCount': 4, 'cachedContentTokenCount': 1}}) + '\\n\\n' +"
+    , "                'data: ' + json.dumps({'candidates': [{'content': {'parts': [{'text': text[10:]}]}, 'finishReason': 'STOP'}], 'usageMetadata': {'promptTokenCount': 4, 'cachedContentTokenCount': 1, 'candidatesTokenCount': 2, 'thoughtsTokenCount': 0, 'totalTokenCount': 6}}) + '\\n\\n'"
+    , "            ).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'text/event-stream')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/anthropic-stream/v1/messages':"
     , "            request = json.loads(body)"
     , "            text = '|'.join([request.get('model') or '', str(request.get('stream')), self.headers.get('x-api-key') or '', self.headers.get('anthropic-version') or '', self.headers.get('X-Trace') or ''])"
@@ -4853,6 +5147,40 @@ def testAnthropicMessagesStreamWithOptionsLocal : IO Unit := do
         | _ => false)
       "expected Anthropic local text delta"
 
+def testGoogleGenerativeAIStreamWithOptionsLocal : IO Unit := do
+  let port := 18098
+  withHttpServer port do
+    let stream ← LeanAgent.AI.Api.GoogleGenerativeAI.completeStreamWithOptions
+      { apiKey := "google-key"
+        baseUrl := s!"http://127.0.0.1:{port}/google-stream"
+        timeoutSeconds := 5
+        connectTimeoutSeconds := 5
+        noProxy := some "*"
+        userAgent := "lean-agent-test/0.1.0"
+      }
+      googleModelRef
+      #["text", "image"]
+      true
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+      { maxTokens := some 64
+        headers := #[("X-Trace", some "trace-google")]
+      }
+    assertTrue stream.isComplete "expected completed Google stream"
+    assertTrue (stream.result.responseId == some "resp_google_http") "expected Google response id"
+    assertTrue
+      (LeanAgent.AI.contentPlainText stream.result.content == "hello|True|google-key|trace-google")
+      "expected Google user text, generation config flag, api key, and custom header"
+    assertTrue (stream.result.usage.input == 3) "expected Google local input usage"
+    assertTrue (stream.result.usage.output == 2) "expected Google local output usage"
+    assertTrue (stream.result.usage.cacheRead == 1) "expected Google local cache read"
+    assertTrue
+      (stream.events.any fun
+        | .textDelta _ "hello|True" _ => true
+        | _ => false)
+      "expected Google local text delta"
+
 def testCompatAzureOpenAIResponsesBuiltinDispatch : IO Unit := do
   let port := 18095
   withHttpServer port do
@@ -4944,6 +5272,9 @@ def main : IO UInt32 := do
     testAnthropicMessagesParsesResponse
     testAnthropicMessagesParsesStreamingEvents
     testAnthropicMessagesStreamingRequiresMessageStop
+    testGoogleGenerativeAIRequestPayload
+    testGoogleGenerativeAIParsesResponse
+    testGoogleGenerativeAIParsesStreamingEvents
     testGitHubCopilotDynamicHeaders
     testOpenAIResponsesRequestPayload
     testOpenAIResponsesRequestUsesThinkingLevelMap
@@ -5078,6 +5409,7 @@ def main : IO UInt32 := do
     testOpenAIResponsesStreamWithOptionsLocal
     testAzureOpenAIResponsesStreamWithOptionsLocal
     testAnthropicMessagesStreamWithOptionsLocal
+    testGoogleGenerativeAIStreamWithOptionsLocal
     testCompatAzureOpenAIResponsesBuiltinDispatch
     testOpenAICompletionsProviderErrorDiagnostics
     IO.println "lean-agent tests passed"

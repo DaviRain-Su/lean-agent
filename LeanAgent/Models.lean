@@ -2,6 +2,7 @@ import LeanAgent.Core
 import LeanAgent.AI.Auth
 import LeanAgent.AI.Api.AnthropicMessages
 import LeanAgent.AI.Api.AzureOpenAIResponses
+import LeanAgent.AI.Api.GoogleGenerativeAI
 import LeanAgent.AI.Api.Lazy
 import LeanAgent.AI.Api.OpenAICompletions
 import LeanAgent.AI.Api.OpenAIResponses
@@ -58,6 +59,11 @@ def anthropicApiKeyEnv : String := "ANTHROPIC_API_KEY"
 def anthropicOAuthTokenEnv : String := "ANTHROPIC_OAUTH_TOKEN"
 def anthropicDefaultModel : String := "claude-sonnet-4-5"
 def anthropicBaseUrl : String := "https://api.anthropic.com"
+
+def googleProviderId : String := "google"
+def googleApiKeyEnv : String := "GEMINI_API_KEY"
+def googleDefaultModel : String := "gemini-2.5-flash"
+def googleBaseUrl : String := "https://generativelanguage.googleapis.com/v1beta"
 
 structure ModelCompat where
   supportsStore : Bool := true
@@ -305,6 +311,111 @@ def anthropicSonnet37 : ModelInfo :=
     input := #["text", "image"]
   }
 
+def googleModel
+    (id name : String)
+    (inputCost outputCost cacheReadCost cacheWriteCost : Float)
+    (contextWindow maxTokens : Nat)
+    (reasoning : Bool := true)
+    (thinkingLevelMap : Array LeanAgent.AI.ThinkingLevelMapEntry := #[]) : ModelInfo :=
+  { id := id
+    name := name
+    provider := googleProviderId
+    api := LeanAgent.AI.Api.GoogleGenerativeAI.api
+    baseUrl := googleBaseUrl
+    reasoning := reasoning
+    thinkingLevelMap := thinkingLevelMap
+    input := #["text", "image"]
+    cost := cost inputCost outputCost cacheReadCost cacheWriteCost
+    contextWindow := contextWindow
+    maxTokens := maxTokens
+  }
+
+def googleThinkingOffOnlyMap : Array LeanAgent.AI.ThinkingLevelMapEntry :=
+  #[{ level := .off, mapped := none }]
+
+def googleProThinkingLevelMap : Array LeanAgent.AI.ThinkingLevelMapEntry :=
+  #[ { level := .off, mapped := none }
+   , { level := .level .minimal, mapped := none }
+   , { level := .level .low, mapped := some "LOW" }
+   , { level := .level .medium, mapped := none }
+   , { level := .level .high, mapped := some "HIGH" }
+   ]
+
+def googleGemma4ThinkingLevelMap : Array LeanAgent.AI.ThinkingLevelMapEntry :=
+  #[ { level := .off, mapped := none }
+   , { level := .level .minimal, mapped := some "MINIMAL" }
+   , { level := .level .low, mapped := none }
+   , { level := .level .medium, mapped := none }
+   , { level := .level .high, mapped := some "HIGH" }
+   ]
+
+def googleGemini20Flash : ModelInfo :=
+  googleModel "gemini-2.0-flash" "Gemini 2.0 Flash" 0.1 0.4 0.025 0.0 1048576 8192 false
+
+def googleGemini20FlashLite : ModelInfo :=
+  googleModel "gemini-2.0-flash-lite" "Gemini 2.0 Flash-Lite" 0.075 0.3 0.0 0.0 1048576 8192 false
+
+def googleGemini25Flash : ModelInfo :=
+  googleModel "gemini-2.5-flash" "Gemini 2.5 Flash" 0.3 2.5 0.03 0.0 1048576 65536
+
+def googleGemini25FlashLite : ModelInfo :=
+  googleModel "gemini-2.5-flash-lite" "Gemini 2.5 Flash-Lite" 0.1 0.4 0.01 0.0 1048576 65536
+
+def googleGemini25Pro : ModelInfo :=
+  googleModel "gemini-2.5-pro" "Gemini 2.5 Pro" 1.25 10.0 0.125 0.0 1048576 65536
+
+def googleGemini3FlashPreview : ModelInfo :=
+  googleModel "gemini-3-flash-preview" "Gemini 3 Flash Preview" 0.5 3.0 0.05 0.0 1048576 65536 true googleThinkingOffOnlyMap
+
+def googleGemini3ProPreview : ModelInfo :=
+  googleModel "gemini-3-pro-preview" "Gemini 3 Pro Preview" 2.0 12.0 0.2 0.0 1048576 65536 true googleProThinkingLevelMap
+
+def googleGemini31FlashLite : ModelInfo :=
+  googleModel "gemini-3.1-flash-lite" "Gemini 3.1 Flash Lite" 0.25 1.5 0.025 0.0 1048576 65536 true googleThinkingOffOnlyMap
+
+def googleGemini31FlashLitePreview : ModelInfo :=
+  googleModel "gemini-3.1-flash-lite-preview" "Gemini 3.1 Flash Lite Preview" 0.25 1.5 0.025 0.0 1048576 65536 true googleThinkingOffOnlyMap
+
+def googleGemini31ProPreview : ModelInfo :=
+  googleModel "gemini-3.1-pro-preview" "Gemini 3.1 Pro Preview" 2.0 12.0 0.2 0.0 1048576 65536 true googleProThinkingLevelMap
+
+def googleGemini31ProPreviewCustomTools : ModelInfo :=
+  googleModel "gemini-3.1-pro-preview-customtools" "Gemini 3.1 Pro Preview Custom Tools" 2.0 12.0 0.2 0.0 1048576 65536 true googleProThinkingLevelMap
+
+def googleGemini35Flash : ModelInfo :=
+  googleModel "gemini-3.5-flash" "Gemini 3.5 Flash" 1.5 9.0 0.15 0.0 1048576 65536 true googleThinkingOffOnlyMap
+
+def googleGeminiFlashLatest : ModelInfo :=
+  googleModel "gemini-flash-latest" "Gemini Flash Latest" 1.5 9.0 0.15 0.0 1048576 65536 true googleThinkingOffOnlyMap
+
+def googleGeminiFlashLiteLatest : ModelInfo :=
+  googleModel "gemini-flash-lite-latest" "Gemini Flash-Lite Latest" 0.25 1.5 0.025 0.0 1048576 65536 true googleThinkingOffOnlyMap
+
+def googleGemma426BA4BIt : ModelInfo :=
+  googleModel "gemma-4-26b-a4b-it" "Gemma 4 26B A4B IT" 0.0 0.0 0.0 0.0 262144 32768 true googleGemma4ThinkingLevelMap
+
+def googleGemma431BIt : ModelInfo :=
+  googleModel "gemma-4-31b-it" "Gemma 4 31B IT" 0.0 0.0 0.0 0.0 262144 32768 true googleGemma4ThinkingLevelMap
+
+def googleModels : Array ModelInfo :=
+  #[ googleGemini20Flash
+   , googleGemini20FlashLite
+   , googleGemini25Flash
+   , googleGemini25FlashLite
+   , googleGemini25Pro
+   , googleGemini3FlashPreview
+   , googleGemini3ProPreview
+   , googleGemini31FlashLite
+   , googleGemini31FlashLitePreview
+   , googleGemini31ProPreview
+   , googleGemini31ProPreviewCustomTools
+   , googleGemini35Flash
+   , googleGeminiFlashLatest
+   , googleGeminiFlashLiteLatest
+   , googleGemma426BA4BIt
+   , googleGemma431BIt
+   ]
+
 structure ProviderInfo where
   id : String
   name : String
@@ -409,6 +520,15 @@ def anthropicProviderInfo : ProviderInfo :=
     models := #[anthropicSonnet45, anthropicHaiku45, anthropicOpus45, anthropicSonnet37]
   }
 
+def googleProviderInfo : ProviderInfo :=
+  { id := googleProviderId
+    name := "Google"
+    baseUrl := googleBaseUrl
+    apiKeyEnv := googleApiKeyEnv
+    defaultModel := googleDefaultModel
+    models := googleModels
+  }
+
 structure ProviderCatalog where
   providers : Array ProviderInfo := #[]
 deriving Repr, BEq
@@ -424,6 +544,7 @@ def defaultCatalog : ProviderCatalog :=
        , togetherProviderInfo
        , fireworksProviderInfo
        , anthropicProviderInfo
+       , googleProviderInfo
        ]
   }
 
@@ -770,7 +891,8 @@ def hasHeaderAuth (headers : Array (String × Option String)) : Bool :=
       | some value => !value.trimAscii.isEmpty
       | none => false
     valueSet &&
-      (name == "authorization" || name == "x-api-key" || name == "cf-aig-authorization")
+      (name == "authorization" || name == "x-api-key" || name == "x-goog-api-key" ||
+        name == "cf-aig-authorization")
 
 def requireApiKeyOrHeaderAuth
     (providerId : String)
@@ -872,6 +994,135 @@ def anthropicMessagesStreams : ProviderStreams :=
       pure (applyUsageCostToStream model stream)
   }
 
+def modelIdLower (model : ModelInfo) : String :=
+  model.id.toLower
+
+def isGemini3ProModel (model : ModelInfo) : Bool :=
+  let id := modelIdLower model
+  id.startsWith "gemini-3-pro" || id.startsWith "gemini-3.1-pro"
+
+def isGemini3FlashModel (model : ModelInfo) : Bool :=
+  let id := modelIdLower model
+  id.startsWith "gemini-3-flash" ||
+    id.startsWith "gemini-3.1-flash" ||
+    id == "gemini-flash-latest" ||
+    id == "gemini-flash-lite-latest"
+
+def isGemma4Model (model : ModelInfo) : Bool :=
+  (modelIdLower model).contains "gemma-4"
+
+def googleDisabledThinkingLevel? (model : ModelInfo) : Option String :=
+  if isGemini3ProModel model then
+    some "LOW"
+  else if isGemini3FlashModel model || isGemma4Model model then
+    some "MINIMAL"
+  else
+    none
+
+def googleThinkingLevel (model : ModelInfo) (effort : LeanAgent.AI.ThinkingLevel) : String :=
+  if isGemini3ProModel model then
+    match effort with
+    | .minimal => "LOW"
+    | .low => "LOW"
+    | .medium => "HIGH"
+    | .high => "HIGH"
+    | .xhigh => "HIGH"
+  else if isGemma4Model model then
+    match effort with
+    | .minimal => "MINIMAL"
+    | .low => "MINIMAL"
+    | .medium => "HIGH"
+    | .high => "HIGH"
+    | .xhigh => "HIGH"
+  else
+    match effort with
+    | .minimal => "MINIMAL"
+    | .low => "LOW"
+    | .medium => "MEDIUM"
+    | .high => "HIGH"
+    | .xhigh => "HIGH"
+
+def budgetForLevel (budgets : LeanAgent.AI.ThinkingBudgets) :
+    LeanAgent.AI.ThinkingLevel → Option Nat
+  | .minimal => budgets.minimal
+  | .low => budgets.low
+  | .medium => budgets.medium
+  | .high => budgets.high
+  | .xhigh => budgets.high
+
+def googleThinkingBudget
+    (model : ModelInfo)
+    (effort : LeanAgent.AI.ThinkingLevel)
+    (customBudgets : Option LeanAgent.AI.ThinkingBudgets) : Int :=
+  match customBudgets.bind (fun budgets => budgetForLevel budgets effort) with
+  | some budget => Int.ofNat budget
+  | none =>
+      if model.id.contains "2.5-pro" then
+        match effort with
+        | .minimal => 128
+        | .low => 2048
+        | .medium => 8192
+        | .high => 32768
+        | .xhigh => 32768
+      else if model.id.contains "2.5-flash-lite" then
+        match effort with
+        | .minimal => 512
+        | .low => 2048
+        | .medium => 8192
+        | .high => 24576
+        | .xhigh => 24576
+      else if model.id.contains "2.5-flash" then
+        match effort with
+        | .minimal => 128
+        | .low => 2048
+        | .medium => 8192
+        | .high => 24576
+        | .xhigh => 24576
+      else
+        -1
+
+def googleGenerativeAIOptionsFromSimple
+    (model : ModelInfo)
+    (options : LeanAgent.AI.SimpleStreamOptions) :
+    LeanAgent.AI.Api.GoogleGenerativeAI.GoogleGenerativeAIOptions :=
+  let base := LeanAgent.AI.Api.GoogleGenerativeAI.optionsFromSimple options
+  match options.reasoning with
+  | none =>
+      { base with
+        thinkingEnabled := some false
+        thinkingLevel := googleDisabledThinkingLevel? model
+      }
+  | some effort =>
+      if isGemini3ProModel model || isGemini3FlashModel model || isGemma4Model model then
+        { base with
+          thinkingEnabled := some true
+          thinkingLevel := some (googleThinkingLevel model effort)
+        }
+      else
+        let budget := googleThinkingBudget model effort options.thinkingBudgets
+        { base with
+          thinkingEnabled := some true
+          thinkingBudgetTokens := if budget < 0 then none else some budget.toNat
+        }
+
+def googleGenerativeAIStreams : ProviderStreams :=
+  { streamSimple := fun model context options => do
+      let options := clampSimpleOptionsToContext model context options
+      let apiKey ← requireApiKeyOrHeaderAuth model.provider options
+      let config : LeanAgent.AI.Api.GoogleGenerativeAI.GoogleGenerativeAIConfig :=
+        { apiKey := apiKey
+          baseUrl := model.baseUrl
+        }
+      let stream ← LeanAgent.AI.Api.GoogleGenerativeAI.completeStreamWithOptions
+        config
+        model.toModelRef
+        model.input
+        model.reasoning
+        context
+        (googleGenerativeAIOptionsFromSimple model options)
+      pure (applyUsageCostToStream model stream)
+  }
+
 def authForProviderInfo (info : ProviderInfo) : LeanAgent.AI.Auth.ProviderAuth :=
   { apiKey := some (LeanAgent.AI.Auth.envApiKeyAuth (info.name ++ " API key") info.authEnvs) }
 
@@ -886,6 +1137,7 @@ def createCatalogProvider (info : ProviderInfo) : IO Provider :=
         #[ { api := "openai-completions", streams := openAICompatibleStreams }
          , { api := "openai-responses", streams := openAIResponsesStreams }
          , { api := LeanAgent.AI.Api.AnthropicMessages.api, streams := anthropicMessagesStreams }
+         , { api := LeanAgent.AI.Api.GoogleGenerativeAI.api, streams := googleGenerativeAIStreams }
          ]
     }
 

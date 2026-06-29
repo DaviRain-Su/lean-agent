@@ -1,5 +1,7 @@
 import LeanAgent.AI.Auth
 import LeanAgent.AI.Api.GitHubCopilotHeaders
+import LeanAgent.AI.Api.GoogleGenerativeAI
+import LeanAgent.AI.Api.GoogleShared
 import LeanAgent.AI.Api.Lazy
 import LeanAgent.AI.Api.Cloudflare
 import LeanAgent.AI.Api.OpenAICompletions
@@ -30,6 +32,7 @@ import LeanAgent.AI.Providers.CloudflareWorkersAI
 import LeanAgent.AI.Providers.DeepSeek
 import LeanAgent.AI.Providers.Faux
 import LeanAgent.AI.Providers.Fireworks
+import LeanAgent.AI.Providers.Google
 import LeanAgent.AI.Providers.Groq
 import LeanAgent.AI.Providers.OpenAI
 import LeanAgent.AI.Providers.OpenRouterImages
