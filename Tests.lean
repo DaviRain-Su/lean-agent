@@ -6226,6 +6226,23 @@ def httpServerScript : String :=
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
     , "            return"
+    , "        if self.path == '/vertex-typed/v1/projects/project-typed/locations/europe-west4/publishers/google/models/gemini-2.5-flash:streamGenerateContent?alt=sse':"
+    , "            request = json.loads(body)"
+    , "            generation = request.get('generationConfig') or {}"
+    , "            thinking = generation.get('thinkingConfig') or {}"
+    , "            tool_config = request.get('toolConfig') or {}"
+    , "            function_calling = tool_config.get('functionCallingConfig') or {}"
+    , "            text = '|'.join([str(thinking.get('includeThoughts') or ''), str(thinking.get('thinkingBudget') or ''), thinking.get('thinkingLevel') or '', function_calling.get('mode') or '', self.headers.get('Authorization') or '', self.headers.get('x-goog-api-key') or '', self.headers.get('X-Trace') or ''])"
+    , "            payload = ("
+    , "                'data: ' + json.dumps({'responseId': 'resp_vertex_typed_http', 'modelVersion': 'gemini-2.5-flash', 'candidates': [{'content': {'parts': [{'text': text[:16]}]}}], 'usageMetadata': {'promptTokenCount': 5, 'cachedContentTokenCount': 2}}) + '\\n\\n' +"
+    , "                'data: ' + json.dumps({'candidates': [{'content': {'parts': [{'text': text[16:]}]}, 'finishReason': 'STOP'}], 'usageMetadata': {'promptTokenCount': 5, 'cachedContentTokenCount': 2, 'candidatesTokenCount': 3, 'thoughtsTokenCount': 5, 'totalTokenCount': 13}}) + '\\n\\n'"
+    , "            ).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'text/event-stream')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/anthropic-stream/v1/messages':"
     , "            request = json.loads(body)"
     , "            text = '|'.join([request.get('model') or '', str(request.get('stream')), self.headers.get('x-api-key') or '', self.headers.get('anthropic-version') or '', self.headers.get('X-Trace') or '', self.headers.get('x-session-affinity') or ''])"
@@ -7335,6 +7352,49 @@ def testGoogleVertexStreamWithOptionsLocal : IO Unit := do
         | _ => false)
       "expected Vertex local text delta"
 
+def testCompatGoogleVertexTypedLegacyAliasLocal : IO Unit := do
+  let port := 18107
+  withHttpServer port do
+    let tool : LeanAgent.AI.Tool :=
+      { name := "lookup"
+        description := "Lookup a value"
+        parameters := LeanAgent.Json.obj [("type", LeanAgent.Json.str "object")]
+      }
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := LeanAgent.Models.googleVertexDefaultModel
+        name := "Gemini 2.5 Flash Vertex"
+        provider := LeanAgent.Models.googleVertexProviderId
+        api := LeanAgent.AI.Api.GoogleVertex.api
+        baseUrl := s!"http://127.0.0.1:{port}/vertex-typed"
+        contextWindow := 1048576
+        maxTokens := 65536
+        reasoning := true
+        input := #["text", "image"]
+      }
+    let stream ← LeanAgent.AI.Compat.Aliases.streamGoogleVertex
+      model
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+        tools := #[tool]
+      }
+      { apiKey := some LeanAgent.AI.Api.GoogleVertex.vertexCredentialsMarker
+        project := some "project-typed"
+        location := some "europe-west4"
+        thinkingEnabled := some true
+        thinkingBudgetTokens := some 4321
+        thinkingLevel := some "MEDIUM"
+        toolChoice := some .any
+        headers := #[("Authorization", some "Bearer adc-token"), ("X-Trace", some "trace-vertex")]
+      }
+    assertTrue stream.isComplete "expected compat Google Vertex typed legacy alias stream"
+    assertTrue (stream.result.responseId == some "resp_vertex_typed_http")
+      "expected typed Vertex response id"
+    assertTrue
+      (LeanAgent.AI.contentPlainText stream.result.content ==
+        "True|4321|MEDIUM|ANY|Bearer adc-token||trace-vertex")
+      "expected compat Vertex typed alias to preserve project/location, thinking, tool choice, and ADC auth headers"
+    assertTrue (stream.result.usage.reasoning == some 5) "expected Vertex typed thinking token usage"
+
 def testMistralConversationsStreamWithOptionsLocal : IO Unit := do
   let port := 18100
   withHttpServer port do
@@ -7652,6 +7712,7 @@ def main : IO UInt32 := do
     testGoogleGenerativeAIStreamWithOptionsLocal
     testCompatGoogleTypedLegacyAliasLocal
     testGoogleVertexStreamWithOptionsLocal
+    testCompatGoogleVertexTypedLegacyAliasLocal
     testMistralConversationsStreamWithOptionsLocal
     testCompatMistralTypedLegacyAliasLocal
     testCompatAzureOpenAIResponsesBuiltinDispatch

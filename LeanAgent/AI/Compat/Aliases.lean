@@ -36,6 +36,11 @@ abbrev GoogleGenerativeAIStream :=
     LeanAgent.AI.Api.GoogleGenerativeAI.GoogleGenerativeAIOptions →
       IO LeanAgent.AI.AssistantMessageEventStream
 
+abbrev GoogleVertexStream :=
+  LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
+    LeanAgent.AI.Api.GoogleVertex.GoogleVertexOptions →
+      IO LeanAgent.AI.AssistantMessageEventStream
+
 def streamForApi (api : String) : AliasStream :=
   fun model context options => LeanAgent.AI.Compat.streamSimpleWithApi api model context options
 
@@ -224,6 +229,34 @@ def streamGoogleWithOptions : GoogleGenerativeAIStream :=
       options
     pure (LeanAgent.Models.applyUsageCostToStream model stream)
 
+def withEnvApiKeyForGoogleVertex
+    (model : LeanAgent.Models.ModelInfo)
+    (options : LeanAgent.AI.Api.GoogleVertex.GoogleVertexOptions) :
+    IO LeanAgent.AI.Api.GoogleVertex.GoogleVertexOptions := do
+  let simple ← LeanAgent.AI.Compat.withEnvApiKey model options.toSimpleStreamOptions
+  pure { options with apiKey := simple.apiKey }
+
+def streamGoogleVertexWithOptions : GoogleVertexStream :=
+  fun model context options => do
+    LeanAgent.AI.Compat.ensureApiMatches
+      { api := LeanAgent.AI.Api.GoogleVertex.api
+        streams := LeanAgent.Models.googleVertexStreams
+      }
+      model
+    let options ← withEnvApiKeyForGoogleVertex model options
+    let config : LeanAgent.AI.Api.GoogleVertex.GoogleVertexConfig :=
+      { apiKey := options.apiKey.getD ""
+        baseUrl := model.baseUrl
+      }
+    let stream ← LeanAgent.AI.Api.GoogleVertex.completeStreamWithOptions
+      config
+      model.toModelRef
+      model.input
+      model.reasoning
+      context
+      options
+    pure (LeanAgent.Models.applyUsageCostToStream model stream)
+
 def streamAnthropic : AnthropicMessagesStream :=
   streamAnthropicWithOptions
 
@@ -248,11 +281,11 @@ def streamGoogle : GoogleGenerativeAIStream :=
 def streamSimpleGoogle : AliasStream :=
   streamForApi "google-generative-ai"
 
-def streamGoogleVertex : AliasStream :=
-  streamForApi "google-vertex"
+def streamGoogleVertex : GoogleVertexStream :=
+  streamGoogleVertexWithOptions
 
 def streamSimpleGoogleVertex : AliasStream :=
-  streamGoogleVertex
+  streamForApi "google-vertex"
 
 def streamMistral : MistralStream :=
   streamMistralWithOptions
