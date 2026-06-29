@@ -2007,6 +2007,16 @@ def httpServerScript : String :=
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
     , "            return"
+    , "        if self.path == '/payload-hook-openai/chat/completions':"
+    , "            request = json.loads(body)"
+    , "            payload = json.dumps({'choices': [{'message': {'content': request.get('model') or ''}, 'finish_reason': 'stop'}]}).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'application/json')"
+    , "            self.send_header('X-Hook-Response', 'openai')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/runtime-stream-openai/chat/completions':"
     , "            request = json.loads(body)"
     , "            ok = request.get('stream') is True and request.get('stream_options', {}).get('include_usage') is True"
@@ -2029,6 +2039,17 @@ def httpServerScript : String :=
     , "            payload = json.dumps({'id': 'resp_http', 'status': 'completed', 'output': [{'type': 'message', 'id': 'msg_http', 'content': [{'type': 'output_text', 'text': text}]}], 'usage': {'input_tokens': 6, 'output_tokens': 2, 'total_tokens': 8, 'input_tokens_details': {'cached_tokens': 1}}}).encode('utf-8')"
     , "            self.send_response(200)"
     , "            self.send_header('Content-Type', 'application/json')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
+    , "        if self.path == '/payload-hook-responses/responses':"
+    , "            request = json.loads(body)"
+    , "            text = request.get('model') or ''"
+    , "            payload = json.dumps({'id': 'resp_hook', 'status': 'completed', 'output': [{'type': 'message', 'id': 'msg_hook', 'content': [{'type': 'output_text', 'text': text}]}]}).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'application/json')"
+    , "            self.send_header('X-Hook-Response', 'responses')"
     , "            self.send_header('Content-Length', str(len(payload)))"
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
@@ -2250,6 +2271,37 @@ def testOpenAICompletionsSendsCustomHeaders : IO Unit := do
       { headers := #[("X-Trace", some "trace-1")] }
     assertTrue (response.content == "trace-1") "expected OpenAI-compatible request header"
 
+def testOpenAICompletionsPayloadAndResponseHooks : IO Unit := do
+  let port := 18092
+  withHttpServer port do
+    let sawPayload ← IO.mkRef false
+    let sawResponse ← IO.mkRef false
+    let response ← LeanAgent.AI.Api.OpenAICompletions.completeWithOptions
+      { apiKey := "test-key"
+        baseUrl := s!"http://127.0.0.1:{port}/payload-hook-openai"
+        timeoutSeconds := 5
+        connectTimeoutSeconds := 5
+        noProxy := some "*"
+        userAgent := "lean-agent-test/0.1.0"
+      }
+      (basicProviderRequest)
+      { onPayload := some fun payload model => do
+          assertTrue (model.api == "openai-completions") "expected OpenAI-compatible model ref api"
+          assertTrue (model.id == basicProviderRequest.model) "expected provider request model ref"
+          assertTrue (LeanAgent.Json.optVal? payload "messages").isSome "expected original chat payload"
+          sawPayload.set true
+          pure (some (LeanAgent.Json.obj [("model", LeanAgent.Json.str "hooked-openai")]))
+        onResponse := some fun response model => do
+          assertTrue (model.api == "openai-completions") "expected response hook model ref api"
+          assertTrue (response.status == 200) "expected response hook status"
+          assertTrue (headerValue? response.headers "x-hook-response" == some "openai")
+            "expected response hook headers"
+          sawResponse.set true
+      }
+    assertTrue (response.content == "hooked-openai") "expected payload hook to replace OpenAI payload"
+    assertTrue (← sawPayload.get) "expected payload hook to run"
+    assertTrue (← sawResponse.get) "expected response hook to run"
+
 def testOpenAICompletionsStreamWithOptionsLocal : IO Unit := do
   let port := 18086
   withHttpServer port do
@@ -2342,6 +2394,49 @@ def testOpenAIResponsesCompleteWithOptionsLocal : IO Unit := do
     assertTrue (response.usage.input == 5) "expected cached token subtraction"
     assertTrue (response.usage.cacheRead == 1) "expected cache read tokens"
     assertTrue (response.usage.totalTokens == 8) "expected total tokens"
+
+def testOpenAIResponsesPayloadAndResponseHooks : IO Unit := do
+  let port := 18093
+  withHttpServer port do
+    let sawPayload ← IO.mkRef false
+    let sawResponse ← IO.mkRef false
+    let response ← LeanAgent.AI.Api.OpenAIResponses.completeWithOptions
+      { apiKey := "test-key"
+        baseUrl := s!"http://127.0.0.1:{port}/payload-hook-responses"
+        timeoutSeconds := 5
+        connectTimeoutSeconds := 5
+        noProxy := some "*"
+        userAgent := "lean-agent-test/0.1.0"
+      }
+      responsesCodexModel
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+      { onPayload := some fun payload model => do
+          assertTrue (model.api == "openai-responses") "expected Responses model ref api"
+          assertTrue (model.id == responsesCodexModel.id) "expected Responses model ref id"
+          assertTrue (LeanAgent.Json.optVal? payload "input").isSome "expected original Responses payload"
+          sawPayload.set true
+          pure
+            (some
+              (LeanAgent.Json.obj
+                [ ("model", LeanAgent.Json.str "hooked-responses")
+                , ("input", LeanAgent.Json.arr #[])
+                , ("stream", LeanAgent.Json.bool false)
+                , ("store", LeanAgent.Json.bool false)
+                ]))
+        onResponse := some fun response model => do
+          assertTrue (model.provider == responsesCodexModel.provider) "expected response hook model provider"
+          assertTrue (response.status == 200) "expected response hook status"
+          assertTrue (headerValue? response.headers "x-hook-response" == some "responses")
+            "expected response hook headers"
+          sawResponse.set true
+      }
+    assertTrue (response.responseId == some "resp_hook") "expected hooked Responses response id"
+    assertTrue (LeanAgent.AI.contentPlainText response.content == "hooked-responses")
+      "expected payload hook to replace Responses payload"
+    assertTrue (← sawPayload.get) "expected payload hook to run"
+    assertTrue (← sawResponse.get) "expected response hook to run"
 
 def testOpenAIResponsesSendsCopilotDynamicHeaders : IO Unit := do
   let port := 18090
@@ -2524,10 +2619,12 @@ def main : IO UInt32 := do
     testHttpClientResponseLimit
     testOpenAICompletionsRetriesTransientHttpFailure
     testOpenAICompletionsSendsCustomHeaders
+    testOpenAICompletionsPayloadAndResponseHooks
     testOpenAICompletionsStreamWithOptionsLocal
     testOpenAICompatibleStreamsUsesStreamingRuntime
     testOpenAICompatibleStreamsClampMaxTokens
     testOpenAIResponsesCompleteWithOptionsLocal
+    testOpenAIResponsesPayloadAndResponseHooks
     testOpenAIResponsesSendsCopilotDynamicHeaders
     testOpenAIResponsesStreamWithOptionsLocal
     testOpenAICompletionsProviderErrorDiagnostics

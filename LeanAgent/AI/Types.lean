@@ -111,6 +111,16 @@ structure ProviderResponse where
   headers : Array (String × String) := #[]
 deriving BEq
 
+structure ModelRef where
+  id : String
+  api : Api
+  provider : ProviderId
+  baseUrl : Option String := none
+deriving BEq
+
+abbrev PayloadHook := Lean.Json → ModelRef → IO (Option Lean.Json)
+abbrev ResponseHook := ProviderResponse → ModelRef → IO Unit
+
 structure StreamOptions where
   temperature : Option Float := none
   maxTokens : Option Nat := none
@@ -119,18 +129,18 @@ structure StreamOptions where
   cacheRetention : Option CacheRetention := none
   sessionId : Option String := none
   headers : Array (String × Option String) := #[]
+  onPayload : Option PayloadHook := none
+  onResponse : Option ResponseHook := none
   timeoutMs : Option Nat := none
   websocketConnectTimeoutMs : Option Nat := none
   maxRetries : Option Nat := none
   maxRetryDelayMs : Option Nat := none
   metadata : Option Lean.Json := none
   env : Array (String × String) := #[]
-deriving BEq
 
 structure SimpleStreamOptions extends StreamOptions where
   reasoning : Option ThinkingLevel := none
   thinkingBudgets : Option ThinkingBudgets := none
-deriving BEq
 
 structure TextSignatureV1 where
   id : String

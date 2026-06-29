@@ -35,7 +35,6 @@ deriving BEq
 structure OpenAICompletionsOptions extends LeanAgent.AI.SimpleStreamOptions where
   toolChoice : Option ToolChoice := none
   reasoningEffort : Option LeanAgent.AI.ThinkingLevel := none
-deriving BEq
 
 def optionsFromSimple (options : LeanAgent.AI.SimpleStreamOptions) : OpenAICompletionsOptions :=
   { temperature := options.temperature
@@ -45,6 +44,8 @@ def optionsFromSimple (options : LeanAgent.AI.SimpleStreamOptions) : OpenAICompl
     cacheRetention := options.cacheRetention
     sessionId := options.sessionId
     headers := options.headers
+    onPayload := options.onPayload
+    onResponse := options.onResponse
     timeoutMs := options.timeoutMs
     websocketConnectTimeoutMs := options.websocketConnectTimeoutMs
     maxRetries := options.maxRetries
@@ -187,6 +188,36 @@ def promptCacheFields (baseUrl : String) (options : OpenAICompletionsOptions) : 
         []
     keyFields ++ retentionFields
 
+def modelRef
+    (config : OpenAICompatibleConfig)
+    (request : ProviderRequest)
+    (api provider : String) : LeanAgent.AI.ModelRef :=
+  { id := request.model
+    api := api
+    provider := provider
+    baseUrl := some config.baseUrl
+  }
+
+def applyPayloadHook
+    (options : OpenAICompletionsOptions)
+    (model : LeanAgent.AI.ModelRef)
+    (payload : Lean.Json) : IO Lean.Json := do
+  match options.onPayload with
+  | none => pure payload
+  | some hook =>
+      match ← hook payload model with
+      | some nextPayload => pure nextPayload
+      | none => pure payload
+
+def callResponseHook
+    (options : OpenAICompletionsOptions)
+    (model : LeanAgent.AI.ModelRef)
+    (response : LeanAgent.Http.JsonPostResponse) : IO Unit := do
+  match options.onResponse with
+  | none => pure ()
+  | some hook =>
+      hook { status := response.status, headers := response.headers } model
+
 def requestToJsonWithOptions
     (request : ProviderRequest)
     (options : OpenAICompletionsOptions := {})
@@ -223,7 +254,9 @@ def requestToStreamingJsonWithOptions
 def runHttpJson
     (config : OpenAICompatibleConfig)
     (payload : Lean.Json)
-    (headers : Array (String × String) := #[]) : IO String := do
+    (headers : Array (String × String) := #[])
+    (options : OpenAICompletionsOptions := {})
+    (model : LeanAgent.AI.ModelRef := { id := "", api := "openai-completions", provider := "" }) : IO String := do
   let response ← LeanAgent.Http.postJsonResponse
     { url := chatCompletionsUrl config.baseUrl
       apiKey := config.apiKey
@@ -235,6 +268,7 @@ def runHttpJson
       userAgent := config.userAgent
     }
     payload.compress
+  callResponseHook options model response
   if response.status < 200 || response.status >= 300 then
     throw (IO.userError (LeanAgent.AI.Util.Diagnostics.providerHttpErrorMessage response.status response.body))
   pure response.body
@@ -671,10 +705,11 @@ def completeWithOptions
     (config : OpenAICompatibleConfig)
     (request : ProviderRequest)
   (options : OpenAICompletionsOptions := {}) : IO LeanAgent.ProviderResponse := do
-  let payload := requestToJsonWithOptions request options config.baseUrl
+  let model := modelRef config request "openai-completions" ""
+  let payload ← applyPayloadHook options model (requestToJsonWithOptions request options config.baseUrl)
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
   let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
-    (runHttpJson config payload (LeanAgent.AI.Util.Headers.providerHeadersToArray options.headers))
+    (runHttpJson config payload (LeanAgent.AI.Util.Headers.providerHeadersToArray options.headers) options model)
   match parseChatCompletion raw with
   | .ok response => pure response
   | .error err => throw (IO.userError s!"failed to parse provider response: {err}\n{raw}")
@@ -684,10 +719,11 @@ def streamWithOptions
     (request : ProviderRequest)
     (api providerId : String)
     (options : OpenAICompletionsOptions := {}) : IO LeanAgent.AI.AssistantMessageEventStream := do
-  let payload := requestToStreamingJsonWithOptions request options config.baseUrl
+  let model := modelRef config request api providerId
+  let payload ← applyPayloadHook options model (requestToStreamingJsonWithOptions request options config.baseUrl)
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
   let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
-    (runHttpJson config payload (LeanAgent.AI.Util.Headers.providerHeadersToArray options.headers))
+    (runHttpJson config payload (LeanAgent.AI.Util.Headers.providerHeadersToArray options.headers) options model)
   let timestamp ← IO.monoMsNow
   match parseStreamingEventStream api providerId request.model timestamp raw with
   | .ok stream => pure stream

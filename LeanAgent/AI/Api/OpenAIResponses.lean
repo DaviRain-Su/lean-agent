@@ -31,7 +31,6 @@ structure OpenAIResponsesOptions extends LeanAgent.AI.SimpleStreamOptions where
   reasoningEffort : Option LeanAgent.AI.ThinkingLevel := none
   reasoningSummary : Option String := none
   serviceTier : Option String := none
-deriving BEq
 
 def responsesUrl (baseUrl : String) : String :=
   if baseUrl.endsWith "/responses" then
@@ -193,6 +192,35 @@ def requestHeaders
       sessionHeaders)
     (LeanAgent.AI.Util.Headers.providerHeadersToArray options.headers)
 
+def modelRef
+    (config : OpenAIResponsesConfig)
+    (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel) : LeanAgent.AI.ModelRef :=
+  { id := model.id
+    api := model.api
+    provider := model.provider
+    baseUrl := some config.baseUrl
+  }
+
+def applyPayloadHook
+    (options : OpenAIResponsesOptions)
+    (model : LeanAgent.AI.ModelRef)
+    (payload : Lean.Json) : IO Lean.Json := do
+  match options.onPayload with
+  | none => pure payload
+  | some hook =>
+      match ← hook payload model with
+      | some nextPayload => pure nextPayload
+      | none => pure payload
+
+def callResponseHook
+    (options : OpenAIResponsesOptions)
+    (model : LeanAgent.AI.ModelRef)
+    (response : LeanAgent.Http.JsonPostResponse) : IO Unit := do
+  match options.onResponse with
+  | none => pure ()
+  | some hook =>
+      hook { status := response.status, headers := response.headers } model
+
 def runHttpJson
     (config : OpenAIResponsesConfig)
     (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
@@ -210,6 +238,7 @@ def runHttpJson
       userAgent := config.userAgent
     }
     payload.compress
+  callResponseHook options (modelRef config model) response
   if response.status < 200 || response.status >= 300 then
     throw (IO.userError (LeanAgent.AI.Util.Diagnostics.providerHttpErrorMessage response.status response.body))
   pure response.body
@@ -841,7 +870,8 @@ def completeWithOptions
     (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
     (context : LeanAgent.AI.Context)
     (options : OpenAIResponsesOptions := {}) : IO LeanAgent.AI.AssistantMessage := do
-  let payload := requestToJsonWithOptions model context options false
+  let ref := modelRef config model
+  let payload ← applyPayloadHook options ref (requestToJsonWithOptions model context options false)
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
   let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
     (runHttpJson config model context payload options)
@@ -855,7 +885,8 @@ def completeStreamWithOptions
     (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
     (context : LeanAgent.AI.Context)
     (options : OpenAIResponsesOptions := {}) : IO LeanAgent.AI.AssistantMessageEventStream := do
-  let payload := requestToJsonWithOptions model context options true
+  let ref := modelRef config model
+  let payload ← applyPayloadHook options ref (requestToJsonWithOptions model context options true)
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
   let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
     (runHttpJson config model context payload options)
