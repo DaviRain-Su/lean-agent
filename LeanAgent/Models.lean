@@ -161,20 +161,110 @@ def deepSeekV4Pro : ModelInfo :=
     compat := deepSeekCompat
   }
 
-def openAIGpt41Mini : ModelInfo :=
-  { id := openAIDefaultModel
-    name := "OpenAI GPT-4.1 Mini"
-    provider := openAIProviderId
-    api := "openai-completions"
-    baseUrl := openAIBaseUrl
-  }
-
 def cost (input output cacheRead cacheWrite : Float) : LeanAgent.AI.UsageCost :=
   { input := input
     output := output
     cacheRead := cacheRead
     cacheWrite := cacheWrite
   }
+
+def openAIModel
+    (id name : String)
+    (inputCost outputCost cacheReadCost cacheWriteCost : Float)
+    (contextWindow maxTokens : Nat)
+    (reasoning : Bool := false)
+    (thinkingLevelMap : Array LeanAgent.AI.ThinkingLevelMapEntry := #[])
+    (input : Array String := #["text"]) : ModelInfo :=
+  { id := id
+    name := name
+    provider := openAIProviderId
+    api := "openai-responses"
+    baseUrl := openAIBaseUrl
+    cost := cost inputCost outputCost cacheReadCost cacheWriteCost
+    contextWindow := contextWindow
+    maxTokens := maxTokens
+    reasoning := reasoning
+    thinkingLevelMap := thinkingLevelMap
+    input := input
+  }
+
+def openAIThinkingOffNullMap : Array LeanAgent.AI.ThinkingLevelMapEntry :=
+  #[{ level := .off, mapped := none }]
+
+def openAIThinkingOffNoneMap : Array LeanAgent.AI.ThinkingLevelMapEntry :=
+  #[{ level := .off, mapped := some "none" }]
+
+def openAIThinkingOffNullXHighMap : Array LeanAgent.AI.ThinkingLevelMapEntry :=
+  #[ { level := .off, mapped := none }
+   , { level := .level .xhigh, mapped := some "xhigh" }
+   ]
+
+def openAIThinkingOffNoneXHighMap : Array LeanAgent.AI.ThinkingLevelMapEntry :=
+  #[ { level := .off, mapped := some "none" }
+   , { level := .level .xhigh, mapped := some "xhigh" }
+   ]
+
+def openAIGpt55ThinkingMap : Array LeanAgent.AI.ThinkingLevelMapEntry :=
+  #[ { level := .off, mapped := some "none" }
+   , { level := .level .xhigh, mapped := some "xhigh" }
+   , { level := .level .minimal, mapped := none }
+   ]
+
+def openAIGpt55ProThinkingMap : Array LeanAgent.AI.ThinkingLevelMapEntry :=
+  #[ { level := .off, mapped := none }
+   , { level := .level .xhigh, mapped := some "xhigh" }
+   , { level := .level .minimal, mapped := none }
+   , { level := .level .low, mapped := none }
+   ]
+
+def openAIGpt41Mini : ModelInfo :=
+  openAIModel "gpt-4.1-mini" "GPT-4.1 mini" 0.4 1.6 0.1 0.0 1047576 32768 false #[] #["text", "image"]
+
+def openAIResponsesModels : Array ModelInfo :=
+  #[
+    openAIModel "gpt-4" "GPT-4" 30.0 60.0 0.0 0.0 8192 8192 false #[] #["text"],
+    openAIModel "gpt-4-turbo" "GPT-4 Turbo" 10.0 30.0 0.0 0.0 128000 4096 false #[] #["text", "image"],
+    openAIModel "gpt-4.1" "GPT-4.1" 2.0 8.0 0.5 0.0 1047576 32768 false #[] #["text", "image"],
+    openAIGpt41Mini,
+    openAIModel "gpt-4.1-nano" "GPT-4.1 nano" 0.1 0.4 0.025 0.0 1047576 32768 false #[] #["text", "image"],
+    openAIModel "gpt-4o" "GPT-4o" 2.5 10.0 1.25 0.0 128000 16384 false #[] #["text", "image"],
+    openAIModel "gpt-4o-2024-05-13" "GPT-4o (2024-05-13)" 5.0 15.0 0.0 0.0 128000 4096 false #[] #["text", "image"],
+    openAIModel "gpt-4o-2024-08-06" "GPT-4o (2024-08-06)" 2.5 10.0 1.25 0.0 128000 16384 false #[] #["text", "image"],
+    openAIModel "gpt-4o-2024-11-20" "GPT-4o (2024-11-20)" 2.5 10.0 1.25 0.0 128000 16384 false #[] #["text", "image"],
+    openAIModel "gpt-4o-mini" "GPT-4o mini" 0.15 0.6 0.075 0.0 128000 16384 false #[] #["text", "image"],
+    openAIModel "gpt-5" "GPT-5" 1.25 10.0 0.125 0.0 400000 128000 true openAIThinkingOffNullMap #["text", "image"],
+    openAIModel "gpt-5-chat-latest" "GPT-5 Chat Latest" 1.25 10.0 0.125 0.0 128000 16384 false openAIThinkingOffNullMap #["text", "image"],
+    openAIModel "gpt-5-codex" "GPT-5-Codex" 1.25 10.0 0.125 0.0 400000 128000 true openAIThinkingOffNullMap #["text", "image"],
+    openAIModel "gpt-5-mini" "GPT-5 Mini" 0.25 2.0 0.025 0.0 400000 128000 true openAIThinkingOffNullMap #["text", "image"],
+    openAIModel "gpt-5-nano" "GPT-5 Nano" 0.05 0.4 0.005 0.0 400000 128000 true openAIThinkingOffNullMap #["text", "image"],
+    openAIModel "gpt-5-pro" "GPT-5 Pro" 15.0 120.0 0.0 0.0 400000 128000 true openAIThinkingOffNullMap #["text", "image"],
+    openAIModel "gpt-5.1" "GPT-5.1" 1.25 10.0 0.125 0.0 400000 128000 true openAIThinkingOffNoneMap #["text", "image"],
+    openAIModel "gpt-5.1-chat-latest" "GPT-5.1 Chat" 1.25 10.0 0.125 0.0 128000 16384 true openAIThinkingOffNullMap #["text", "image"],
+    openAIModel "gpt-5.1-codex" "GPT-5.1 Codex" 1.25 10.0 0.125 0.0 400000 128000 true openAIThinkingOffNullMap #["text", "image"],
+    openAIModel "gpt-5.1-codex-max" "GPT-5.1 Codex Max" 1.25 10.0 0.125 0.0 400000 128000 true openAIThinkingOffNullMap #["text", "image"],
+    openAIModel "gpt-5.1-codex-mini" "GPT-5.1 Codex mini" 0.25 2.0 0.025 0.0 400000 128000 true openAIThinkingOffNullMap #["text", "image"],
+    openAIModel "gpt-5.2" "GPT-5.2" 1.75 14.0 0.175 0.0 400000 128000 true openAIThinkingOffNoneXHighMap #["text", "image"],
+    openAIModel "gpt-5.2-chat-latest" "GPT-5.2 Chat" 1.75 14.0 0.175 0.0 128000 16384 true openAIThinkingOffNullXHighMap #["text", "image"],
+    openAIModel "gpt-5.2-codex" "GPT-5.2 Codex" 1.75 14.0 0.175 0.0 400000 128000 true openAIThinkingOffNullXHighMap #["text", "image"],
+    openAIModel "gpt-5.2-pro" "GPT-5.2 Pro" 21.0 168.0 0.0 0.0 400000 128000 true openAIThinkingOffNullXHighMap #["text", "image"],
+    openAIModel "gpt-5.3-chat-latest" "GPT-5.3 Chat (latest)" 1.75 14.0 0.175 0.0 128000 16384 false openAIThinkingOffNullXHighMap #["text", "image"],
+    openAIModel "gpt-5.3-codex" "GPT-5.3 Codex" 1.75 14.0 0.175 0.0 400000 128000 true openAIThinkingOffNoneXHighMap #["text", "image"],
+    openAIModel "gpt-5.3-codex-spark" "GPT-5.3 Codex Spark" 1.75 14.0 0.175 0.0 128000 32000 true openAIThinkingOffNullXHighMap #["text", "image"],
+    openAIModel "gpt-5.4" "GPT-5.4" 2.5 15.0 0.25 0.0 272000 128000 true openAIThinkingOffNoneXHighMap #["text", "image"],
+    openAIModel "gpt-5.4-mini" "GPT-5.4 mini" 0.75 4.5 0.075 0.0 400000 128000 true openAIThinkingOffNoneXHighMap #["text", "image"],
+    openAIModel "gpt-5.4-nano" "GPT-5.4 nano" 0.2 1.25 0.02 0.0 400000 128000 true openAIThinkingOffNoneXHighMap #["text", "image"],
+    openAIModel "gpt-5.4-pro" "GPT-5.4 Pro" 30.0 180.0 0.0 0.0 1050000 128000 true openAIThinkingOffNullXHighMap #["text", "image"],
+    openAIModel "gpt-5.5" "GPT-5.5" 5.0 30.0 0.5 0.0 272000 128000 true openAIGpt55ThinkingMap #["text", "image"],
+    openAIModel "gpt-5.5-pro" "GPT-5.5 Pro" 30.0 180.0 0.0 0.0 1050000 128000 true openAIGpt55ProThinkingMap #["text", "image"],
+    openAIModel "o1" "o1" 15.0 60.0 7.5 0.0 200000 100000 true #[] #["text", "image"],
+    openAIModel "o1-pro" "o1-pro" 150.0 600.0 0.0 0.0 200000 100000 true #[] #["text", "image"],
+    openAIModel "o3" "o3" 2.0 8.0 0.5 0.0 200000 100000 true #[] #["text", "image"],
+    openAIModel "o3-deep-research" "o3-deep-research" 10.0 40.0 2.5 0.0 200000 100000 true #[] #["text", "image"],
+    openAIModel "o3-mini" "o3-mini" 1.1 4.4 0.55 0.0 200000 100000 true #[] #["text"],
+    openAIModel "o3-pro" "o3-pro" 20.0 80.0 0.0 0.0 200000 100000 true #[] #["text", "image"],
+    openAIModel "o4-mini" "o4-mini" 1.1 4.4 0.275 0.0 200000 100000 true #[] #["text", "image"],
+    openAIModel "o4-mini-deep-research" "o4-mini-deep-research" 2.0 8.0 0.5 0.0 200000 100000 true #[] #["text", "image"]
+  ]
 
 def openRouterCompat : ModelCompat :=
   { thinkingFormat := some "openrouter" }
@@ -665,7 +755,7 @@ def openAIProviderInfo : ProviderInfo :=
     apiKeyEnv := openAIKeyEnv
     modelEnv := some openAIModelEnv
     defaultModel := openAIDefaultModel
-    models := #[openAIGpt41Mini]
+    models := openAIResponsesModels
   }
 
 def azureOpenAIResponsesProviderInfo : ProviderInfo :=

@@ -2661,7 +2661,20 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
       assertTrue (provider.id == LeanAgent.Models.groqProviderId) "expected Groq provider by env"
       assertTrue (provider.defaultModel == LeanAgent.Models.groqDefaultModel) "expected Groq default model"
   | none => fail "expected Groq provider by env"
+  match LeanAgent.Models.ProviderCatalog.model?
+      catalog
+      LeanAgent.Models.openAIProviderId
+      LeanAgent.Models.openAIDefaultModel with
+  | some model =>
+      assertTrue (model.api == "openai-responses") "expected OpenAI Responses API"
+      assertTrue (model.baseUrl == LeanAgent.Models.openAIBaseUrl) "expected OpenAI base URL"
+      assertTrue (model.contextWindow == 1047576) "expected OpenAI model context metadata"
+      assertTrue (model.maxTokens == 32768) "expected OpenAI model output metadata"
+      assertTrue (model.input.contains "image") "expected OpenAI image input metadata"
+  | none => fail "expected OpenAI default model in catalog"
   let rendered := LeanAgent.Models.renderCatalog catalog
+  assertTrue (rendered.contains "openai/gpt-4.1-mini") "expected OpenAI Responses default model"
+  assertTrue (rendered.contains "openai/gpt-5.5-pro") "expected generated OpenAI Responses model set"
   assertTrue (rendered.contains "azure-openai-responses/gpt-4o-mini")
     "expected Azure OpenAI Responses model"
   assertTrue (rendered.contains "openrouter/openai/gpt-oss-120b") "expected OpenRouter model"
@@ -2703,6 +2716,12 @@ def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
   let collection ← LeanAgent.Models.createDefaultModels
   let providers ← collection.getProviders
   assertTrue (providers.size == 13) "expected default provider family"
+  match ← collection.getModel? LeanAgent.Models.openAIProviderId LeanAgent.Models.openAIDefaultModel with
+  | some model =>
+      assertTrue (model.api == "openai-responses") "expected OpenAI Responses API"
+      assertTrue (model.baseUrl == LeanAgent.Models.openAIBaseUrl) "expected OpenAI Responses base URL"
+      assertTrue (model.input.contains "image") "expected OpenAI image input metadata"
+  | none => fail "expected OpenAI Responses model in default runtime collection"
   match ← collection.getModel?
       LeanAgent.Models.azureOpenAIResponsesProviderId
       LeanAgent.Models.azureOpenAIResponsesDefaultModel with
@@ -5453,6 +5472,28 @@ def testOpenAIResponsesDispatchesThroughModelsCollection : IO Unit := do
     assertTrue (stream.result.usage.cost.output == 4.0) "expected Responses model output cost"
     assertTrue (stream.result.usage.cost.total == 8.0) "expected Responses model total cost"
 
+def testOpenAIProviderFactoryDispatchesResponsesRuntime : IO Unit := do
+  let port := 18096
+  withHttpServer port do
+    let provider ← LeanAgent.AI.Providers.OpenAI.provider
+    let model :=
+      { LeanAgent.Models.openAIGpt41Mini with
+        baseUrl := s!"http://127.0.0.1:{port}/responses-stream"
+        cost := { input := 1000000.0, output := 2000000.0 }
+      }
+    let context : LeanAgent.AI.Context :=
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+    let stream ← provider.streamSimple model context { apiKey := some "test-key" }
+    assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "streamed")
+      "expected OpenAI provider factory to dispatch Responses runtime"
+    assertTrue (stream.result.api == "openai-responses") "expected OpenAI provider runtime api"
+    assertTrue (stream.result.provider == LeanAgent.Models.openAIProviderId)
+      "expected OpenAI provider runtime provider"
+    assertTrue (stream.result.usage.cost.input == 4.0) "expected OpenAI provider input cost"
+    assertTrue (stream.result.usage.cost.output == 4.0) "expected OpenAI provider output cost"
+
 def testOpenAIResponsesCompleteWithOptionsLocal : IO Unit := do
   let port := 18088
   withHttpServer port do
@@ -6004,6 +6045,7 @@ def main : IO UInt32 := do
     testOpenRouterImagesGenerateLocal
     testOpenRouterImagesMissingApiKeyReturnsError
     testOpenAIResponsesDispatchesThroughModelsCollection
+    testOpenAIProviderFactoryDispatchesResponsesRuntime
     testOpenAIResponsesCompleteWithOptionsLocal
     testOpenAIResponsesPayloadAndResponseHooks
     testOpenAIResponsesSendsCopilotDynamicHeaders
