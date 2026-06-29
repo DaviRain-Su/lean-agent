@@ -4,6 +4,7 @@ import LeanAgent.AI.Api.OpenAIPromptCache
 import LeanAgent.AI.EventStream
 import LeanAgent.AI.Types
 import LeanAgent.AI.Util.Diagnostics
+import LeanAgent.AI.Util.Estimate
 import LeanAgent.AI.Util.Hash
 import LeanAgent.AI.Util.Retry
 import LeanAgent.AI.Util.SSE

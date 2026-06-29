@@ -493,6 +493,44 @@ def testShortHashMatchesPi : IO Unit := do
   assertTrue (LeanAgent.AI.Util.Hash.shortHash "😀" == "13wj7r7usi372") "expected emoji hash"
   assertTrue (LeanAgent.AI.Util.Hash.shortHash "a😀b" == "12yrce3kjl8pw") "expected mixed utf16 hash"
 
+def testEstimateUtilities : IO Unit := do
+  let usage : LeanAgent.AI.Usage := { input := 1, output := 2, cacheRead := 3, cacheWrite := 4 }
+  assertTrue (LeanAgent.AI.Util.Estimate.calculateContextTokens usage == 10) "expected usage fallback total"
+  assertTrue (LeanAgent.AI.Util.Estimate.calculateContextTokens { usage with totalTokens := 42 } == 42)
+    "expected reported total tokens"
+  assertTrue (LeanAgent.AI.Util.Estimate.estimateTextTokens "hello" == 2) "expected text estimate"
+  assertTrue (LeanAgent.AI.Util.Estimate.estimateTextTokens "😀" == 1) "expected utf16 estimate"
+  let imageMessage : LeanAgent.AI.Message :=
+    .user
+      { content := #[LeanAgent.AI.text "abcd", LeanAgent.AI.image "base64" "image/png"]
+        timestamp := 1
+      }
+  assertTrue (LeanAgent.AI.Util.Estimate.estimateMessageTokens imageMessage == 1201)
+    "expected image char estimate"
+
+def testEstimateContextUsesRecentAssistantUsage : IO Unit := do
+  let context : LeanAgent.AI.Context :=
+    { systemPrompt := some "ignored when usage exists"
+      messages :=
+        #[ .user { content := #[LeanAgent.AI.text "old prompt"] , timestamp := 1 }
+         , .assistant
+              { content := #[LeanAgent.AI.text "answer"]
+                api := "openai-completions"
+                provider := "deepseek"
+                model := "deepseek-v4-flash"
+                usage := { totalTokens := 100 }
+                stopReason := .stop
+                timestamp := 2
+              }
+         , .user { content := #[LeanAgent.AI.text "abcdef"] , timestamp := 3 }
+         ]
+    }
+  let estimate := LeanAgent.AI.Util.Estimate.estimateContextTokens context
+  assertTrue (estimate.tokens == 102) "expected usage plus trailing estimate"
+  assertTrue (estimate.usageTokens == 100) "expected usage tokens"
+  assertTrue (estimate.trailingTokens == 2) "expected trailing tokens"
+  assertTrue (estimate.lastUsageIndex == some 1) "expected assistant usage index"
+
 def retryAssistantMessage (errorMessage : Option String) : LeanAgent.AI.AssistantMessage :=
   { content := #[]
     api := "fake"
@@ -1236,6 +1274,8 @@ def main : IO UInt32 := do
     testDiagnosticsExtractsProviderError
     testOpenAICompletionsParsesUsage
     testShortHashMatchesPi
+    testEstimateUtilities
+    testEstimateContextUsesRecentAssistantUsage
     testRetryClassifiesAssistantErrors
     testRetryWithRetriesSucceedsAfterTransientFailures
     testRetryWithRetriesStopsOnNonRetryableFailure
