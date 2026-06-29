@@ -1,5 +1,6 @@
 import LeanAgent.Core
 import LeanAgent.AI.Auth
+import LeanAgent.AI.Api.Lazy
 import LeanAgent.AI.Api.OpenAICompletions
 import LeanAgent.AI.Api.SimpleOptions
 import LeanAgent.AI.EventStream
@@ -74,6 +75,13 @@ deriving Repr, BEq
 
 def ModelInfo.qualifiedId (model : ModelInfo) : String :=
   model.provider ++ "/" ++ model.id
+
+def ModelInfo.toModelRef (model : ModelInfo) : LeanAgent.AI.ModelRef :=
+  { id := model.id
+    api := model.api
+    provider := model.provider
+    baseUrl := some model.baseUrl
+  }
 
 def deepSeekCompat : ModelCompat :=
   { supportsStore := false
@@ -402,6 +410,13 @@ def ProviderStreams.completeSimple
   let stream ← streams.streamSimple model context options
   pure stream.result
 
+def ProviderStreams.lazy (load : IO ProviderStreams) : ProviderStreams :=
+  { streamSimple := fun model context options =>
+      LeanAgent.AI.Api.Lazy.lazyStream model.toModelRef do
+        let streams ← load
+        streams.streamSimple model context options
+  }
+
 structure Provider where
   id : String
   name : String
@@ -455,10 +470,11 @@ def createProvider (input : CreateProviderOptions) : IO Provider := do
       getModels := modelsRef.get
       refreshModels := refreshModels
       streamSimple := fun model context options => do
-        match apiDispatchFor? input.apis model.api with
-        | some streams => streams.streamSimple model context options
-        | none =>
-            throw (modelsError .stream s!"Provider {input.id} has no API implementation for \"{model.api}\"")
+        LeanAgent.AI.Api.Lazy.lazyStream model.toModelRef do
+          match apiDispatchFor? input.apis model.api with
+          | some streams => streams.streamSimple model context options
+          | none =>
+              throw (modelsError .stream s!"Provider {input.id} has no API implementation for \"{model.api}\"")
     }
 
 def hasApi (model : ModelInfo) (api : String) : Bool :=

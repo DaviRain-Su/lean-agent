@@ -1592,6 +1592,51 @@ def testModelsCollectionDispatchesWithAuth : IO Unit := do
   assertTrue (LeanAgent.AI.contentPlainText message.content == "runtime-ok") "expected runtime stream result"
   assertTrue ((← seenApiKey.get) == some "env-secret") "expected collection to inject auth"
 
+def assertLazyErrorStream
+    (stream : LeanAgent.AI.AssistantMessageEventStream)
+    (expectedMessage : String) : IO Unit := do
+  assertTrue stream.isComplete "expected lazy error stream to complete"
+  assertTrue (stream.result.stopReason == .error) "expected lazy setup error stop reason"
+  assertTrue (stream.result.errorMessage.any (fun message => message.contains expectedMessage))
+    "expected lazy setup error message"
+  assertTrue (stream.result.api == fakeRuntimeModel.api) "expected lazy error api"
+  assertTrue (stream.result.provider == fakeRuntimeModel.provider) "expected lazy error provider"
+  assertTrue (stream.result.model == fakeRuntimeModel.id) "expected lazy error model"
+  match stream.events.back? with
+  | some (.error .error message) =>
+      assertTrue (message.errorMessage.any (fun value => value.contains expectedMessage))
+        "expected final lazy error event"
+  | _ => fail "expected final lazy error event"
+
+def testModelsCreateProviderMissingApiReturnsLazyErrorStream : IO Unit := do
+  let provider ← LeanAgent.Models.createProvider
+    { id := "fake"
+      name := some "Fake"
+      auth := {}
+      models := #[fakeRuntimeModel]
+      apis := #[]
+    }
+  let stream ← provider.streamSimple fakeRuntimeModel {} {}
+  assertLazyErrorStream stream "has no API implementation"
+
+def testModelsCreateProviderSetupFailureReturnsLazyErrorStream : IO Unit := do
+  let streams : LeanAgent.Models.ProviderStreams :=
+    { streamSimple := fun _ _ _ => throw (IO.userError "setup failed") }
+  let provider ← LeanAgent.Models.createProvider
+    { id := "fake"
+      name := some "Fake"
+      auth := {}
+      models := #[fakeRuntimeModel]
+      apis := #[{ api := fakeRuntimeModel.api, streams := streams }]
+    }
+  let stream ← provider.streamSimple fakeRuntimeModel {} {}
+  assertLazyErrorStream stream "setup failed"
+
+def testModelsLazyProviderStreamsLoadFailureReturnsErrorStream : IO Unit := do
+  let streams := LeanAgent.Models.ProviderStreams.lazy (throw (IO.userError "load failed"))
+  let stream ← streams.streamSimple fakeRuntimeModel {} {}
+  assertLazyErrorStream stream "load failed"
+
 def testModelsCalculateCost : IO Unit := do
   let model :=
     { fakeRuntimeModel with
@@ -2626,6 +2671,9 @@ def main : IO UInt32 := do
     testModelsAuthEnvApiKeyResolution
     testModelsAuthStoredCredentialWins
     testModelsCollectionDispatchesWithAuth
+    testModelsCreateProviderMissingApiReturnsLazyErrorStream
+    testModelsCreateProviderSetupFailureReturnsLazyErrorStream
+    testModelsLazyProviderStreamsLoadFailureReturnsErrorStream
     testModelsCalculateCost
     testFauxProviderQueuesResponses
     testFauxProviderHelperBlocksAndEvents

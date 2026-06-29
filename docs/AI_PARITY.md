@@ -104,7 +104,7 @@ before expanding provider behavior.
 | `Models` interface | `LeanAgent.Models.Collection` | partial | Collection supports provider registration, lookup, best-effort model listing, refresh, auth application, `streamSimple`, and `completeSimple`. |
 | `MutableModels` | `LeanAgent.Models.Collection` | implemented | `setProvider`, `deleteProvider`, and `clearProviders` exist with tests through runtime dispatch. |
 | `createModels` | `LeanAgent.Models.Collection` | implemented | Constructor accepts credential store/auth context and defaults to in-memory credentials. |
-| `createProvider` | `LeanAgent.Models.Provider` | partial | Single/mapped API dispatch and refresh state exist. Lazy error streams and full mixed-API parity are still missing. |
+| `createProvider` | `LeanAgent.Models.Provider` | partial | Single/mapped API dispatch, refresh state, and lazy setup/load error streams exist. Full mixed-API parity is still missing. |
 | `hasApi` | `LeanAgent.Models` | implemented | Runtime API equality helper exists. |
 | `calculateCost` | `LeanAgent.Models` | implemented | Pi-style per-million token cost calculation exists, including 1h cache-write multiplier. |
 | `getSupportedThinkingLevels` | `LeanAgent.Models` | partial | Basic reasoning/off mapping exists. Model-specific thinking-level maps are missing. |
@@ -125,7 +125,7 @@ before expanding provider behavior.
 
 | Pi source | Lean target | Status | Notes |
 | --- | --- | --- | --- |
-| `api/lazy.ts` | `LeanAgent.AI.Api.Lazy` | missing | Lean may not need lazy loading, but needs equivalent dispatch boundary. |
+| `api/lazy.ts` | `LeanAgent.AI.Api.Lazy`, `LeanAgent.Models.ProviderStreams.lazy` | implemented | Lean does not dynamically import TS modules, but the equivalent boundary exists: setup/load failures become assistant error streams, and provider dispatch uses it instead of throwing. |
 | `api/simple-options.ts` | `LeanAgent.AI.Api.SimpleOptions`, `LeanAgent.AI.Types`, `LeanAgent.Models`, `LeanAgent.AI.Api.OpenAICompletions`, `LeanAgent.AI.Api.OpenAIResponses` | partial | Simple option fields exist and are applied to OpenAI-compatible and Responses payloads/headers. Context-aware `maxTokens` clamping now uses estimated context tokens plus a 4096-token safety margin, preserves explicit request caps, defaults to model max output when known, and avoids emitting a synthetic cap when model max output is unknown. `onPayload` and `onResponse` hooks can inspect/replace JSON payloads and observe HTTP status/headers on both OpenAI-compatible and Responses runtimes. `adjustMaxTokensForThinking` matches Pi default/custom thinking budgets and xhigh-to-high clamping. Abort signals remain missing. |
 | `api/openai-completions.ts` | `LeanAgent.AI.Api.OpenAICompletions` | partial | Refactored into an API module with legacy wrapper, payload/header serialization, non-streaming completion, streaming request/response parsing, text/thinking/tool delta events, tool calls, empty-tools behavior, tool-history tools array, prompt cache payload fields, usage parsing, retry policy, provider error diagnostics, basic reasoning/max-token/temperature/tool-choice options, and response parsing. Native callback-style live SSE transport, images, and full compat matrix are missing. |
 | `api/openai-completions.lazy.ts` | `LeanAgent.AI.Api.OpenAICompletions` | deferred | Lean does not need TS lazy import; dispatch boundary is explicit through `ProviderStreams`. |
@@ -278,9 +278,9 @@ Exit criteria:
 
 Deliver:
 
-- Runtime `Models` collection with provider registration, lookup, refresh no-op for static providers. Status: partial; simple dispatch exists, full dynamic/lazy behavior is missing.
+- Runtime `Models` collection with provider registration, lookup, refresh no-op for static providers. Status: partial; simple dispatch and lazy setup/load error streams exist, full dynamic provider behavior is missing.
 - Env API key auth, in-memory credential store, auth resolution. Status: partial; OAuth and persistent stores are missing.
-- `createProvider` for single API dispatch. Status: partial; API-map dispatch exists, but full mixed-provider parity is not complete.
+- `createProvider` for single API dispatch. Status: partial; API-map dispatch and lazy error stream behavior exist, but full mixed-provider parity is not complete.
 
 Exit criteria:
 
