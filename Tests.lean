@@ -3262,6 +3262,69 @@ def testValidationChecksSchemaBounds : IO Unit := do
   assertValidationFails booleanExclusiveNumberSchema (LeanAgent.Json.nat 2)
   assertValidationFails booleanExclusiveNumberSchema (LeanAgent.Json.nat 4)
 
+def testValidationChecksSchemaCombinatorsAndConst : IO Unit := do
+  let constSchema :=
+    LeanAgent.Json.obj
+      [ ("type", LeanAgent.Json.str "string")
+      , ("const", LeanAgent.Json.str "ok")
+      ]
+  assertValidationValue constSchema (LeanAgent.Json.str "ok") (LeanAgent.Json.str "ok")
+  assertValidationFails constSchema (LeanAgent.Json.str "no")
+  assertValidationFails (LeanAgent.Json.obj [("enum", LeanAgent.Json.arr #[])])
+    (LeanAgent.Json.str "anything")
+
+  let allOfSchema :=
+    LeanAgent.Json.obj
+      [ ("allOf"
+        , LeanAgent.Json.arr
+            #[ LeanAgent.Json.obj [("type", LeanAgent.Json.str "number")]
+             , LeanAgent.Json.obj [("minimum", LeanAgent.Json.nat 2)]
+             , LeanAgent.Json.obj [("maximum", LeanAgent.Json.nat 4)]
+             ])
+      ]
+  assertValidationValue allOfSchema (LeanAgent.Json.str "3") (LeanAgent.Json.nat 3)
+  assertValidationFails allOfSchema (LeanAgent.Json.nat 1)
+  assertValidationFails allOfSchema (LeanAgent.Json.nat 5)
+
+  let anyOfSchema :=
+    LeanAgent.Json.obj
+      [ ("anyOf"
+        , LeanAgent.Json.arr
+            #[ LeanAgent.Json.obj
+                [ ("type", LeanAgent.Json.str "string")
+                , ("minLength", LeanAgent.Json.nat 3)
+                ]
+             , LeanAgent.Json.obj
+                [ ("type", LeanAgent.Json.str "number")
+                , ("minimum", LeanAgent.Json.nat 10)
+                ]
+             ])
+      ]
+  assertValidationValue anyOfSchema (LeanAgent.Json.str "tool") (LeanAgent.Json.str "tool")
+  assertValidationValue anyOfSchema (LeanAgent.Json.nat 12) (LeanAgent.Json.nat 12)
+  assertValidationFails anyOfSchema (LeanAgent.Json.str "no")
+  assertValidationFails anyOfSchema (LeanAgent.Json.nat 4)
+
+  let oneOfSchema :=
+    LeanAgent.Json.obj
+      [ ("oneOf"
+        , LeanAgent.Json.arr
+            #[ LeanAgent.Json.obj [("const", LeanAgent.Json.str "left")]
+             , LeanAgent.Json.obj [("const", LeanAgent.Json.str "right")]
+             ])
+      ]
+  assertValidationValue oneOfSchema (LeanAgent.Json.str "left") (LeanAgent.Json.str "left")
+  assertValidationFails oneOfSchema (LeanAgent.Json.str "missing")
+  let ambiguousOneOfSchema :=
+    LeanAgent.Json.obj
+      [ ("oneOf"
+        , LeanAgent.Json.arr
+            #[ LeanAgent.Json.obj [("type", LeanAgent.Json.str "string")]
+             , LeanAgent.Json.obj [("minLength", LeanAgent.Json.nat 1)]
+             ])
+      ]
+  assertValidationFails ambiguousOneOfSchema (LeanAgent.Json.str "x")
+
 def testValidationToolLookupAndRequired : IO Unit := do
   let tool : LeanAgent.AI.Tool :=
     { name := "read"
@@ -7931,6 +7994,7 @@ def main : IO UInt32 := do
     testValidationCoercesPlainJsonSchemas
     testValidationRejectsInvalidCoercions
     testValidationChecksSchemaBounds
+    testValidationChecksSchemaCombinatorsAndConst
     testValidationToolLookupAndRequired
     testSanitizeUnicodeSurrogates
     testOverflowClassifiesProviderErrors

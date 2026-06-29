@@ -222,7 +222,7 @@ should be generated or checked in as Lean data.
 | `utils/retry.ts` | `LeanAgent.AI.Util.Retry` | partial | Retryable assistant/provider error classification, non-retryable quota guard, delay cap, and OpenAI-compatible request retry policy exist. Full Pi regex coverage and cross-provider retry integration are incomplete. |
 | `utils/sanitize-unicode.ts` | `LeanAgent.AI.Util.SanitizeUnicode` | partial | Lean string sanitizer preserves valid Unicode, and a UTF-16 code-unit helper removes unpaired high/low surrogates while preserving valid pairs. Provider serialization integration is not wired yet. |
 | `utils/typebox-helpers.ts` | `LeanAgent.AI.Schema` | implemented | Pi's provider-compatible `StringEnum` helper is exposed as `stringEnum`, including optional description/default fields. |
-| `utils/validation.ts` | `LeanAgent.AI.Validation`, `LeanAgent.AI.Schema` | partial | Tool lookup, argument validation, JSON Schema primitive coercion, required/object/array/enum checks, string/array length bounds, numeric inclusive/exclusive bounds, and formatted validation errors exist. Full TypeBox compiler/AJV behavior, symbol metadata, combinators, regex patterns, and all JSON Schema keywords are incomplete. |
+| `utils/validation.ts` | `LeanAgent.AI.Validation`, `LeanAgent.AI.Schema` | partial | Tool lookup, argument validation, JSON Schema primitive coercion, required/object/array/enum/const checks, string/array length bounds, numeric inclusive/exclusive bounds, `allOf` validation/coercion, `anyOf`/`oneOf` validation, and formatted validation errors exist. Full TypeBox compiler/AJV behavior, symbol metadata, branch coercion for `anyOf`/`oneOf`, regex patterns, and all JSON Schema keywords are incomplete. |
 
 ## Images
 

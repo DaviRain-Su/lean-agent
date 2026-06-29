@@ -47,6 +47,11 @@ def enumValues (schema : Lean.Json) : List Lean.Json :=
   | some (Lean.Json.arr values) => values.toList
   | _ => []
 
+def enumValues? (schema : Lean.Json) : Option (List Lean.Json) :=
+  match LeanAgent.Json.optVal? schema "enum" with
+  | some (Lean.Json.arr values) => some values.toList
+  | _ => none
+
 def propertySchemas (schema : Lean.Json) : List (String × Lean.Json) :=
   match LeanAgent.Json.optVal? schema "properties" with
   | some properties => (objectEntries? properties).getD []
@@ -82,6 +87,17 @@ def numberKeyword? (schema : Lean.Json) (key : String) : Option Lean.JsonNumber 
   match LeanAgent.Json.optVal? schema key with
   | some (.num value) => some value
   | _ => none
+
+def schemaArray? (schema : Lean.Json) (key : String) : Option (Array Lean.Json) :=
+  match LeanAgent.Json.optVal? schema key with
+  | some (.arr values) =>
+      some (values.filter fun
+        | .obj _ => true
+        | _ => false)
+  | _ => none
+
+def constValue? (schema : Lean.Json) : Option Lean.Json :=
+  LeanAgent.Json.optVal? schema "const"
 
 def enumerateList {α : Type} (items : List α) : List (Nat × α) :=
   let rec loop : List α → Nat → List (Nat × α)
@@ -171,6 +187,10 @@ def matchesJsonType (value : Lean.Json) : String → Bool
   | _ => false
 
 partial def coerceWithJsonSchema (value : Lean.Json) (schema : Lean.Json) : Lean.Json :=
+  let value :=
+    match schemaArray? schema "allOf" with
+    | some schemas => schemas.foldl (fun current nested => coerceWithJsonSchema current nested) value
+    | none => value
   let schemaTypes := schemaTypes schema
   let matchesUnionMember :=
     schemaTypes.length > 1 && schemaTypes.any (matchesJsonType value)
@@ -225,6 +245,15 @@ def requiredIssue (path key : String) : ValidationIssue :=
 
 def enumIssue (path : String) : ValidationIssue :=
   { path := path, message := "expected one of enum values" }
+
+def constIssue (path : String) : ValidationIssue :=
+  { path := path, message := "expected const value" }
+
+def anyOfIssue (path : String) : ValidationIssue :=
+  { path := path, message := "expected to match at least one schema" }
+
+def oneOfIssue (path : String) : ValidationIssue :=
+  { path := path, message := "expected to match exactly one schema" }
 
 def minLengthIssue (path : String) (minLength : Nat) : ValidationIssue :=
   { path := path, message := s!"expected length >= {minLength}" }
@@ -323,11 +352,14 @@ partial def validateJsonAt (schema value : Lean.Json) (path : String := "root") 
     else
       [typeIssue path schemaTypes]
   let enumIssues :=
-    let values := enumValues schema
-    if values.isEmpty || values.any (fun enumValue => enumValue == value) then
-      []
-    else
-      [enumIssue path]
+    match enumValues? schema with
+    | some values =>
+        if values.any (fun enumValue => enumValue == value) then [] else [enumIssue path]
+    | none => []
+  let constIssues :=
+    match constValue? schema with
+    | some expected => if expected == value then [] else [constIssue path]
+    | none => []
   let scalarIssues :=
     match value with
     | .str text => stringBoundIssues schema text path
@@ -383,7 +415,28 @@ partial def validateJsonAt (schema value : Lean.Json) (path : String := "root") 
                   | none => []
         boundIssues ++ itemIssues
     | _ => []
-  typeIssues ++ enumIssues ++ scalarIssues ++ objectIssues ++ arrayIssues
+  let allOfIssues :=
+    match schemaArray? schema "allOf" with
+    | some schemas =>
+        schemas.toList.flatMap fun nested => validateJsonAt nested value path
+    | none => []
+  let anyOfIssues :=
+    match schemaArray? schema "anyOf" with
+    | some schemas =>
+        if schemas.any (fun nested => (validateJsonAt nested value path).isEmpty) then
+          []
+        else
+          [anyOfIssue path]
+    | none => []
+  let oneOfIssues :=
+    match schemaArray? schema "oneOf" with
+    | some schemas =>
+        let matchingSchemas :=
+          schemas.toList.filter fun nested => (validateJsonAt nested value path).isEmpty
+        if matchingSchemas.length == 1 then [] else [oneOfIssue path]
+    | none => []
+  typeIssues ++ enumIssues ++ constIssues ++ scalarIssues ++ objectIssues ++ arrayIssues ++
+    allOfIssues ++ anyOfIssues ++ oneOfIssues
 
 def validateJson (schema value : Lean.Json) : Except (List ValidationIssue) Lean.Json :=
   let coerced := coerceWithJsonSchema value schema
