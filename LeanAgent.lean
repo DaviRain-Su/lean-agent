@@ -8,6 +8,7 @@ import LeanAgent.AI.Validation
 import LeanAgent.AI.Util.Diagnostics
 import LeanAgent.AI.Util.Estimate
 import LeanAgent.AI.Util.Hash
+import LeanAgent.AI.Util.Headers
 import LeanAgent.AI.Util.JsonParse
 import LeanAgent.AI.Util.Overflow
 import LeanAgent.AI.Util.ProviderEnv

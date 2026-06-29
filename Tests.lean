@@ -604,6 +604,21 @@ def testProxyRejectsUnsupportedProtocol : IO Unit := do
       pure true
   assertTrue failed "expected unsupported proxy protocol to fail"
 
+def testHeadersUtilities : IO Unit := do
+  let merged := LeanAgent.AI.Util.Headers.merge
+    #[("Authorization", "Bearer base"), ("X-Trace", "base")]
+    #[("authorization", "Bearer override"), ("X-New", "new")]
+  assertTrue (merged == #[("X-Trace", "base"), ("authorization", "Bearer override"), ("X-New", "new")])
+    "expected case-insensitive override preserving override name"
+  let providerHeaders :=
+    LeanAgent.AI.Util.Headers.providerHeadersToArray
+      #[("X-A", some "a"), ("X-B", none), ("X-C", some "c")]
+  assertTrue (providerHeaders == #[("X-A", "a"), ("X-C", "c")])
+    "expected none provider headers to be omitted"
+  assertTrue
+    (LeanAgent.AI.Util.Headers.providerHeadersToArray? #[("X-B", none)] == none)
+    "expected empty provider headers to produce none"
+
 def testJsonParseRepairsMalformedStrings : IO Unit := do
   let raw := "{\"text\":\"hello\nworld\",\"path\":\"abc\\q\"}"
   match LeanAgent.AI.Util.JsonParse.parseJsonWithRepair raw with
@@ -1585,6 +1600,7 @@ def main : IO UInt32 := do
     testProxyEnvResolution
     testProxyNoProxyMatching
     testProxyRejectsUnsupportedProtocol
+    testHeadersUtilities
     testJsonParseRepairsMalformedStrings
     testJsonParseStreamingPartialObject
     testSchemaStringEnum

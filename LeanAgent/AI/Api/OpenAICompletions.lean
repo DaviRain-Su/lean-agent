@@ -3,6 +3,7 @@ import LeanAgent.AI.Api.OpenAIPromptCache
 import LeanAgent.AI.EventStream
 import LeanAgent.AI.Types
 import LeanAgent.AI.Util.Diagnostics
+import LeanAgent.AI.Util.Headers
 import LeanAgent.AI.Util.JsonParse
 import LeanAgent.AI.Util.Retry
 import LeanAgent.AI.Util.SSE
@@ -219,20 +220,6 @@ def requestToStreamingJsonWithOptions
        ++ promptCacheFields baseUrl options
        ++ requestToolFields request options)
 
-def headerNameEq (a b : String) : Bool :=
-  a.toLower == b.toLower
-
-def mergeHeaders (base override : Array (String × String)) : Array (String × String) :=
-  let withoutOverridden := base.filter fun (name, _) =>
-    override.all fun (overrideName, _) => !headerNameEq name overrideName
-  withoutOverridden ++ override
-
-def optionHeaders (headers : Array (String × Option String)) : Array (String × String) :=
-  headers.filterMap fun (name, value) =>
-    match value with
-    | some value => some (name, value)
-    | none => none
-
 def runHttpJson
     (config : OpenAICompatibleConfig)
     (payload : Lean.Json)
@@ -240,7 +227,7 @@ def runHttpJson
   let response ← LeanAgent.Http.postJsonResponse
     { url := chatCompletionsUrl config.baseUrl
       apiKey := config.apiKey
-      headers := mergeHeaders config.headers headers
+      headers := LeanAgent.AI.Util.Headers.merge config.headers headers
       timeoutSeconds := config.timeoutSeconds
       connectTimeoutSeconds := config.connectTimeoutSeconds
       maxResponseBytes := config.maxResponseBytes
@@ -686,7 +673,8 @@ def completeWithOptions
   (options : OpenAICompletionsOptions := {}) : IO LeanAgent.ProviderResponse := do
   let payload := requestToJsonWithOptions request options config.baseUrl
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
-  let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy (runHttpJson config payload (optionHeaders options.headers))
+  let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
+    (runHttpJson config payload (LeanAgent.AI.Util.Headers.providerHeadersToArray options.headers))
   match parseChatCompletion raw with
   | .ok response => pure response
   | .error err => throw (IO.userError s!"failed to parse provider response: {err}\n{raw}")
@@ -698,7 +686,8 @@ def streamWithOptions
     (options : OpenAICompletionsOptions := {}) : IO LeanAgent.AI.AssistantMessageEventStream := do
   let payload := requestToStreamingJsonWithOptions request options config.baseUrl
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
-  let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy (runHttpJson config payload (optionHeaders options.headers))
+  let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
+    (runHttpJson config payload (LeanAgent.AI.Util.Headers.providerHeadersToArray options.headers))
   let timestamp ← IO.monoMsNow
   match parseStreamingEventStream api providerId request.model timestamp raw with
   | .ok stream => pure stream
