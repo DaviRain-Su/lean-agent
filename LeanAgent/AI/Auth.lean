@@ -432,6 +432,12 @@ def InMemoryCredentialStore.mk : IO CredentialStore := do
 
 namespace FileCredentialStore
 
+def lockPath (path : System.FilePath) : System.FilePath :=
+  System.FilePath.mk (path.toString ++ ".lock")
+
+def tempPath (path : System.FilePath) (suffix : Nat) : System.FilePath :=
+  System.FilePath.mk (path.toString ++ s!".tmp-{suffix}")
+
 def entriesToJson (entries : Array (String × Credential)) : Lean.Json :=
   LeanAgent.Json.obj (entries.toList.map fun (providerId, credential) =>
     (providerId, credentialToJson credential))
@@ -459,7 +465,17 @@ def writeEntries (path : System.FilePath) (entries : Array (String × Credential
   match path.parent with
   | some parent => IO.FS.createDirAll parent
   | none => pure ()
-  IO.FS.writeFile path (entriesToJson entries).pretty
+  let temporary := tempPath path (← IO.monoMsNow)
+  try
+    IO.FS.writeFile temporary (entriesToJson entries).pretty
+    IO.FS.rename temporary path
+  catch err =>
+    if ← temporary.pathExists then
+      try
+        IO.FS.removeFile temporary
+      catch _ =>
+        pure ()
+    throw err
 
 def readProvider (path : System.FilePath) (providerId : String) : IO (Option Credential) := do
   let entries ← readEntries path
@@ -474,26 +490,64 @@ def deleteProvider (path : System.FilePath) (providerId : String) : IO Unit := d
   let entries ← readEntries path
   writeEntries path (entries.filter fun (id, _) => id != providerId)
 
+partial def acquireCrossProcessLock
+    (path : System.FilePath)
+    (attempt : Nat := 0)
+    (maxAttempts : Nat := 400)
+    (sleepMs : UInt32 := 25) : IO Unit := do
+  try
+    IO.FS.createDir path
+  catch err =>
+    if ← path.pathExists then
+      if attempt >= maxAttempts then
+        throw (IO.userError s!"timed out waiting for credential store lock {path}")
+      else
+        IO.sleep sleepMs
+        acquireCrossProcessLock path (attempt + 1) maxAttempts sleepMs
+    else
+      throw err
+
+def releaseCrossProcessLock (path : System.FilePath) : IO Unit := do
+  if ← path.pathExists then
+    IO.FS.removeDir path
+
+def withCrossProcessLock (path : System.FilePath) (action : IO α) : IO α := do
+  match (lockPath path).parent with
+  | some parent => IO.FS.createDirAll parent
+  | none => pure ()
+  let lock := lockPath path
+  acquireCrossProcessLock lock
+  try
+    action
+  finally
+    try
+      releaseCrossProcessLock lock
+    catch _ =>
+      pure ()
+
 def mk (path : System.FilePath) : IO CredentialStore :=
   do
     let lock ← Std.Mutex.new ()
     pure
       { read := fun providerId =>
           lock.atomically fun _ =>
-            readProvider path providerId
+            withCrossProcessLock path do
+              readProvider path providerId
         modify := fun providerId fn =>
           lock.atomically fun _ => do
-            let current ← readProvider path providerId
-            let next ← fn current
-            match next with
-            | some credential => writeProvider path providerId credential
-            | none => pure ()
-            match next with
-            | some credential => pure (some credential)
-            | none => pure current
+            withCrossProcessLock path do
+              let current ← readProvider path providerId
+              let next ← fn current
+              match next with
+              | some credential => writeProvider path providerId credential
+              | none => pure ()
+              match next with
+              | some credential => pure (some credential)
+              | none => pure current
         delete := fun providerId =>
           lock.atomically fun _ =>
-            deleteProvider path providerId
+            withCrossProcessLock path do
+              deleteProvider path providerId
       }
 
 end FileCredentialStore

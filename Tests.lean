@@ -5334,6 +5334,62 @@ def testFileCredentialStoreOAuthRoundTrip : IO Unit :=
           "expected reloaded OAuth extra field"
     | _ => fail "expected reloaded OAuth credential"
 
+def testFileCredentialStoreWaitsForExternalLock : IO Unit :=
+  IO.FS.withTempDir fun root => do
+    let path := root / "auth.json"
+    let lockPath := LeanAgent.AI.Auth.FileCredentialStore.lockPath path
+    match lockPath.parent with
+    | some parent => IO.FS.createDirAll parent
+    | none => pure ()
+    let releaseScript := String.intercalate "\n"
+      [ "import os"
+      , "import sys"
+      , "import time"
+      , "path = sys.argv[1]"
+      , "os.mkdir(path)"
+      , "time.sleep(0.35)"
+      , "os.rmdir(path)"
+      ]
+    let child ← IO.Process.spawn
+      { cmd := "python3"
+        args := #["-c", releaseScript, lockPath.toString]
+        stdin := .null
+        stdout := .null
+        stderr := .inherit
+      }
+    let store ← LeanAgent.AI.Auth.FileCredentialStore.mk path
+    try
+      let mut lockReady := false
+      for _ in [0:100] do
+        if !lockReady then
+          if ← lockPath.pathExists then
+            lockReady := true
+          else
+            IO.sleep 10
+      if !lockReady then
+        throw (IO.userError "external lock helper did not create lock directory")
+      let start ← IO.monoMsNow
+      let _ ← store.modify "fake" fun _ =>
+        pure (some (.apiKey { key := some "locked-secret" }))
+      let elapsed := (← IO.monoMsNow) - start
+      let exitCode ← child.wait
+      assertTrue (exitCode == 0) "expected external lock helper to exit cleanly"
+      assertTrue (elapsed >= 250) "expected file credential store to wait for external lock release"
+      match ← store.read "fake" with
+      | some (.apiKey credential) =>
+          assertTrue (credential.key == some "locked-secret") "expected locked write to persist"
+      | _ => fail "expected locked file credential write to succeed"
+    catch err =>
+      try
+        child.kill
+      catch _ =>
+        pure ()
+      try
+        discard child.wait
+      catch _ =>
+        pure ()
+      throw err
+
 def testModelsAuthFileCredentialStore : IO Unit :=
   IO.FS.withTempDir fun root => do
     let store ← LeanAgent.AI.Auth.FileCredentialStore.mk (root / "auth.json")
@@ -11508,6 +11564,7 @@ def main : IO UInt32 := do
     testFileCredentialStoreRoundTrip
     testFileCredentialStoreRejectsUnsupportedCredentialType
     testFileCredentialStoreOAuthRoundTrip
+    testFileCredentialStoreWaitsForExternalLock
     testModelsAuthFileCredentialStore
     testModelsAuthOAuthValidCredential
     testModelsAuthOAuthExpiredCredentialRefreshes
