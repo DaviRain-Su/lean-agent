@@ -1,6 +1,7 @@
 import Lean
 import LeanAgent.AI.Api.OpenAIPromptCache
 import LeanAgent.AI.Types
+import LeanAgent.AI.Util.Retry
 import LeanAgent.Core
 import LeanAgent.Http
 import LeanAgent.Json
@@ -29,6 +30,24 @@ structure OpenAICompletionsOptions extends LeanAgent.AI.SimpleStreamOptions wher
   toolChoice : Option ToolChoice := none
   reasoningEffort : Option LeanAgent.AI.ThinkingLevel := none
 deriving BEq
+
+def optionsFromSimple (options : LeanAgent.AI.SimpleStreamOptions) : OpenAICompletionsOptions :=
+  { temperature := options.temperature
+    maxTokens := options.maxTokens
+    apiKey := options.apiKey
+    transport := options.transport
+    cacheRetention := options.cacheRetention
+    sessionId := options.sessionId
+    headers := options.headers
+    timeoutMs := options.timeoutMs
+    websocketConnectTimeoutMs := options.websocketConnectTimeoutMs
+    maxRetries := options.maxRetries
+    maxRetryDelayMs := options.maxRetryDelayMs
+    metadata := options.metadata
+    env := options.env
+    reasoning := options.reasoning
+    thinkingBudgets := options.thinkingBudgets
+  }
 
 def chatCompletionsUrl (baseUrl : String) : String :=
   if baseUrl.endsWith "/chat/completions" then
@@ -252,9 +271,10 @@ def parseChatCompletion (raw : String) : Except String LeanAgent.ProviderRespons
 def completeWithOptions
     (config : OpenAICompatibleConfig)
     (request : ProviderRequest)
-    (options : OpenAICompletionsOptions := {}) : IO LeanAgent.ProviderResponse := do
+  (options : OpenAICompletionsOptions := {}) : IO LeanAgent.ProviderResponse := do
   let payload := requestToJsonWithOptions request options config.baseUrl
-  let raw ← runHttpJson config payload
+  let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
+  let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy (runHttpJson config payload)
   match parseChatCompletion raw with
   | .ok response => pure response
   | .error err => throw (IO.userError s!"failed to parse provider response: {err}\n{raw}")

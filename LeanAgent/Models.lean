@@ -558,12 +558,17 @@ def openAICompatibleStreams : ProviderStreams :=
       match options.apiKey with
       | none => throw (modelsError .auth s!"missing API key for provider {model.provider}")
       | some apiKey =>
-          let provider := LeanAgent.AI.Api.OpenAICompletions.provider
+          let config : LeanAgent.AI.Api.OpenAICompletions.OpenAICompatibleConfig :=
             { apiKey := apiKey
               baseUrl := model.baseUrl
             }
           let request := contextToProviderRequest model context
-          LeanAgent.AI.streamLegacyProvider provider request model.api model.provider
+          let response ← LeanAgent.AI.Api.OpenAICompletions.completeWithOptions
+            config
+            request
+            (LeanAgent.AI.Api.OpenAICompletions.optionsFromSimple options)
+          let timestamp ← IO.monoMsNow
+          pure (LeanAgent.AI.streamFromLegacyProviderResponse model.api model.provider model.id timestamp response)
   }
 
 def authForProviderInfo (info : ProviderInfo) : LeanAgent.AI.Auth.ProviderAuth :=

@@ -3,6 +3,7 @@ import LeanAgent.AI.Api.OpenAICompletions
 import LeanAgent.AI.Api.OpenAIPromptCache
 import LeanAgent.AI.EventStream
 import LeanAgent.AI.Types
+import LeanAgent.AI.Util.Retry
 import LeanAgent.CodingTools
 import LeanAgent.Core
 import LeanAgent.Http

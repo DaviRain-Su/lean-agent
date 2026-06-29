@@ -344,6 +344,59 @@ def testOpenAICompletionsPromptCacheEnvLongRetention : IO Unit := do
     (LeanAgent.Json.optVal? json "prompt_cache_retention" == some (LeanAgent.Json.str "24h"))
     "expected env 24h prompt cache retention"
 
+def retryAssistantMessage (errorMessage : Option String) : LeanAgent.AI.AssistantMessage :=
+  { content := #[]
+    api := "fake"
+    provider := "fake"
+    model := "fake"
+    stopReason := .error
+    errorMessage := errorMessage
+    timestamp := 0
+  }
+
+def testRetryClassifiesAssistantErrors : IO Unit := do
+  assertTrue
+    (LeanAgent.AI.Util.Retry.isRetryableAssistantError
+      (retryAssistantMessage (some "You can retry your request later.")))
+    "expected explicit retry guidance to be retryable"
+  assertTrue
+    (!LeanAgent.AI.Util.Retry.isRetryableAssistantError
+      (retryAssistantMessage (some "429 quota exceeded")))
+    "expected quota exhaustion to be non-retryable"
+  let nonError := { retryAssistantMessage (some "overloaded") with stopReason := .stop }
+  assertTrue
+    (!LeanAgent.AI.Util.Retry.isRetryableAssistantError nonError)
+    "expected non-error assistant message to be non-retryable"
+
+def testRetryWithRetriesSucceedsAfterTransientFailures : IO Unit := do
+  let attempts ← IO.mkRef 0
+  let value ← LeanAgent.AI.Util.Retry.withRetries
+    { maxRetries := 2, maxRetryDelayMs := 0 }
+    (do
+      let current ← attempts.get
+      attempts.set (current + 1)
+      if current < 2 then
+        throw (IO.userError "provider HTTP 503: service unavailable")
+      else
+        pure "ok")
+  assertTrue (value == "ok") "expected retry result"
+  assertTrue ((← attempts.get) == 3) "expected initial attempt plus two retries"
+
+def testRetryWithRetriesStopsOnNonRetryableFailure : IO Unit := do
+  let attempts ← IO.mkRef 0
+  let failed ←
+    try
+      LeanAgent.AI.Util.Retry.withRetries (α := Unit)
+        { maxRetries := 2, maxRetryDelayMs := 0 }
+        (do
+          attempts.modify (· + 1)
+          throw (IO.userError "provider HTTP 429: quota exceeded"))
+      pure false
+    catch _ =>
+      pure true
+  assertTrue failed "expected non-retryable failure"
+  assertTrue ((← attempts.get) == 1) "expected no retry for quota exhaustion"
+
 def testModelCatalogDeepSeekDefaults : IO Unit := do
   let catalog := LeanAgent.Models.defaultCatalog
   match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.deepSeekApiKeyEnv with
@@ -705,9 +758,23 @@ def httpServerScript : String :=
     , "import sys"
     , "from http.server import BaseHTTPRequestHandler, HTTPServer"
     , "class Handler(BaseHTTPRequestHandler):"
+    , "    retry_count = 0"
     , "    def do_POST(self):"
     , "        length = int(self.headers.get('Content-Length', '0'))"
     , "        body = self.rfile.read(length).decode('utf-8')"
+    , "        if self.path == '/retry-openai/chat/completions':"
+    , "            Handler.retry_count += 1"
+    , "            if Handler.retry_count == 1:"
+    , "                payload = json.dumps({'error': {'message': 'service unavailable'}}).encode('utf-8')"
+    , "                self.send_response(503)"
+    , "            else:"
+    , "                payload = json.dumps({'choices': [{'message': {'content': 'retried'}, 'finish_reason': 'stop'}]}).encode('utf-8')"
+    , "                self.send_response(200)"
+    , "            self.send_header('Content-Type', 'application/json')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/large':"
     , "            payload = b'x' * 1024"
     , "            self.send_response(200)"
@@ -821,6 +888,23 @@ def testHttpClientResponseLimit : IO Unit := do
         pure true
     assertTrue failed "expected large response to fail"
 
+def testOpenAICompletionsRetriesTransientHttpFailure : IO Unit := do
+  let port := 18082
+  withHttpServer port do
+    let response ← LeanAgent.AI.Api.OpenAICompletions.completeWithOptions
+      { apiKey := "test-key"
+        baseUrl := s!"http://127.0.0.1:{port}/retry-openai"
+        timeoutSeconds := 5
+        connectTimeoutSeconds := 5
+        noProxy := some "*"
+        userAgent := "lean-agent-test/0.1.0"
+      }
+      (basicProviderRequest)
+      { maxRetries := some 1
+        maxRetryDelayMs := some 0
+      }
+    assertTrue (response.content == "retried") "expected retried provider response"
+
 def main : IO UInt32 := do
   try
     testAgentLoopReadsFile
@@ -842,6 +926,9 @@ def main : IO UInt32 := do
     testOpenAICompletionsPromptCacheClampsKey
     testOpenAICompletionsPromptCacheNoneOmitsFields
     testOpenAICompletionsPromptCacheEnvLongRetention
+    testRetryClassifiesAssistantErrors
+    testRetryWithRetriesSucceedsAfterTransientFailures
+    testRetryWithRetriesStopsOnNonRetryableFailure
     testModelCatalogDeepSeekDefaults
     testOpenAICompatibleProviderFamilyCatalog
     testDefaultModelsRegistersOpenAICompatibleFamily
@@ -861,6 +948,7 @@ def main : IO UInt32 := do
     testJsonEventShape
     testHttpClientLocalPost
     testHttpClientResponseLimit
+    testOpenAICompletionsRetriesTransientHttpFailure
     IO.println "lean-agent tests passed"
     pure 0
   catch err =>
