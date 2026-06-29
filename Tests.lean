@@ -553,6 +553,32 @@ def testProviderEnvValueResolution : IO Unit := do
   let merged := LeanAgent.AI.Util.ProviderEnv.merge #[("A", "base"), ("B", "base")] #[("B", "override"), ("C", "new")]
   assertTrue (merged == #[("A", "base"), ("B", "override"), ("C", "new")]) "expected env merge override"
 
+def testJsonParseRepairsMalformedStrings : IO Unit := do
+  let raw := "{\"text\":\"hello\nworld\",\"path\":\"abc\\q\"}"
+  match LeanAgent.AI.Util.JsonParse.parseJsonWithRepair raw with
+  | .ok json =>
+      assertTrue
+        (LeanAgent.Json.optVal? json "text" == some (LeanAgent.Json.str "hello\nworld"))
+        "expected raw newline to be escaped and parsed"
+      assertTrue
+        (LeanAgent.Json.optVal? json "path" == some (LeanAgent.Json.str "abc\\q"))
+        "expected invalid escape to be preserved as a literal backslash"
+  | .error err => fail s!"expected repaired JSON parse success: {err}"
+
+def testJsonParseStreamingPartialObject : IO Unit := do
+  let parsed := LeanAgent.AI.Util.JsonParse.parseStreamingJson "{\"path\":\"README"
+  assertTrue
+    (LeanAgent.Json.optVal? parsed "path" == some (LeanAgent.Json.str "README"))
+    "expected partial string object to be closed"
+  let empty := LeanAgent.AI.Util.JsonParse.parseStreamingJson? none
+  assertTrue (empty == LeanAgent.Json.obj []) "expected missing partial JSON to produce empty object"
+  match LeanAgent.AI.Api.OpenAICompletions.parseToolArguments "{\"path\":\"abc\\q\"}" with
+  | .ok args =>
+      assertTrue
+        (LeanAgent.Json.optVal? args "path" == some (LeanAgent.Json.str "abc\\q"))
+        "expected repaired tool arguments"
+  | .error err => fail s!"expected repaired tool arguments: {err}"
+
 def overflowAssistantMessage
     (stopReason : LeanAgent.AI.StopReason)
     (errorMessage : Option String := none)
@@ -1357,6 +1383,8 @@ def main : IO UInt32 := do
     testEstimateUtilities
     testEstimateContextUsesRecentAssistantUsage
     testProviderEnvValueResolution
+    testJsonParseRepairsMalformedStrings
+    testJsonParseStreamingPartialObject
     testOverflowClassifiesProviderErrors
     testOverflowClassifiesContextWindowSignals
     testRetryClassifiesAssistantErrors

@@ -3,6 +3,7 @@ import LeanAgent.AI.Api.OpenAIPromptCache
 import LeanAgent.AI.EventStream
 import LeanAgent.AI.Types
 import LeanAgent.AI.Util.Diagnostics
+import LeanAgent.AI.Util.JsonParse
 import LeanAgent.AI.Util.Retry
 import LeanAgent.AI.Util.SSE
 import LeanAgent.Core
@@ -259,8 +260,10 @@ def parseMaybeContent (message : Lean.Json) : String :=
 def parseToolArguments (raw : String) : Except String Lean.Json :=
   if raw.trimAscii.isEmpty then
     pure (LeanAgent.Json.obj [])
-  else
-    LeanAgent.Json.parseObjectString raw
+  else do
+    let parsed ← LeanAgent.AI.Util.JsonParse.parseJsonWithRepair raw
+    let _ ← parsed.getObj?
+    pure parsed
 
 def parseToolCall (json : Lean.Json) : Except String LeanAgent.ToolCall := do
   let id ← (← json.getObjVal? "id").getStr?
@@ -390,12 +393,7 @@ def upsertToolState (states : Array StreamingToolState) (next : StreamingToolSta
     states.push next
 
 def partialArgumentsJson (raw : String) : Lean.Json :=
-  if raw.trimAscii.isEmpty then
-    LeanAgent.Json.obj []
-  else
-    match Lean.Json.parse raw with
-    | .ok json => json
-    | .error _ => LeanAgent.Json.obj []
+  LeanAgent.AI.Util.JsonParse.parseStreamingJson raw
 
 def toolCallFromStatePartial (state : StreamingToolState) : LeanAgent.AI.ToolCall :=
   { id := state.id
