@@ -1,4 +1,5 @@
 import LeanAgent.AI.EnvApiKeys
+import LeanAgent.AI.Images.Models
 import LeanAgent.AI.Providers.Faux
 import LeanAgent.AI.Providers.All
 import LeanAgent.Models
@@ -134,6 +135,56 @@ def getModel (providerId modelId : String) : IO LeanAgent.Models.ModelInfo := do
   match getModel? providerId modelId with
   | some model => pure model
   | none => throw (IO.userError s!"Unknown built-in model: {providerId}/{modelId}")
+
+def registerImagesApiProvider
+    (provider : LeanAgent.AI.Images.ImagesApiProvider)
+    (sourceId : Option String := none) : IO Unit :=
+  LeanAgent.AI.Images.registerImagesApiProvider provider sourceId
+
+def getImagesApiProvider? (api : LeanAgent.AI.ImagesApi) :
+    IO (Option LeanAgent.AI.Images.ImagesApiProvider) :=
+  LeanAgent.AI.Images.getImagesApiProvider? api
+
+def getImagesApiProviders : IO (Array LeanAgent.AI.Images.ImagesApiProvider) :=
+  LeanAgent.AI.Images.getImagesApiProviders
+
+def unregisterImagesApiProviders (sourceId : String) : IO Unit :=
+  LeanAgent.AI.Images.unregisterImagesApiProviders sourceId
+
+def clearImagesApiProviders : IO Unit :=
+  LeanAgent.AI.Images.clearImagesApiProviders
+
+def resetImagesApiProviders : IO Unit :=
+  LeanAgent.AI.Images.resetImagesApiProviders
+
+def generateImagesWithApi
+    (api : LeanAgent.AI.ImagesApi)
+    (model : LeanAgent.AI.ImagesModel)
+    (context : LeanAgent.AI.ImagesContext)
+    (options : LeanAgent.AI.ImagesOptions := {}) :
+    IO LeanAgent.AI.AssistantImages :=
+  LeanAgent.AI.Images.generateImagesWithApi api model context options
+
+def generateImages
+    (model : LeanAgent.AI.ImagesModel)
+    (context : LeanAgent.AI.ImagesContext)
+    (options : LeanAgent.AI.ImagesOptions := {}) :
+    IO LeanAgent.AI.AssistantImages :=
+  LeanAgent.AI.Images.generateImages model context options
+
+def getImageProviders : Array String :=
+  LeanAgent.AI.Images.Models.getImageProviders
+
+def getImageModels (providerId : String) : Array LeanAgent.AI.ImagesModel :=
+  LeanAgent.AI.Images.Models.getImageModels providerId
+
+def getImageModel? (providerId modelId : String) : Option LeanAgent.AI.ImagesModel :=
+  LeanAgent.AI.Images.Models.getImageModel? providerId modelId
+
+def getImageModel (providerId modelId : String) : IO LeanAgent.AI.ImagesModel := do
+  match getImageModel? providerId modelId with
+  | some model => pure model
+  | none => throw (IO.userError s!"Unknown built-in image model: {providerId}/{modelId}")
 
 def providerEnvApiKey? (model : LeanAgent.Models.ModelInfo) (env : LeanAgent.AI.Auth.ProviderEnv) :
     IO (Option String) :=

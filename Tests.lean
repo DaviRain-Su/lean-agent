@@ -5257,6 +5257,66 @@ def testImagesApiRegistryMissingProviderReturnsError : IO Unit := do
   assertTrue failed "missing image provider should fail"
   LeanAgent.AI.Images.resetImagesApiProviders
 
+def testCompatImageEntrypointsDispatchAndCatalog : IO Unit := do
+  LeanAgent.AI.Compat.resetImagesApiProviders
+  let seenPrompt ← IO.mkRef ""
+  LeanAgent.AI.Compat.registerImagesApiProvider
+    { api := fakeImagesModel.api
+      generateImages := fun model context options => do
+        seenPrompt.set (LeanAgent.AI.contentPlainText context.input)
+        let timestamp ← IO.monoMsNow
+        pure
+          { api := model.api
+            provider := model.provider
+            model := model.id
+            output :=
+              #[ LeanAgent.AI.text ((options.apiKey.getD "missing-key") ++ ":compat-image")
+               , LeanAgent.AI.image "QUJD" "image/png"
+               ]
+            timestamp := timestamp
+          }
+    }
+    (some "compat-images-test")
+  match ← LeanAgent.AI.Compat.getImagesApiProvider? fakeImagesModel.api with
+  | some provider => assertTrue (provider.api == fakeImagesModel.api) "expected compat image provider lookup"
+  | none => fail "expected compat image provider"
+  let result ← LeanAgent.AI.Compat.generateImages
+    fakeImagesModel
+    { input := #[LeanAgent.AI.text "draw via compat"] }
+    { apiKey := some "compat-key" }
+  assertTrue (LeanAgent.AI.contentPlainText result.output == "compat-key:compat-image")
+    "expected compat image generation output"
+  assertTrue (result.output.size == 2) "expected compat image output blocks"
+  assertTrue ((← seenPrompt.get) == "draw via compat") "expected compat image context passthrough"
+  assertTrue
+    (LeanAgent.AI.Compat.getImageProviders.contains LeanAgent.AI.Images.Models.openRouterProviderId)
+    "expected compat image provider catalog passthrough"
+  match LeanAgent.AI.Compat.getImageModel?
+      LeanAgent.AI.Images.Models.openRouterProviderId
+      "google/gemini-2.5-flash-image" with
+  | some model =>
+      assertTrue (model.api == LeanAgent.AI.Api.OpenRouterImages.api)
+        "expected compat image model api"
+      assertTrue (model.output == #["image", "text"]) "expected compat image model metadata"
+  | none => fail "expected compat image model lookup"
+  let imageModel ← LeanAgent.AI.Compat.getImageModel
+    LeanAgent.AI.Images.Models.openRouterProviderId
+    "openrouter/auto"
+  assertTrue (imageModel.name == "Auto Router") "expected compat image getImageModel"
+  LeanAgent.AI.Compat.unregisterImagesApiProviders "compat-images-test"
+  assertTrue ((← LeanAgent.AI.Compat.getImagesApiProvider? fakeImagesModel.api).isNone)
+    "expected compat image unregister"
+  let failed ←
+    try
+      let _ ← LeanAgent.AI.Compat.getImageModel "missing-images" "missing-model"
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains "Unknown built-in image model")
+        "expected compat missing image model error"
+      pure true
+  assertTrue failed "expected compat missing image model to fail"
+  LeanAgent.AI.Compat.resetImagesApiProviders
+
 def testImagesBuiltInRegistryRestoresOpenRouter : IO Unit := do
   LeanAgent.AI.Images.resetImagesApiProviders
   assertTrue
@@ -7863,6 +7923,7 @@ def main : IO UInt32 := do
     testCompatApiRegistryDispatchesAndUnregisters
     testImagesApiRegistryDispatchesAndUnregisters
     testImagesApiRegistryMissingProviderReturnsError
+    testCompatImageEntrypointsDispatchAndCatalog
     testImagesBuiltInRegistryRestoresOpenRouter
     testImageModelCatalogOpenRouter
     testImagesCollectionProviderCrudAndRefresh
