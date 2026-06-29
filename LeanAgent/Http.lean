@@ -26,19 +26,94 @@ structure JsonPostConfig where
 
 structure JsonPostResponse where
   status : Nat
+  headers : Array (String × String) := #[]
   body : String
 
-def parseStatusEnvelope (raw : String) : Except String JsonPostResponse :=
+def envelopeMagic : String := "LAHTTP2\n"
+
+def splitFirstLine? (raw : String) : Option (String × String) :=
   match raw.splitOn "\n" with
-  | [] => throw "HTTP response envelope was empty"
-  | statusLine :: bodyParts =>
-      match statusLine.toNat? with
-      | none => throw s!"invalid HTTP status in response envelope: {statusLine}"
-      | some status =>
-          pure
-            { status := status
-              body := String.intercalate "\n" bodyParts
-            }
+  | [] => none
+  | line :: rest => some (line, String.intercalate "\n" rest)
+
+def takeChars (raw : String) (count : Nat) : String :=
+  String.ofList (raw.toList.take count)
+
+def dropChars (raw : String) (count : Nat) : String :=
+  String.ofList (raw.toList.drop count)
+
+def stripTrailingCR (line : String) : String :=
+  match line.toList.reverse with
+  | '\r' :: rest => String.ofList rest.reverse
+  | _ => line
+
+def parseHeaderLine? (rawLine : String) : Option (String × String) :=
+  let line := stripTrailingCR rawLine
+  if line.isEmpty || line.startsWith "HTTP/" then
+    none
+  else
+    match line.splitOn ":" with
+    | [] => none
+    | _ :: [] => none
+    | name :: valueParts =>
+        let name := name.trimAscii.toString.toLower
+        if name.isEmpty then
+          none
+        else
+          some (name, (String.intercalate ":" valueParts).trimAscii.toString)
+
+def insertHeader (headers : Array (String × String)) (header : String × String) :
+    Array (String × String) :=
+  (headers.filter fun (name, _) => name != header.fst).push header
+
+def parseRawHeaders (rawHeaders : String) : Array (String × String) :=
+  rawHeaders.splitOn "\n" |>.foldl
+    (fun headers line =>
+      match parseHeaderLine? line with
+      | some header => insertHeader headers header
+      | none => headers)
+    #[]
+
+def parseLegacyEnvelope (raw : String) : Except String JsonPostResponse := do
+  let (statusLine, body) ←
+    match splitFirstLine? raw with
+    | some value => pure value
+    | none => throw "HTTP response envelope was empty"
+  let status ←
+    match statusLine.toNat? with
+    | some status => pure status
+    | none => throw s!"invalid HTTP status in response envelope: {statusLine}"
+  pure { status := status, body := body }
+
+def parseVersionedEnvelope (raw : String) : Except String JsonPostResponse := do
+  let raw := (raw.drop envelopeMagic.length).toString
+  let (statusLine, rest) ←
+    match splitFirstLine? raw with
+    | some value => pure value
+    | none => throw "HTTP response envelope was missing status"
+  let status ←
+    match statusLine.toNat? with
+    | some status => pure status
+    | none => throw s!"invalid HTTP status in response envelope: {statusLine}"
+  let (headerLengthLine, rest) ←
+    match splitFirstLine? rest with
+    | some value => pure value
+    | none => throw "HTTP response envelope was missing header length"
+  let headerLength ←
+    match headerLengthLine.toNat? with
+    | some length => pure length
+    | none => throw s!"invalid HTTP header length in response envelope: {headerLengthLine}"
+  if rest.length < headerLength then
+    throw "HTTP response envelope header block was truncated"
+  let rawHeaders := takeChars rest headerLength
+  let body := dropChars rest headerLength
+  pure { status := status, headers := parseRawHeaders rawHeaders, body := body }
+
+def parseStatusEnvelope (raw : String) : Except String JsonPostResponse :=
+  if raw.startsWith envelopeMagic then
+    parseVersionedEnvelope raw
+  else
+    parseLegacyEnvelope raw
 
 def headerHasLineBreak (value : String) : Bool :=
   value.contains "\n" || value.contains "\r"

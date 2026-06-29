@@ -22,7 +22,7 @@ Every row must move through this ledger before it is considered complete.
 
 | Pi area | Lean modules | Status | Notes |
 | --- | --- | --- | --- |
-| HTTP transport | `LeanAgent.Http` | partial | Native libcurl JSON POST and custom request headers exist. Streaming, retry hooks, proxy helpers, and response headers are missing. |
+| HTTP transport | `LeanAgent.Http` | partial | Native libcurl JSON POST, custom request headers, and parsed response headers exist. Streaming callbacks, retry hooks, and proxy helpers are missing. |
 | OpenAI-compatible chat completions | `LeanAgent.AI.Api.OpenAICompletions`, `LeanAgent.OpenAI` | partial | Protocol logic now lives under `AI.Api`; legacy `LeanAgent.OpenAI` is a compatibility wrapper. Non-streaming Chat Completions, streaming request path through `streamSimple`, SSE chunk parsing, text/thinking/tool delta event reconstruction, tool calls, empty-tools omission, tool history handling, basic option/header serialization, prompt cache payload fields, usage parsing, retry policy, and provider error diagnostics exist. Native callback-style live streaming transport, images, and Responses API are missing. |
 | Static model catalog | `LeanAgent.Models` | partial | Starter catalog covers DeepSeek, OpenAI fallback, OpenRouter, Groq, xAI, Cerebras, Together, and Fireworks representative OpenAI-compatible models. Generated full catalog and dynamic refresh are missing. |
 | Provider/model collection | `LeanAgent.Models` | partial | Runtime provider collection now supports registration, lookup, refresh hooks, auth application, simple stream/complete dispatch, and default registration for the starter OpenAI-compatible provider family. OpenAI-compatible `streamSimple` uses the streaming request path but still buffers the response before returning events. Full generated catalog, dynamic providers, and callback-style live streaming are missing. |
@@ -92,7 +92,7 @@ before expanding provider behavior.
 | Tool schema and tool call content | `LeanAgent.AI.Types` | partial | Tool call exists, but schema validation/typebox parity is missing. |
 | Assistant stream events | `LeanAgent.AI.Types`, `LeanAgent.AI.EventStream`, `LeanAgent.AI.Util.SSE`, `LeanAgent.Loop` | partial | Event data types, stream/result container, SSE parser, OpenAI streaming response parser, and agent-loop bridge exist. Async iteration and native callback-style live provider streaming are still missing. |
 | Usage and cost | `LeanAgent.AI.Types`, `LeanAgent.Core`, `LeanAgent.AI.Api.OpenAICompletions` | partial | Usage/cost types, JSON helpers, legacy provider usage bridge, and OpenAI-compatible token parsing exist. Model-price cost calculation is not wired into provider responses. |
-| Stop reasons and errors | `LeanAgent.AI.Types`, `LeanAgent.AI.Util.Diagnostics` | partial | Stop reason types, assistant diagnostics, and provider error extraction exist. Transport response headers/stacks are not captured yet. |
+| Stop reasons and errors | `LeanAgent.AI.Types`, `LeanAgent.AI.Util.Diagnostics`, `LeanAgent.Http` | partial | Stop reason types, assistant diagnostics, provider error extraction, and transport response header capture exist. Error stacks and provider `onResponse`/diagnostic header surfacing are incomplete. |
 | Thinking/reasoning levels | `LeanAgent.AI.Types` | partial | Thinking level types exist. Model thinking-level maps/helpers still missing. |
 | Simple stream options | `LeanAgent.AI.Types` | partial | Core option fields exist. Callback/abort semantics and provider-specific options are missing. |
 
@@ -206,11 +206,11 @@ should be generated or checked in as Lean data.
 | Pi source | Lean target | Status | Notes |
 | --- | --- | --- | --- |
 | `utils/abort-signals.ts` | `LeanAgent.AI.Util.Abort` | missing | Lean cancellation model needs separate design. |
-| `utils/diagnostics.ts` | `LeanAgent.AI.Util.Diagnostics` | partial | Diagnostic error info, assistant message diagnostics, append helper, and provider error body extraction exist. Exact JS thrown-value/stack behavior and response-header diagnostics are incomplete. |
+| `utils/diagnostics.ts` | `LeanAgent.AI.Util.Diagnostics`, `LeanAgent.Http` | partial | Diagnostic error info, assistant message diagnostics, append helper, provider error body extraction, and response header capture exist. Exact JS thrown-value/stack behavior and assistant-level response-header diagnostics are incomplete. |
 | `utils/estimate.ts` | `LeanAgent.AI.Util.Estimate` | missing | Token estimation. |
 | `utils/event-stream.ts` | `LeanAgent.AI.EventStream`, `LeanAgent.AI.Util.SSE`, `LeanAgent.Loop` | partial | Synchronous event/result container, buffered SSE response parsing, legacy provider wrapper, and loop consumption bridge exist. Async iteration/backpressure and live transport callbacks are not implemented. |
 | `utils/hash.ts` | `LeanAgent.AI.Util.Hash` | missing | Stable hashing for cache/session affinity. |
-| `utils/headers.ts` | `LeanAgent.Http`, `LeanAgent.AI.Api.OpenAICompletions` | partial | Custom request headers and basic override behavior exist. Response header conversion and dedicated header utility module are missing. |
+| `utils/headers.ts` | `LeanAgent.Http`, `LeanAgent.AI.Api.OpenAICompletions` | partial | Custom request headers, basic override behavior, and response header parsing exist. Dedicated header utility module and full provider callback integration are missing. |
 | `utils/json-parse.ts` | `LeanAgent.Json` or `LeanAgent.AI.Util.JsonParse` | partial | Basic JSON helpers exist, partial JSON cleanup missing. |
 | `utils/node-http-proxy.ts` | `LeanAgent.AI.Util.Proxy` | missing | Proxy detection/config. |
 | `utils/overflow.ts` | `LeanAgent.AI.Util.Overflow` | missing | Context window overflow detection. |
@@ -241,7 +241,7 @@ Initial Lean parity should port tests in this order:
 | `models-runtime.test.ts`, `providers.test.ts`, `supports-xhigh.test.ts`, `xhigh.test.ts` | model catalog and thinking tests | partial | Protects provider/model registry. |
 | `env-api-keys.test.ts`, `compat-env.test.ts` | auth/env tests | partial | Env API-key and stored credential precedence are covered. Full provider env map and compat env tests are missing. |
 | `stream.test.ts`, `empty.test.ts`, `abort.test.ts` | event stream tests | missing | Establishes stream contract. |
-| `openai-completions-*.test.ts` | OpenAI completions tests | partial | Payload tests cover empty tools, tool history, tool choice, max tokens, temperature, reasoning effort, prompt cache key/retention, streaming payload/SSE parsing, buffered streaming runtime dispatch, header forwarding, usage parsing, provider HTTP diagnostics, and legacy assistant tool-call omission. Network provider matrix and true live-stream timing tests are missing. |
+| `openai-completions-*.test.ts` | OpenAI completions tests | partial | Payload tests cover empty tools, tool history, tool choice, max tokens, temperature, reasoning effort, prompt cache key/retention, streaming payload/SSE parsing, buffered streaming runtime dispatch, request/response headers, usage parsing, provider HTTP diagnostics, and legacy assistant tool-call omission. Network provider matrix and true live-stream timing tests are missing. |
 | `retry.test.ts`, `diagnostics.test.ts`, `overflow.test.ts`, `validation.test.ts`, `unicode-surrogate.test.ts` | util tests | partial | Retry classifier/policy, diagnostics extraction/round-trip, and OpenAI transient HTTP retry are covered. Overflow, validation, and unicode surrogate tests are missing. |
 | `faux-provider.test.ts` | faux provider tests | missing | Needed for deterministic agent tests. |
 | `images*.test.ts`, `openrouter-images.test.ts` | image tests | missing | Separate image phase. |
@@ -292,7 +292,7 @@ Exit criteria:
 Deliver:
 
 - Refactor `LeanAgent.OpenAI` into `LeanAgent.AI.Api.OpenAICompletions`. Status: implemented structurally; `LeanAgent.OpenAI` is now a compatibility wrapper.
-- Add prompt cache fields, retry, response diagnostics, tool choice behavior, empty tools behavior. Status: partial; prompt cache payload fields, retry policy, basic provider diagnostics, tool choice, and empty-tools behavior exist. Full response diagnostics are incomplete because transport headers/live stream diagnostics are missing.
+- Add prompt cache fields, retry, response diagnostics, tool choice behavior, empty tools behavior. Status: partial; prompt cache payload fields, retry policy, basic provider diagnostics, response header capture, tool choice, and empty-tools behavior exist. Full response diagnostics are incomplete because provider callbacks/live stream diagnostics are missing.
 - Add provider factories for DeepSeek, OpenAI, OpenRouter, Groq, xAI, Cerebras, Together, Fireworks where they share OpenAI-compatible protocol. Status: partial; default runtime catalog has representative OpenAI-compatible models for each, but provider modules and full generated catalogs are missing.
 
 Exit criteria:

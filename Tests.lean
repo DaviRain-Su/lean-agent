@@ -8,6 +8,10 @@ def fail (message : String) : IO Unit :=
 def assertTrue (condition : Bool) (message : String) : IO Unit :=
   if condition then pure () else fail message
 
+def headerValue? (headers : Array (String × String)) (name : String) : Option String :=
+  headers.findSome? fun (headerName, value) =>
+    if headerName == name.toLower then some value else none
+
 def silentSink : EventSink :=
   fun _ => pure ()
 
@@ -973,6 +977,7 @@ def httpServerScript : String :=
     , "        }).encode('utf-8')"
     , "        self.send_response(201)"
     , "        self.send_header('Content-Type', 'application/json')"
+    , "        self.send_header('X-Test-Response', 'yes')"
     , "        self.send_header('Content-Length', str(len(payload)))"
     , "        self.end_headers()"
     , "        self.wfile.write(payload)"
@@ -1044,6 +1049,23 @@ def localHttpConfig (port : Nat) (path : String) (maxResponseBytes : UInt64 := 4
     userAgent := "lean-agent-test/0.1.0"
   }
 
+def testHttpEnvelopeParsing : IO Unit := do
+  match LeanAgent.Http.parseStatusEnvelope "201\nlegacy body\nsecond line" with
+  | .ok response =>
+      assertTrue (response.status == 201) "expected legacy status"
+      assertTrue response.headers.isEmpty "expected no legacy headers"
+      assertTrue (response.body == "legacy body\nsecond line") "expected legacy body"
+  | .error err => fail s!"legacy envelope parse failed: {err}"
+  let rawHeaders := "HTTP/1.1 202 Accepted\r\nX-Foo: bar\r\nContent-Type: application/json\r\n\r\n"
+  let raw := LeanAgent.Http.envelopeMagic ++ "202\n" ++ toString rawHeaders.length ++ "\n" ++ rawHeaders ++ "{\"ok\":true}"
+  match LeanAgent.Http.parseStatusEnvelope raw with
+  | .ok response =>
+      assertTrue (response.status == 202) "expected versioned status"
+      assertTrue (headerValue? response.headers "x-foo" == some "bar") "expected parsed header"
+      assertTrue (headerValue? response.headers "content-type" == some "application/json") "expected content type header"
+      assertTrue (response.body == "{\"ok\":true}") "expected versioned body"
+  | .error err => fail s!"versioned envelope parse failed: {err}"
+
 def testHttpClientLocalPost : IO Unit := do
   let port := 18080
   withHttpServer port do
@@ -1055,6 +1077,8 @@ def testHttpClientLocalPost : IO Unit := do
     assertTrue (response.body.contains "\"body\": \"{\\\"ping\\\":true}\"") "expected response body to include request payload"
     assertTrue (response.body.contains "\"auth\": \"Bearer test-key\"") "expected authorization header"
     assertTrue (response.body.contains "\"ua\": \"lean-agent-test/0.1.0\"") "expected user agent header"
+    assertTrue (headerValue? response.headers "x-test-response" == some "yes") "expected response header"
+    assertTrue (headerValue? response.headers "content-type" == some "application/json") "expected content-type header"
 
 def testHttpClientCustomHeaders : IO Unit := do
   let port := 18084
@@ -1223,6 +1247,7 @@ def main : IO UInt32 := do
     testAgentSessionCreateAndContinue
     testAgentSessionRejectsAssistantContinue
     testJsonEventShape
+    testHttpEnvelopeParsing
     testHttpClientLocalPost
     testHttpClientCustomHeaders
     testHttpClientResponseLimit

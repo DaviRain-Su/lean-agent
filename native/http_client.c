@@ -13,6 +13,8 @@ struct response_buffer {
     int too_large;
 };
 
+#define MAX_RESPONSE_HEADER_BYTES 262144
+
 static size_t write_response(void *contents, size_t size, size_t nmemb, void *userp) {
     if (size != 0 && nmemb > SIZE_MAX / size) {
         struct response_buffer *buffer = (struct response_buffer *)userp;
@@ -42,6 +44,10 @@ static size_t write_response(void *contents, size_t size, size_t nmemb, void *us
     buffer->size += real_size;
     buffer->data[buffer->size] = 0;
     return real_size;
+}
+
+static size_t write_header(void *contents, size_t size, size_t nmemb, void *userp) {
+    return write_response(contents, size, nmemb, userp);
 }
 
 static lean_obj_res io_error(const char *message) {
@@ -226,6 +232,19 @@ lean_obj_res lean_agent_http_post_json(
         return io_error("failed to allocate response buffer");
     }
     response.data[0] = 0;
+
+    struct response_buffer response_headers;
+    response_headers.data = malloc(1);
+    response_headers.size = 0;
+    response_headers.limit = MAX_RESPONSE_HEADER_BYTES;
+    response_headers.too_large = 0;
+    if (response_headers.data == NULL) {
+        free(response.data);
+        curl_easy_cleanup(curl);
+        return io_error("failed to allocate response header buffer");
+    }
+    response_headers.data[0] = 0;
+
     char error_buffer[CURL_ERROR_SIZE];
     error_buffer[0] = 0;
 
@@ -273,6 +292,8 @@ lean_obj_res lean_agent_http_post_json(
     SETOPT_OR_GOTO(CURLOPT_POSTFIELDSIZE, (long)payload_len);
     SETOPT_OR_GOTO(CURLOPT_WRITEFUNCTION, write_response);
     SETOPT_OR_GOTO(CURLOPT_WRITEDATA, (void *)&response);
+    SETOPT_OR_GOTO(CURLOPT_HEADERFUNCTION, write_header);
+    SETOPT_OR_GOTO(CURLOPT_HEADERDATA, (void *)&response_headers);
     SETOPT_OR_GOTO(CURLOPT_TIMEOUT, (long)timeout_seconds);
     SETOPT_OR_GOTO(CURLOPT_CONNECTTIMEOUT, (long)connect_timeout_seconds);
     SETOPT_OR_GOTO(CURLOPT_FOLLOWLOCATION, 0L);
@@ -288,6 +309,8 @@ lean_obj_res lean_agent_http_post_json(
     if (code != CURLE_OK) {
         if (response.too_large) {
             result = io_errorf_u64("HTTP response exceeded maxResponseBytes", max_response_bytes);
+        } else if (response_headers.too_large) {
+            result = io_errorf_u64("HTTP response headers exceeded maxHeaderBytes", MAX_RESPONSE_HEADER_BYTES);
         } else {
             const char *detail = error_buffer[0] == 0 ? curl_easy_strerror(code) : error_buffer;
             result = io_errorf("HTTP request failed", detail);
@@ -302,25 +325,42 @@ lean_obj_res lean_agent_http_post_json(
         goto cleanup;
     }
 
-    char status_prefix[32];
-    int prefix_len = snprintf(status_prefix, sizeof(status_prefix), "%ld\n", status_code);
-    if (prefix_len < 0 || (size_t)prefix_len >= sizeof(status_prefix)) {
+    const char *magic = "LAHTTP2\n";
+    size_t magic_len = strlen(magic);
+    char status_line[32];
+    int status_len = snprintf(status_line, sizeof(status_line), "%ld\n", status_code);
+    if (status_len < 0 || (size_t)status_len >= sizeof(status_line)) {
         result = io_error("failed to format HTTP status");
         goto cleanup;
     }
-    if (response.size > SIZE_MAX - (size_t)prefix_len - 1) {
+    char header_len_line[32];
+    int header_len_len = snprintf(header_len_line, sizeof(header_len_line), "%zu\n", response_headers.size);
+    if (header_len_len < 0 || (size_t)header_len_len >= sizeof(header_len_line)) {
+        result = io_error("failed to format HTTP header length");
+        goto cleanup;
+    }
+    if (response.size > SIZE_MAX - magic_len - (size_t)status_len - (size_t)header_len_len - response_headers.size - 1) {
         result = io_error("HTTP response envelope is too large");
         goto cleanup;
     }
 
-    size_t envelope_size = (size_t)prefix_len + response.size;
+    size_t envelope_size =
+        magic_len + (size_t)status_len + (size_t)header_len_len + response_headers.size + response.size;
     char *envelope = malloc(envelope_size + 1);
     if (envelope == NULL) {
         result = io_error("failed to allocate HTTP response envelope");
         goto cleanup;
     }
-    memcpy(envelope, status_prefix, (size_t)prefix_len);
-    memcpy(envelope + prefix_len, response.data, response.size);
+    size_t offset = 0;
+    memcpy(envelope + offset, magic, magic_len);
+    offset += magic_len;
+    memcpy(envelope + offset, status_line, (size_t)status_len);
+    offset += (size_t)status_len;
+    memcpy(envelope + offset, header_len_line, (size_t)header_len_len);
+    offset += (size_t)header_len_len;
+    memcpy(envelope + offset, response_headers.data, response_headers.size);
+    offset += response_headers.size;
+    memcpy(envelope + offset, response.data, response.size);
     envelope[envelope_size] = 0;
 
     lean_object *lean_response = lean_mk_string(envelope);
@@ -330,6 +370,7 @@ lean_obj_res lean_agent_http_post_json(
 cleanup:
     curl_slist_free_all(headers);
     free(auth_header);
+    free(response_headers.data);
     free(response.data);
     curl_easy_cleanup(curl);
     return result;
