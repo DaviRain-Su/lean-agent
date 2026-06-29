@@ -123,20 +123,31 @@ structure ModelRef where
   baseUrl : Option String := none
 deriving BEq
 
+structure UsageCost where
+  input : Float := 0.0
+  output : Float := 0.0
+  cacheRead : Float := 0.0
+  cacheWrite : Float := 0.0
+  total : Float := 0.0
+deriving Repr, BEq
+
 structure ImagesModel where
   id : String
   name : String
   api : ImagesApi
   provider : ImagesProviderId
-  baseUrl : Option String := none
+  baseUrl : String
+  input : Array String := #["text", "image"]
   output : Array String := #["image"]
+  cost : UsageCost := {}
+  headers : Array (String × String) := #[]
 deriving Repr, BEq
 
 def ImagesModel.toModelRef (model : ImagesModel) : ModelRef :=
   { id := model.id
     api := model.api
     provider := model.provider
-    baseUrl := model.baseUrl
+    baseUrl := some model.baseUrl
   }
 
 abbrev PayloadHook := Lean.Json → ModelRef → IO (Option Lean.Json)
@@ -222,14 +233,6 @@ inductive ContentBlock where
   | image (content : ImageContent)
   | toolCall (call : ToolCall)
 deriving BEq
-
-structure UsageCost where
-  input : Float := 0.0
-  output : Float := 0.0
-  cacheRead : Float := 0.0
-  cacheWrite : Float := 0.0
-  total : Float := 0.0
-deriving Repr, BEq
 
 structure Usage where
   input : Nat := 0

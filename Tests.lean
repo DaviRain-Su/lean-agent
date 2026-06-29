@@ -2044,7 +2044,7 @@ def fakeImagesModel : LeanAgent.AI.ImagesModel :=
     name := "Fake Image Model"
     provider := "fake-images"
     api := "fake-images-api"
-    baseUrl := some "https://images.example.test/v1"
+    baseUrl := "https://images.example.test/v1"
     output := #["text", "image"]
   }
 
@@ -2113,6 +2113,36 @@ def testImagesApiRegistryMissingProviderReturnsError : IO Unit := do
       pure true
   assertTrue failed "missing image provider should fail"
   LeanAgent.AI.Images.resetImagesApiProviders
+
+def testImagesBuiltInRegistryRestoresOpenRouter : IO Unit := do
+  LeanAgent.AI.Images.resetImagesApiProviders
+  assertTrue
+    ((← LeanAgent.AI.Images.getImagesApiProvider? LeanAgent.AI.Api.OpenRouterImages.api).isSome)
+    "expected reset to restore OpenRouter Images built-in"
+  LeanAgent.AI.Images.clearImagesApiProviders
+  assertTrue
+    ((← LeanAgent.AI.Images.getImagesApiProvider? LeanAgent.AI.Api.OpenRouterImages.api).isNone)
+    "expected clear to remove image providers"
+  LeanAgent.AI.Images.resetImagesApiProviders
+  assertTrue
+    ((← LeanAgent.AI.Images.getImagesApiProvider? LeanAgent.AI.Api.OpenRouterImages.api).isSome)
+    "expected reset to replay built-in image providers"
+
+def testImageModelCatalogOpenRouter : IO Unit := do
+  assertTrue
+    (LeanAgent.AI.Images.Models.getImageProviders == #[LeanAgent.AI.Images.Models.openRouterProviderId])
+    "expected OpenRouter image provider catalog"
+  let models := LeanAgent.AI.Images.Models.getImageModels "openrouter"
+  assertTrue (models.size >= 4) "expected starter OpenRouter image models"
+  match LeanAgent.AI.Images.Models.getImageModel? "openrouter" "google/gemini-2.5-flash-image" with
+  | some model =>
+      assertTrue (model.api == "openrouter-images") "expected OpenRouter Images api"
+      assertTrue (model.output == #["image", "text"]) "expected image/text output metadata"
+      assertTrue (model.cost.output == 2.5) "expected generated model cost metadata"
+  | none => fail "expected Gemini image model"
+  assertTrue
+    ((LeanAgent.AI.Images.Models.getImageModel? "missing" "google/gemini-2.5-flash-image").isNone)
+    "expected missing image provider lookup to be empty"
 
 def testCompatInjectsEnvApiKeyForKnownProviders : IO Unit := do
   LeanAgent.AI.Compat.resetApiProviders
@@ -2808,6 +2838,20 @@ def httpServerScript : String :=
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
     , "            return"
+    , "        if self.path == '/openrouter-images/chat/completions':"
+    , "            request = json.loads(body)"
+    , "            content = request.get('messages', [{}])[0].get('content', [])"
+    , "            first_type = content[0].get('type') if content else ''"
+    , "            second_url = content[1].get('image_url', {}).get('url') if len(content) > 1 else ''"
+    , "            text = '|'.join([request.get('model') or '', self.headers.get('Authorization') or '', self.headers.get('X-Trace') or '', ','.join(request.get('modalities') or []), first_type or '', second_url or ''])"
+    , "            payload = json.dumps({'id': 'img_resp', 'choices': [{'message': {'content': text, 'images': [{'image_url': 'data:image/png;base64,QUJD'}, {'image_url': {'url': 'data:image/jpeg;base64,REVGRw=='}}, {'image_url': 'https://ignored.example/image.png'}]}}], 'usage': {'prompt_tokens': 10, 'completion_tokens': 3, 'prompt_tokens_details': {'cached_tokens': 4, 'cache_write_tokens': 1}}}).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'application/json')"
+    , "            self.send_header('X-Hook-Response', 'openrouter-images')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/responses-runtime/responses':"
     , "            request = json.loads(body)"
     , "            ok = request.get('model') == 'gpt-5.5' and request.get('stream') is False and request.get('prompt_cache_key') == 'session-123'"
@@ -3208,6 +3252,118 @@ def testCloudflareAIGatewayOpenAICompatibleHeaderAuthLocal : IO Unit := do
       (LeanAgent.AI.contentPlainText message.content == "Bearer cf-env-key||gpt-4o-mini")
       "expected Cloudflare AI Gateway header-only auth through OpenAI-compatible runtime"
 
+def testOpenRouterImagesRequestPayload : IO Unit := do
+  let model :=
+    { LeanAgent.AI.Images.Models.gemini25FlashImage with
+      id := "image-payload-model"
+    }
+  let payload := LeanAgent.AI.Api.OpenRouterImages.requestToJson
+    model
+    { input :=
+        #[ LeanAgent.AI.text "draw"
+         , LeanAgent.AI.image "QUJD" "image/png"
+         ]
+    }
+  assertTrue ((LeanAgent.Json.optVal? payload "stream") == some (Lean.Json.bool false))
+    "expected non-streaming image request"
+  match LeanAgent.Json.optVal? payload "modalities" with
+  | some modalities =>
+      assertTrue (modalities == LeanAgent.Json.arr #[LeanAgent.Json.str "image", LeanAgent.Json.str "text"])
+        "expected image/text modalities"
+  | none => fail "expected modalities"
+  match (payload.getObjVal? "messages").bind Lean.Json.getArr? with
+  | .ok messages =>
+      match messages[0]? with
+      | some first =>
+          match (first.getObjVal? "content").bind Lean.Json.getArr? with
+          | .ok content =>
+              match content[0]?, content[1]? with
+              | some textPart, some imagePart =>
+                  match textPart.getObjVal? "type" with
+                  | .ok (Lean.Json.str "text") => pure ()
+                  | _ => fail "expected text input part"
+                  match imagePart.getObjVal? "type" with
+                  | .ok (Lean.Json.str "image_url") => pure ()
+                  | _ => fail "expected image input part"
+                  match (imagePart.getObjVal? "image_url").bind (fun imageUrl =>
+                      imageUrl.getObjVal? "url" >>= Lean.Json.getStr?) with
+                  | .ok imageUrl =>
+                      assertTrue (imageUrl == "data:image/png;base64,QUJD") "expected image data URL"
+                  | .error err => fail s!"expected image data URL: {err}"
+              | _, _ => fail "expected text and image content parts"
+          | .error err => fail s!"expected image content array: {err}"
+      | none => fail "expected first image message"
+  | .error err => fail s!"expected image messages array: {err}"
+
+def countImageBlocks (content : Array LeanAgent.AI.ContentBlock) : Nat :=
+  content.foldl
+    (fun total block =>
+      match block with
+      | .image _ => total + 1
+      | _ => total)
+    0
+
+def testOpenRouterImagesGenerateLocal : IO Unit := do
+  let port := 18097
+  withHttpServer port do
+    LeanAgent.AI.Images.resetImagesApiProviders
+    let responseStatus ← IO.mkRef 0
+    let responseHeader ← IO.mkRef ""
+    let model :=
+      { LeanAgent.AI.Images.Models.gemini25FlashImage with
+        id := "local-image-model"
+        baseUrl := s!"http://127.0.0.1:{port}/openrouter-images"
+        cost := { input := 1000000.0, output := 2000000.0, cacheRead := 3000000.0, cacheWrite := 4000000.0 }
+      }
+    let result ← LeanAgent.AI.Images.generateImages
+      model
+      { input :=
+          #[ LeanAgent.AI.text "draw a diagram"
+           , LeanAgent.AI.image "QUJD" "image/png"
+           ]
+      }
+      { apiKey := some "image-key"
+        headers := #[("X-Trace", some "image-trace")]
+        onResponse := some (fun response _model => do
+          responseStatus.set response.status
+          responseHeader.set ((headerValue? response.headers "x-hook-response").getD "")
+        )
+      }
+    assertTrue (result.stopReason == .stop) "expected OpenRouter Images success"
+    assertTrue (result.responseId == some "img_resp") "expected image response id"
+    assertTrue
+      (LeanAgent.AI.contentPlainText result.output ==
+        "local-image-model|Bearer image-key|image-trace|image,text|text|data:image/png;base64,QUJD")
+      "expected OpenRouter Images request fields to reach local server"
+    assertTrue (countImageBlocks result.output == 2) "expected data URL images to parse"
+    match result.output[1]?, result.output[2]? with
+    | some (LeanAgent.AI.ContentBlock.image first), some (LeanAgent.AI.ContentBlock.image second) =>
+        assertTrue (first.mimeType == "image/png" && first.data == "QUJD") "expected first parsed image"
+        assertTrue (second.mimeType == "image/jpeg" && second.data == "REVGRw==") "expected second parsed image"
+    | _, _ => fail "expected parsed image output blocks"
+    match result.usage with
+    | some usage =>
+        assertTrue (usage.input == 6) "expected input tokens after cache adjustment"
+        assertTrue (usage.output == 3) "expected output tokens"
+        assertTrue (usage.cacheRead == 3) "expected cache read tokens"
+        assertTrue (usage.cacheWrite == 1) "expected cache write tokens"
+        assertTrue (usage.totalTokens == 13) "expected total image usage tokens"
+        assertTrue (usage.cost.total == 25.0) "expected image usage cost"
+    | none => fail "expected OpenRouter Images usage"
+    assertTrue ((← responseStatus.get) == 200) "expected image response hook status"
+    assertTrue ((← responseHeader.get) == "openrouter-images") "expected image response hook headers"
+
+def testOpenRouterImagesMissingApiKeyReturnsError : IO Unit := do
+  let result ← LeanAgent.AI.Images.generateImages
+    LeanAgent.AI.Images.Models.gemini25FlashImage
+    { input := #[LeanAgent.AI.text "draw"] }
+  assertTrue (result.stopReason == .error) "expected missing OpenRouter image key error"
+  assertTrue
+    (match result.errorMessage with
+     | some message => message.contains "No API key for provider: openrouter"
+     | none => false)
+    "expected missing API key error message"
+
 def testOpenAIResponsesDispatchesThroughModelsCollection : IO Unit := do
   let port := 18095
   withHttpServer port do
@@ -3573,6 +3729,8 @@ def main : IO UInt32 := do
     testCompatApiRegistryDispatchesAndUnregisters
     testImagesApiRegistryDispatchesAndUnregisters
     testImagesApiRegistryMissingProviderReturnsError
+    testImagesBuiltInRegistryRestoresOpenRouter
+    testImageModelCatalogOpenRouter
     testCompatInjectsEnvApiKeyForKnownProviders
     testCompatInjectsEnvApiKeyForMappedProvidersOutsideCatalog
     testCompatMissingProviderReturnsError
@@ -3612,6 +3770,9 @@ def main : IO UInt32 := do
     testOpenAICompatibleStreamsApplyModelCost
     testOpenAICompatibleStreamsClampMaxTokens
     testCloudflareAIGatewayOpenAICompatibleHeaderAuthLocal
+    testOpenRouterImagesRequestPayload
+    testOpenRouterImagesGenerateLocal
+    testOpenRouterImagesMissingApiKeyReturnsError
     testOpenAIResponsesDispatchesThroughModelsCollection
     testOpenAIResponsesCompleteWithOptionsLocal
     testOpenAIResponsesPayloadAndResponseHooks

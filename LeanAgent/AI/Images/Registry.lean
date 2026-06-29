@@ -17,6 +17,7 @@ structure RegisteredImagesApiProvider where
   sourceId : Option String := none
 
 initialize imagesApiProviderRegistry : IO.Ref (Array RegisteredImagesApiProvider) ← IO.mkRef #[]
+initialize builtInImagesApiProviders : IO.Ref (Array ImagesApiProvider) ← IO.mkRef #[]
 
 def ensureApiMatches
     (api : LeanAgent.AI.ImagesApi)
@@ -44,6 +45,11 @@ def registerImagesApiProvider
     (providers.filter fun entry => entry.provider.api != provider.api).push
       { provider := wrappedProvider, sourceId := sourceId }
 
+def registerBuiltInImagesApiProvider (provider : ImagesApiProvider) : IO Unit := do
+  builtInImagesApiProviders.modify fun providers =>
+    (providers.filter fun entry => entry.api != provider.api).push provider
+  registerImagesApiProvider provider
+
 def getImagesApiProvider? (api : LeanAgent.AI.ImagesApi) :
     IO (Option ImagesApiProvider) := do
   let providers ← imagesApiProviderRegistry.get
@@ -61,8 +67,10 @@ def unregisterImagesApiProviders (sourceId : String) : IO Unit :=
 def clearImagesApiProviders : IO Unit :=
   imagesApiProviderRegistry.set #[]
 
-def registerBuiltInImagesApiProviders : IO Unit :=
-  pure ()
+def registerBuiltInImagesApiProviders : IO Unit := do
+  let providers ← builtInImagesApiProviders.get
+  for provider in providers do
+    registerImagesApiProvider provider
 
 def resetImagesApiProviders : IO Unit := do
   clearImagesApiProviders
