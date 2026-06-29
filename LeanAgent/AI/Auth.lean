@@ -128,6 +128,34 @@ structure OAuthAuth where
   refresh : OAuthCredential → IO OAuthCredential
   toAuth : OAuthCredential → IO ModelAuth
 
+structure LazyOAuthOptions where
+  name : String
+  load : IO OAuthAuth
+
+def lazyOAuth (input : LazyOAuthOptions) : IO OAuthAuth := do
+  let loaded ← IO.mkRef (none : Option OAuthAuth)
+  let loadOnce : IO OAuthAuth := do
+    match ← loaded.get with
+    | some oauth => pure oauth
+    | none =>
+        let oauth ← input.load
+        loaded.set (some oauth)
+        pure oauth
+  pure
+    { name := input.name
+      login := some do
+        let oauth ← loadOnce
+        match oauth.login with
+        | some login => login
+        | none => throw (IO.userError s!"OAuth login is not available for {input.name}")
+      refresh := fun credential => do
+        let oauth ← loadOnce
+        oauth.refresh credential
+      toAuth := fun credential => do
+        let oauth ← loadOnce
+        oauth.toAuth credential
+    }
+
 structure ProviderAuth where
   apiKey : Option ApiKeyAuth := none
   oauth : Option OAuthAuth := none

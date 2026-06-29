@@ -1770,6 +1770,49 @@ def fakeOAuthAuth (refreshCalls : IO.Ref Nat) : LeanAgent.AI.Auth.OAuthAuth :=
         }
   }
 
+def testLazyOAuthLoadsOnceAndDelegates : IO Unit := do
+  let loadCalls ← IO.mkRef 0
+  let loginCalls ← IO.mkRef 0
+  let refreshCalls ← IO.mkRef 0
+  let toAuthCalls ← IO.mkRef 0
+  let loaded : LeanAgent.AI.Auth.OAuthAuth :=
+    { name := "Loaded OAuth"
+      login := some do
+        loginCalls.modify (· + 1)
+        pure
+          { access := "login-token"
+            refresh := "login-refresh"
+            expires := 3000
+          }
+      refresh := fun credential => do
+        refreshCalls.modify (· + 1)
+        pure { credential with access := credential.access ++ "-refreshed" }
+      toAuth := fun credential => do
+        toAuthCalls.modify (· + 1)
+        pure { apiKey := some credential.access, baseUrl := some "https://lazy-oauth.test" }
+    }
+  let lazy ← LeanAgent.AI.Auth.lazyOAuth
+    { name := "Lazy OAuth"
+      load := do
+        loadCalls.modify (· + 1)
+        pure loaded
+    }
+  assertTrue (lazy.name == "Lazy OAuth") "expected lazy OAuth wrapper name"
+  let refreshed ← lazy.refresh { access := "old-token", refresh := "refresh-token", expires := 1 }
+  assertTrue (refreshed.access == "old-token-refreshed") "expected lazy OAuth refresh delegation"
+  let auth ← lazy.toAuth refreshed
+  assertTrue (auth.apiKey == some "old-token-refreshed") "expected lazy OAuth toAuth delegation"
+  assertTrue (auth.baseUrl == some "https://lazy-oauth.test") "expected lazy OAuth auth base URL"
+  match lazy.login with
+  | some login =>
+      let credential ← login
+      assertTrue (credential.access == "login-token") "expected lazy OAuth login delegation"
+  | none => fail "expected lazy OAuth login wrapper"
+  assertTrue ((← loadCalls.get) == 1) "expected lazy OAuth to load exactly once"
+  assertTrue ((← refreshCalls.get) == 1) "expected lazy OAuth refresh to run once"
+  assertTrue ((← toAuthCalls.get) == 1) "expected lazy OAuth toAuth to run once"
+  assertTrue ((← loginCalls.get) == 1) "expected lazy OAuth login to run once"
+
 def fakeCloudflareAuthContext : LeanAgent.AI.Auth.AuthContext :=
   { env := fun name =>
       pure
@@ -4440,6 +4483,7 @@ def main : IO UInt32 := do
     testModelsAuthOAuthValidCredential
     testModelsAuthOAuthExpiredCredentialRefreshes
     testModelsAuthOAuthCredentialOwnsProvider
+    testLazyOAuthLoadsOnceAndDelegates
     testOAuthProviderRegistryCrud
     testOAuthRefreshTokenDispatch
     testOAuthGetOAuthApiKey
