@@ -42,10 +42,21 @@ structure ProviderRequest where
   messages : Array AgentMessage
   tools : Array AgentTool
 
+structure ProviderUsage where
+  input : Nat := 0
+  output : Nat := 0
+  cacheRead : Nat := 0
+  cacheWrite : Nat := 0
+  cacheWrite1h : Option Nat := none
+  reasoning : Option Nat := none
+  totalTokens : Nat := 0
+deriving BEq
+
 structure ProviderResponse where
   content : String := ""
   toolCalls : Array ToolCall := #[]
   finishReason : Option String := none
+  usage : Option ProviderUsage := none
 
 structure ModelProvider where
   complete : ProviderRequest → IO ProviderResponse

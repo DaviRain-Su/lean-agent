@@ -87,6 +87,16 @@ def stopReasonFromLegacyFinish (finishReason : Option String) (hasToolCalls : Bo
   | some "aborted" => .aborted
   | _ => if hasToolCalls then .toolUse else .stop
 
+def usageFromLegacyProviderUsage (usage : LeanAgent.ProviderUsage) : Usage :=
+  { input := usage.input
+    output := usage.output
+    cacheRead := usage.cacheRead
+    cacheWrite := usage.cacheWrite
+    cacheWrite1h := usage.cacheWrite1h
+    reasoning := usage.reasoning
+    totalTokens := usage.totalTokens
+  }
+
 def fromLegacyProviderResponse
     (api provider model : String)
     (timestamp : Nat)
@@ -101,6 +111,7 @@ def fromLegacyProviderResponse
     api := api
     provider := provider
     model := model
+    usage := (response.usage.map usageFromLegacyProviderUsage).getD Usage.empty
     stopReason := stopReasonFromLegacyFinish response.finishReason (!response.toolCalls.isEmpty)
     timestamp := timestamp
   }

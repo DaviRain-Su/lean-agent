@@ -355,6 +355,24 @@ def testDiagnosticsExtractsProviderError : IO Unit := do
   assertTrue (rendered.contains "rate limit exceeded") "expected extracted provider message"
   assertTrue (rendered.contains "type=rate_limit_error") "expected extracted provider type"
 
+def testOpenAICompletionsParsesUsage : IO Unit := do
+  let raw :=
+    "{\"choices\":[{\"message\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":7,\"prompt_tokens_details\":{\"cached_tokens\":5,\"cache_write_tokens\":3},\"completion_tokens_details\":{\"reasoning_tokens\":2}}}"
+  match LeanAgent.AI.Api.OpenAICompletions.parseChatCompletion raw with
+  | .ok response =>
+      match response.usage with
+      | some usage =>
+          assertTrue (usage.input == 12) "expected uncached input tokens"
+          assertTrue (usage.output == 7) "expected output tokens"
+          assertTrue (usage.cacheRead == 5) "expected cache-read tokens"
+          assertTrue (usage.cacheWrite == 3) "expected cache-write tokens"
+          assertTrue (usage.reasoning == some 2) "expected reasoning tokens"
+          assertTrue (usage.totalTokens == 27) "expected total tokens"
+          let assistant := LeanAgent.AI.fromLegacyProviderResponse "openai-completions" "deepseek" "deepseek-v4-flash" 1 response
+          assertTrue (assistant.usage.totalTokens == 27) "expected usage to bridge into assistant message"
+      | none => fail "expected usage to parse"
+  | .error err => fail s!"expected usage parse success: {err}"
+
 def retryAssistantMessage (errorMessage : Option String) : LeanAgent.AI.AssistantMessage :=
   { content := #[]
     api := "fake"
@@ -982,6 +1000,7 @@ def main : IO UInt32 := do
     testOpenAICompletionsPromptCacheNoneOmitsFields
     testOpenAICompletionsPromptCacheEnvLongRetention
     testDiagnosticsExtractsProviderError
+    testOpenAICompletionsParsesUsage
     testRetryClassifiesAssistantErrors
     testRetryWithRetriesSucceedsAfterTransientFailures
     testRetryWithRetriesStopsOnNonRetryableFailure

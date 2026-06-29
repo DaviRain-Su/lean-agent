@@ -244,6 +244,53 @@ def parseToolCalls (message : Lean.Json) : Except String (Array LeanAgent.ToolCa
         calls := calls.push (← parseToolCall rawCall)
       pure calls
 
+def natFieldD (json : Lean.Json) (key : String) (default : Nat := 0) : Nat :=
+  match LeanAgent.Json.optVal? json key with
+  | some value =>
+      match value.getNat? with
+      | .ok number => number
+      | .error _ => default
+  | none => default
+
+def objField? (json : Lean.Json) (key : String) : Option Lean.Json :=
+  match LeanAgent.Json.optVal? json key with
+  | some value =>
+      match value.getObj? with
+      | .ok _ => some value
+      | .error _ => none
+  | none => none
+
+def parseUsage (rawUsage : Lean.Json) : LeanAgent.ProviderUsage :=
+  let promptTokens := natFieldD rawUsage "prompt_tokens"
+  let completionTokens := natFieldD rawUsage "completion_tokens"
+  let promptDetails := objField? rawUsage "prompt_tokens_details"
+  let completionDetails := objField? rawUsage "completion_tokens_details"
+  let cacheReadTokens :=
+    match promptDetails with
+    | some details => natFieldD details "cached_tokens" (natFieldD rawUsage "prompt_cache_hit_tokens")
+    | none => natFieldD rawUsage "prompt_cache_hit_tokens"
+  let cacheWriteTokens :=
+    match promptDetails with
+    | some details => natFieldD details "cache_write_tokens"
+    | none => 0
+  let reasoningTokens :=
+    match completionDetails with
+    | some details => natFieldD details "reasoning_tokens"
+    | none => 0
+  let inputTokens := promptTokens - cacheReadTokens - cacheWriteTokens
+  { input := inputTokens
+    output := completionTokens
+    cacheRead := cacheReadTokens
+    cacheWrite := cacheWriteTokens
+    reasoning := some reasoningTokens
+    totalTokens := inputTokens + completionTokens + cacheReadTokens + cacheWriteTokens
+  }
+
+def parseUsage? (json : Lean.Json) : Option LeanAgent.ProviderUsage :=
+  match LeanAgent.Json.optVal? json "usage" with
+  | some value => some (parseUsage value)
+  | none => none
+
 def parseChatCompletion (raw : String) : Except String LeanAgent.ProviderResponse := do
   let json ← Lean.Json.parse raw
   if (LeanAgent.Json.optVal? json "error").isSome then
@@ -263,6 +310,7 @@ def parseChatCompletion (raw : String) : Except String LeanAgent.ProviderRespons
     { content := parseMaybeContent message
       toolCalls := toolCalls
       finishReason := finishReason
+      usage := parseUsage? json
     }
 
 def completeWithOptions
