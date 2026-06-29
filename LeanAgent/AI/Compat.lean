@@ -1,3 +1,4 @@
+import LeanAgent.AI.EnvApiKeys
 import LeanAgent.Models
 
 namespace LeanAgent.AI.Compat
@@ -48,18 +49,8 @@ def resetApiProviders : IO Unit := do
 initialize registerBuiltIns : Unit ← registerBuiltInApiProviders
 
 def providerEnvApiKey? (model : LeanAgent.Models.ModelInfo) (env : LeanAgent.AI.Auth.ProviderEnv) :
-    IO (Option String) := do
-  match LeanAgent.Models.defaultCatalog.provider? model.provider with
-  | some provider =>
-      match LeanAgent.AI.Auth.providerEnvGet? env provider.apiKeyEnv with
-      | some value => pure (some value)
-      | none =>
-          match ← IO.getEnv provider.apiKeyEnv with
-          | some value =>
-              let trimmed := value.trimAscii.toString
-              pure (if trimmed.isEmpty then none else some trimmed)
-          | none => pure none
-  | none => pure none
+    IO (Option String) :=
+  LeanAgent.AI.EnvApiKeys.getEnvApiKey model.provider env
 
 def withEnvApiKey
     (model : LeanAgent.Models.ModelInfo)

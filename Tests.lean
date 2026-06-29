@@ -1663,6 +1663,65 @@ def testModelsAuthStoredCredentialWins : IO Unit := do
       assertTrue (result.source == some "stored credential") "expected stored credential source"
   | none => fail "expected auth result from stored credential"
 
+def testEnvApiKeysProviderMap : IO Unit := do
+  assertTrue
+    (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "github-copilot" == some #["COPILOT_GITHUB_TOKEN"])
+    "expected GitHub Copilot env var"
+  assertTrue
+    (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "zai-coding-cn" == some #["ZAI_CODING_CN_API_KEY"])
+    "expected ZAI Coding CN env var"
+  assertTrue
+    (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "unknown-provider" == none)
+    "expected unknown provider to have no env vars"
+  let keys ← LeanAgent.AI.EnvApiKeys.findEnvKeys
+    "zai-coding-cn"
+    #[("ZAI_CODING_CN_API_KEY", "zai-token")]
+  assertTrue (keys == some #["ZAI_CODING_CN_API_KEY"]) "expected configured ZAI key"
+  let apiKey ← LeanAgent.AI.EnvApiKeys.getEnvApiKey
+    "zai-coding-cn"
+    #[("ZAI_CODING_CN_API_KEY", "zai-token")]
+  assertTrue (apiKey == some "zai-token") "expected configured ZAI API key"
+  let missing ← LeanAgent.AI.EnvApiKeys.findEnvKeys "unknown-provider" #[]
+  assertTrue (missing == none) "expected stable missing provider result"
+
+def testEnvApiKeysPrefersAnthropicOAuthToken : IO Unit := do
+  assertTrue
+    (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "anthropic" ==
+      some #["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"])
+    "expected Anthropic OAuth token to be listed first"
+  let env :=
+    #[ ("ANTHROPIC_API_KEY", "api-token")
+     , ("ANTHROPIC_OAUTH_TOKEN", "oauth-token")
+     ]
+  let keys ← LeanAgent.AI.EnvApiKeys.findEnvKeys "anthropic" env
+  assertTrue
+    (keys == some #["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"])
+    "expected Anthropic configured keys in precedence order"
+  let apiKey ← LeanAgent.AI.EnvApiKeys.getEnvApiKey "anthropic" env
+  assertTrue (apiKey == some "oauth-token") "expected Anthropic OAuth token to win"
+
+def testEnvApiKeysAmbientAuthMarkers : IO Unit := do
+  let bedrockProfile ← LeanAgent.AI.EnvApiKeys.getEnvApiKey
+    "amazon-bedrock"
+    #[("AWS_PROFILE", "default")]
+  assertTrue (bedrockProfile == some "<authenticated>") "expected AWS profile ambient marker"
+  let bedrockPair ← LeanAgent.AI.EnvApiKeys.getEnvApiKey
+    "amazon-bedrock"
+    #[ ("AWS_ACCESS_KEY_ID", "access")
+     , ("AWS_SECRET_ACCESS_KEY", "secret")
+     ]
+  assertTrue (bedrockPair == some "<authenticated>") "expected AWS key-pair ambient marker"
+  IO.FS.withTempDir fun root => do
+    let credentialsPath := root / "application_default_credentials.json"
+    IO.FS.writeFile credentialsPath "{}"
+    let vertex ← LeanAgent.AI.EnvApiKeys.getEnvApiKey
+      "google-vertex"
+      #[ ("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath.toString)
+       , ("GOOGLE_CLOUD_PROJECT", "lean-agent-test")
+       , ("GOOGLE_CLOUD_LOCATION", "us-central1")
+       ]
+    assertTrue (vertex == some "<authenticated>") "expected Vertex ADC ambient marker"
+
 def fakeRuntimeModel : LeanAgent.Models.ModelInfo :=
   { id := "fake-model"
     name := "Fake Model"
@@ -1746,6 +1805,26 @@ def testCompatInjectsEnvApiKeyForKnownProviders : IO Unit := do
     { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 0 }] }
     { env := #[(LeanAgent.Models.openAIKeyEnv, "env-openai-key")] }
   assertTrue ((← seenApiKey.get) == some "env-openai-key") "expected compat env API key injection"
+  LeanAgent.AI.Compat.resetApiProviders
+
+def testCompatInjectsEnvApiKeyForMappedProvidersOutsideCatalog : IO Unit := do
+  LeanAgent.AI.Compat.resetApiProviders
+  let seenApiKey ← IO.mkRef (none : Option String)
+  LeanAgent.AI.Compat.registerApiProvider
+    { api := "anthropic-messages", streams := fakeRuntimeStreams seenApiKey }
+    (some "compat-anthropic-env")
+  let model :=
+    { fakeRuntimeModel with
+      id := "claude-sonnet"
+      provider := "anthropic"
+      api := "anthropic-messages"
+    }
+  let _ ← LeanAgent.AI.Compat.completeSimple
+    model
+    { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 0 }] }
+    { env := #[("ANTHROPIC_OAUTH_TOKEN", "oauth-token")] }
+  assertTrue ((← seenApiKey.get) == some "oauth-token")
+    "expected compat env API key injection outside default catalog"
   LeanAgent.AI.Compat.resetApiProviders
 
 def testCompatMissingProviderReturnsError : IO Unit := do
@@ -3046,9 +3125,13 @@ def main : IO UInt32 := do
     testDefaultModelsRegistersOpenAICompatibleFamily
     testModelsAuthEnvApiKeyResolution
     testModelsAuthStoredCredentialWins
+    testEnvApiKeysProviderMap
+    testEnvApiKeysPrefersAnthropicOAuthToken
+    testEnvApiKeysAmbientAuthMarkers
     testModelsCollectionDispatchesWithAuth
     testCompatApiRegistryDispatchesAndUnregisters
     testCompatInjectsEnvApiKeyForKnownProviders
+    testCompatInjectsEnvApiKeyForMappedProvidersOutsideCatalog
     testCompatMissingProviderReturnsError
     testCompatLegacyAliasesDispatchFixedApi
     testCompatLegacyAliasesRejectMismatchedApi
