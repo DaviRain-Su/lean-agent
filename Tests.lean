@@ -285,6 +285,65 @@ def testAIMessageLegacyConversion : IO Unit := do
       assertTrue (calls.size == 1) "expected tool call to convert back"
   | _ => fail "expected legacy assistant"
 
+def testAIEventStreamTextResult : IO Unit := do
+  let message : LeanAgent.AI.AssistantMessage :=
+    { content := #[LeanAgent.AI.text "hello"]
+      api := "openai-completions"
+      provider := "deepseek"
+      model := "deepseek-v4-flash"
+      stopReason := .stop
+      timestamp := 1
+    }
+  let stream := LeanAgent.AI.fromMessage message
+  assertTrue stream.isComplete "expected complete stream"
+  assertTrue (stream.result == message) "expected result to return final message"
+  assertTrue (stream.events.size == 5) "expected start, text start/delta/end, done"
+  match stream.events[0]?, stream.events[1]?, stream.events[2]?, stream.events[4]? with
+  | some (LeanAgent.AI.AssistantMessageEvent.start _),
+    some (LeanAgent.AI.AssistantMessageEvent.textStart 0 _),
+    some (LeanAgent.AI.AssistantMessageEvent.textDelta 0 "hello" _),
+    some (LeanAgent.AI.AssistantMessageEvent.done LeanAgent.AI.StopReason.stop result) =>
+      assertTrue (result == message) "expected done event to contain message"
+  | _, _, _, _ => fail "unexpected text event sequence"
+
+def testAIEventStreamToolUseResult : IO Unit := do
+  let response : ProviderResponse :=
+    { content := ""
+      toolCalls :=
+        #[{ id := "call-1"
+            name := "read"
+            arguments := LeanAgent.Json.obj [("path", LeanAgent.Json.str "README.md")]
+          }]
+      finishReason := some "tool_calls"
+    }
+  let stream := LeanAgent.AI.streamFromLegacyProviderResponse "openai-completions" "deepseek" "deepseek-v4-flash" 2 response
+  let result := stream.result
+  assertTrue (result.stopReason == .toolUse) "expected toolUse stop reason"
+  assertTrue ((LeanAgent.AI.contentToolCalls result.content).size == 1) "expected tool call in result"
+  assertTrue (stream.events.any (fun event =>
+    match event with
+    | .toolCallStart 0 _ => true
+    | _ => false)) "expected tool call start event"
+  match stream.events.back? with
+  | some (.done .toolUse message) =>
+      assertTrue (message == result) "expected done result"
+  | _ => fail "expected toolUse done event"
+
+def streamProvider : ModelProvider :=
+  { complete := fun _ => pure { content := "streamed", toolCalls := #[], finishReason := some "stop" } }
+
+def testAIEventStreamLegacyProviderWrapper : IO Unit := do
+  let request : ProviderRequest :=
+    { model := "fake-model"
+      system := "system"
+      messages := #[.user "hello"]
+      tools := #[]
+    }
+  let stream ← LeanAgent.AI.streamLegacyProvider streamProvider request "openai-completions" "test-provider"
+  assertTrue (stream.result.model == "fake-model") "expected request model on result"
+  assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "streamed") "expected provider content"
+  assertTrue stream.isComplete "expected wrapper stream to be complete"
+
 def continueProvider : ModelProvider :=
   { complete := fun _ => pure { content := "continued", toolCalls := #[] } }
 
@@ -473,6 +532,9 @@ def main : IO UInt32 := do
     testAIContentBlockJsonRoundTrip
     testAIMessageJsonRoundTrip
     testAIMessageLegacyConversion
+    testAIEventStreamTextResult
+    testAIEventStreamToolUseResult
+    testAIEventStreamLegacyProviderWrapper
     testAgentSessionCreateAndContinue
     testAgentSessionRejectsAssistantContinue
     testJsonEventShape
