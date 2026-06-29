@@ -188,6 +188,26 @@ structure SimpleStreamOptions extends StreamOptions where
   reasoning : Option ThinkingLevel := none
   thinkingBudgets : Option ThinkingBudgets := none
 
+def StreamOptions.toSimpleStreamOptions
+    (options : StreamOptions) : SimpleStreamOptions :=
+  { temperature := options.temperature
+    maxTokens := options.maxTokens
+    signal := options.signal
+    apiKey := options.apiKey
+    transport := options.transport
+    cacheRetention := options.cacheRetention
+    sessionId := options.sessionId
+    headers := options.headers
+    onPayload := options.onPayload
+    onResponse := options.onResponse
+    timeoutMs := options.timeoutMs
+    websocketConnectTimeoutMs := options.websocketConnectTimeoutMs
+    maxRetries := options.maxRetries
+    maxRetryDelayMs := options.maxRetryDelayMs
+    metadata := options.metadata
+    env := options.env
+  }
+
 structure TextSignatureV1 where
   id : String
   phase : Option String := none

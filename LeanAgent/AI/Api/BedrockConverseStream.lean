@@ -3,9 +3,15 @@ import LeanAgent.AI.Api.TransformMessages
 import LeanAgent.AI.Auth
 import LeanAgent.AI.EventStream
 import LeanAgent.AI.Types
+import LeanAgent.AI.Util.Abort
+import LeanAgent.AI.Util.Diagnostics
 import LeanAgent.AI.Util.Headers
+import LeanAgent.AI.Util.JsonParse
+import LeanAgent.AI.Util.Retry
 import LeanAgent.AI.Util.SanitizeUnicode
+import LeanAgent.Http
 import LeanAgent.Json
+import Std.Time
 
 namespace LeanAgent.AI.Api.BedrockConverseStream
 
@@ -18,8 +24,53 @@ def defaultBaseUrl : String := "https://bedrock-runtime.us-east-1.amazonaws.com"
 def dataRetentionDocsUrl : String :=
   "https://docs.aws.amazon.com/bedrock/latest/userguide/data-retention.html"
 
-def transportUnavailableMessage : String :=
-  "Bedrock Converse Stream transport requires AWS SigV4 signing and AWS event-stream support; Lean runtime transport is not implemented yet."
+def serviceName : String := "bedrock"
+
+@[extern "lean_agent_sha256_hex"]
+opaque sha256Hex (input : @& String) : IO String
+
+@[extern "lean_agent_hmac_sha256_hex"]
+opaque hmacSha256Hex (key message : @& String) : IO String
+
+@[extern "lean_agent_hmac_sha256_hex_key_hex"]
+opaque hmacSha256HexKeyHex (hexKey message : @& String) : IO String
+
+structure AwsCredentials where
+  accessKeyId : String
+  secretAccessKey : String
+  sessionToken : Option String := none
+deriving BEq
+
+structure RequestTimestamp where
+  amzDate : String
+  dateStamp : String
+deriving BEq
+
+inductive ResolvedAuthMode where
+  | skip
+  | bearer
+  | profile
+  | sigv4
+  | ambientChain
+deriving BEq
+
+structure ResolvedAuth where
+  mode : ResolvedAuthMode
+  credentials : Option AwsCredentials := none
+  bearerToken : Option String := none
+  profile : Option String := none
+  source : Option String := none
+deriving BEq
+
+structure PreparedRequest where
+  url : String
+  requestPath : String
+  region : String
+  timestamp : RequestTimestamp
+  auth : ResolvedAuth
+  headers : Array (String × String)
+  payload : Lean.Json
+deriving BEq
 
 structure BedrockConverseStreamConfig where
   baseUrl : String := defaultBaseUrl
@@ -74,6 +125,27 @@ def optionsFromSimple (options : LeanAgent.AI.SimpleStreamOptions) : BedrockOpti
     reasoning := options.reasoning
     thinkingBudgets := options.thinkingBudgets
   }
+
+def trimmedNonEmpty? : Option String → Option String
+  | some value =>
+      let trimmed := value.trimAscii.toString
+      if trimmed.isEmpty then none else some trimmed
+  | none => none
+
+def trimTrailingSlash (value : String) : String :=
+  if value.endsWith "/" then value.dropEnd 1 |>.toString else value
+
+def timestampAtMs (ms : Nat) : RequestTimestamp :=
+  let ts :=
+    Std.Time.Timestamp.ofMillisecondsSinceUnixEpoch
+      (Std.Time.Millisecond.Offset.ofNat ms)
+  let dt := Std.Time.DateTime.ofTimestamp ts .UTC
+  { amzDate := Std.Time.DateTime.format dt "uuuuMMdd'T'HHmmss'Z'"
+    dateStamp := Std.Time.DateTime.format dt "uuuuMMdd"
+  }
+
+def currentTimestamp : IO RequestTimestamp := do
+  pure (timestampAtMs (← LeanAgent.AI.Auth.epochMsNow))
 
 def sanitize (text : String) : String :=
   LeanAgent.AI.Util.SanitizeUnicode.sanitizeSurrogates text
@@ -377,6 +449,24 @@ def thinkingBudget
     (level : LeanAgent.AI.ThinkingLevel) : Nat :=
   LeanAgent.AI.Api.SimpleOptions.thinkingBudgetD customBudgets level
 
+def modelArnRegion? (modelId : String) : Option String :=
+  match modelId.splitOn ":" with
+  | "arn" :: partition :: "bedrock" :: region :: _ =>
+      if partition.startsWith "aws" then
+        let trimmed := region.trimAscii.toString
+        if trimmed.isEmpty then none else some trimmed
+      else
+        none
+  | _ => none
+
+def isGovCloudTarget (model : LeanAgent.AI.ModelRef) (options : BedrockOptions) : Bool :=
+  let regionGov :=
+    match trimmedNonEmpty? options.region with
+    | some region => region.toLower.startsWith "us-gov-"
+    | none => false
+  let id := model.id.toLower
+  regionGov || id.startsWith "us-gov." || id.startsWith "arn:aws-us-gov:"
+
 def buildAdditionalModelRequestFields
     (model : LeanAgent.AI.ModelRef)
     (modelName : String)
@@ -390,8 +480,11 @@ def buildAdditionalModelRequestFields
         none
       else
         let displayFields :=
-          match options.thinkingDisplay.getD .summarized with
-          | display => [("display", LeanAgent.Json.str display.toString)]
+          if isGovCloudTarget model options then
+            []
+          else
+            match options.thinkingDisplay.getD .summarized with
+            | display => [("display", LeanAgent.Json.str display.toString)]
         if supportsAdaptiveThinking model.id modelName then
           some
             (LeanAgent.Json.obj
@@ -524,6 +617,93 @@ def configuredRegion? (options : BedrockOptions) : IO (Option String) := do
       | some region => pure (some region)
       | none => envValue? options.env "AWS_DEFAULT_REGION"
 
+def configuredCredentials? (options : BedrockOptions) : IO (Option AwsCredentials) := do
+  match ← envValue? options.env "AWS_ACCESS_KEY_ID", ← envValue? options.env "AWS_SECRET_ACCESS_KEY" with
+  | some accessKeyId, some secretAccessKey =>
+      pure
+        (some
+          { accessKeyId
+            secretAccessKey
+            sessionToken := ← envValue? options.env "AWS_SESSION_TOKEN"
+          })
+  | _, _ => pure none
+
+def ambientCredentialChainSource? (options : BedrockOptions) : IO (Option String) := do
+  match ← envValue? options.env "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI" with
+  | some _ => pure (some "ECS task role")
+  | none =>
+      match ← envValue? options.env "AWS_CONTAINER_CREDENTIALS_FULL_URI" with
+      | some _ => pure (some "ECS task role")
+      | none =>
+          match ← envValue? options.env "AWS_WEB_IDENTITY_TOKEN_FILE" with
+          | some _ => pure (some "web identity token")
+          | none => pure none
+
+def shouldSkipAuth (options : BedrockOptions) : IO Bool := do
+  pure ((← envValue? options.env "AWS_BEDROCK_SKIP_AUTH") == some "1")
+
+def resolvedAuth (options : BedrockOptions) : IO ResolvedAuth := do
+  if ← shouldSkipAuth options then
+    pure { mode := .skip, source := some "AWS_BEDROCK_SKIP_AUTH" }
+  else
+    match trimmedNonEmpty? options.bearerToken with
+    | some token =>
+        pure { mode := .bearer, bearerToken := some token, source := some "options.bearerToken" }
+    | none =>
+        match trimmedNonEmpty? options.profile with
+        | some profile =>
+            pure { mode := .profile, profile := some profile, source := some "options.profile" }
+        | none =>
+            match ← envValue? options.env "AWS_BEARER_TOKEN_BEDROCK" with
+            | some token =>
+                pure { mode := .bearer, bearerToken := some token, source := some "AWS_BEARER_TOKEN_BEDROCK" }
+            | none =>
+                match ← envValue? options.env "AWS_PROFILE" with
+                | some profile =>
+                    pure { mode := .profile, profile := some profile, source := some "AWS_PROFILE" }
+                | none =>
+                    match ← configuredCredentials? options with
+                    | some credentials =>
+                        pure { mode := .sigv4, credentials := some credentials, source := some "AWS access keys" }
+                    | none =>
+                        match ← ambientCredentialChainSource? options with
+                        | some source => pure { mode := .ambientChain, source := some source }
+                        | none => pure { mode := .ambientChain }
+
+def resolvedRegion
+    (baseUrl modelId : String)
+    (options : BedrockOptions)
+    (hasAmbientProfile : Bool) : IO String := do
+  match modelArnRegion? modelId with
+  | some region => pure region
+  | none =>
+      let configuredRegion ← configuredRegion? options
+      match configuredRegion with
+      | some region => pure region
+      | none =>
+          if shouldUseExplicitEndpoint baseUrl configuredRegion hasAmbientProfile then
+            pure ((standardEndpointRegion? baseUrl).getD defaultRegion)
+          else
+            pure defaultRegion
+
+def sdkDefaultBaseUrl (region : String) : String :=
+  let suffix :=
+    if region.startsWith "cn-" then
+      "amazonaws.com.cn"
+    else
+      "amazonaws.com"
+  s!"https://bedrock-runtime.{region}.{suffix}"
+
+def resolvedBaseUrl
+    (baseUrl : String)
+    (configuredRegion : Option String)
+    (hasAmbientProfile : Bool)
+    (resolvedRegionValue : String) : String :=
+  if shouldUseExplicitEndpoint baseUrl configuredRegion hasAmbientProfile then
+    trimTrailingSlash baseUrl
+  else
+    sdkDefaultBaseUrl resolvedRegionValue
+
 def isReservedHeader (name : String) : Bool :=
   let lower := name.toLower
   lower == "authorization" || lower == "host" || lower.startsWith "x-amz-"
@@ -531,14 +711,627 @@ def isReservedHeader (name : String) : Bool :=
 def requestHeaders
     (config : BedrockConverseStreamConfig)
     (options : BedrockOptions) : Array (String × String) :=
+  let configHeaders := config.headers.filter fun (name, _) => !isReservedHeader name
   let callerHeaders :=
     LeanAgent.AI.Util.Headers.providerHeadersToArray options.headers
       |>.filter fun (name, _) => !isReservedHeader name
-  LeanAgent.AI.Util.Headers.merge config.headers callerHeaders
+  LeanAgent.AI.Util.Headers.merge configHeaders callerHeaders
+
+def hexDigitUpper (value : Nat) : Char :=
+  if value < 10 then
+    Char.ofNat ('0'.toNat + value)
+  else
+    Char.ofNat ('A'.toNat + (value - 10))
+
+def percentEncodeByte (value : Nat) : String :=
+  String.ofList
+    [ '%'
+    , hexDigitUpper ((value / 16) % 16)
+    , hexDigitUpper (value % 16)
+    ]
+
+def isUnreservedPathChar (char : Char) : Bool :=
+  char.isAlphanum || char == '-' || char == '_' || char == '.' || char == '~'
+
+def percentEncodePathSegment (value : String) : String :=
+  String.intercalate ""
+    (value.toList.map fun char =>
+      if isUnreservedPathChar char then
+        String.ofList [char]
+      else
+        percentEncodeByte char.toNat)
+
+def buildRequestPath (modelId : String) : String :=
+  s!"/model/{percentEncodePathSegment modelId}/converse-stream"
+
+def normalizeHeaderValue (value : String) : String :=
+  let trimmed := value.trimAscii.toString
+  let (chars, _) :=
+    trimmed.toList.foldl
+      (fun (acc, previousWasSpace) char =>
+        let isSpace := char == ' ' || char == '\t' || char == '\r' || char == '\n'
+        if isSpace then
+          if previousWasSpace then
+            (acc, true)
+          else
+            (acc ++ [' '], true)
+        else
+          (acc ++ [char], false))
+      ([], false)
+  String.ofList chars
+
+def canonicalHeaderEntries (headers : Array (String × String)) : Array (String × String) :=
+  let entries :=
+    headers.filterMap fun (name, value) =>
+      let normalizedName := name.trimAscii.toString.toLower
+      if normalizedName.isEmpty then
+        none
+      else
+        some (normalizedName, normalizeHeaderValue value)
+  entries.qsort fun a b => a.fst < b.fst
+
+def canonicalHeadersText (headers : Array (String × String)) : String :=
+  String.intercalate ""
+    (headers.toList.map fun (name, value) => s!"{name}:{value}\n")
+
+def signedHeadersText (headers : Array (String × String)) : String :=
+  String.intercalate ";" (headers.toList.map Prod.fst)
+
+def credentialScope (timestamp : RequestTimestamp) (region : String) : String :=
+  s!"{timestamp.dateStamp}/{region}/{serviceName}/aws4_request"
+
+def deriveSigningKeyHex
+    (secretAccessKey : String)
+    (timestamp : RequestTimestamp)
+    (region : String) : IO String := do
+  let kDate ← hmacSha256Hex ("AWS4" ++ secretAccessKey) timestamp.dateStamp
+  let kRegion ← hmacSha256HexKeyHex kDate region
+  let kService ← hmacSha256HexKeyHex kRegion serviceName
+  hmacSha256HexKeyHex kService "aws4_request"
+
+def signRequestHeaders
+    (endpointBaseUrl requestPath body : String)
+    (credentials : AwsCredentials)
+    (timestamp : RequestTimestamp)
+    (region : String)
+    (headers : Array (String × String)) : IO (Array (String × String)) := do
+  let host := hostFromUrl endpointBaseUrl
+  let bodyHash ← sha256Hex body
+  let headers :=
+    LeanAgent.AI.Util.Headers.insert
+      (LeanAgent.AI.Util.Headers.insert
+        (LeanAgent.AI.Util.Headers.insert headers ("host", host))
+        ("x-amz-content-sha256", bodyHash))
+      ("x-amz-date", timestamp.amzDate)
+  let headers :=
+    match credentials.sessionToken with
+    | some sessionToken =>
+        LeanAgent.AI.Util.Headers.insert headers ("x-amz-security-token", sessionToken)
+    | none => headers
+  let canonical := canonicalHeaderEntries headers
+  let signedHeaders := signedHeadersText canonical
+  let canonicalRequest :=
+    s!"POST\n{requestPath}\n\n{canonicalHeadersText canonical}\n{signedHeaders}\n{bodyHash}"
+  let canonicalRequestHash ← sha256Hex canonicalRequest
+  let scope := credentialScope timestamp region
+  let stringToSign :=
+    s!"AWS4-HMAC-SHA256\n{timestamp.amzDate}\n{scope}\n{canonicalRequestHash}"
+  let signingKey ← deriveSigningKeyHex credentials.secretAccessKey timestamp region
+  let signature ← hmacSha256HexKeyHex signingKey stringToSign
+  let authorization :=
+    s!"AWS4-HMAC-SHA256 Credential={credentials.accessKeyId}/{scope}, SignedHeaders={signedHeaders}, Signature={signature}"
+  pure (LeanAgent.AI.Util.Headers.insert headers ("Authorization", authorization))
+
+def prepareRequestWithTimestamp
+    (config : BedrockConverseStreamConfig)
+    (model : LeanAgent.AI.ModelRef)
+    (input : Array String)
+    (modelName : String)
+    (thinkingLevelMap : Array LeanAgent.AI.ThinkingLevelMapEntry)
+    (reasoning : Bool)
+    (context : LeanAgent.AI.Context)
+    (timestamp : RequestTimestamp)
+    (options : BedrockOptions := {}) : IO PreparedRequest := do
+  let requestModel : LeanAgent.AI.ModelRef := { model with baseUrl := some config.baseUrl }
+  let payload0 := requestToJsonWithOptions requestModel input modelName thinkingLevelMap reasoning context options
+  let payload ← applyPayloadHook options requestModel payload0
+  let auth ← resolvedAuth options
+  let configuredRegion := ← configuredRegion? options
+  let hasAmbientProfile := auth.mode == .profile
+  let region ← resolvedRegion config.baseUrl requestModel.id options hasAmbientProfile
+  let baseUrl := resolvedBaseUrl config.baseUrl configuredRegion hasAmbientProfile region
+  let requestPath := buildRequestPath requestModel.id
+  let url := baseUrl ++ requestPath
+  let baseHeaders :=
+    LeanAgent.AI.Util.Headers.insert (requestHeaders config options) ("Content-Type", "application/json")
+  let headers ←
+    match auth.mode, auth.credentials, auth.bearerToken with
+    | .sigv4, some credentials, _ =>
+        signRequestHeaders baseUrl requestPath payload.compress credentials timestamp region baseHeaders
+    | .bearer, _, some token =>
+        pure (LeanAgent.AI.Util.Headers.insert baseHeaders ("Authorization", "Bearer " ++ token))
+    | _, _, _ => pure baseHeaders
+  pure
+    { url
+      requestPath
+      region
+      timestamp
+      auth
+      headers
+      payload
+    }
+
+def prepareRequestWithOptions
+    (config : BedrockConverseStreamConfig)
+    (model : LeanAgent.AI.ModelRef)
+    (input : Array String)
+    (modelName : String)
+    (thinkingLevelMap : Array LeanAgent.AI.ThinkingLevelMapEntry)
+    (reasoning : Bool)
+    (context : LeanAgent.AI.Context)
+    (options : BedrockOptions := {}) : IO PreparedRequest := do
+  prepareRequestWithTimestamp
+    config
+    model
+    input
+    modelName
+    thinkingLevelMap
+    reasoning
+    context
+    (← currentTimestamp)
+    options
 
 def modelRef (config : BedrockConverseStreamConfig) (model : LeanAgent.AI.ModelRef) :
     LeanAgent.AI.ModelRef :=
   { model with baseUrl := some config.baseUrl }
+
+def callResponseHook
+    (options : BedrockOptions)
+    (model : LeanAgent.AI.ModelRef)
+    (response : LeanAgent.Http.JsonPostResponse) : IO Unit := do
+  match options.onResponse with
+  | none => pure ()
+  | some hook =>
+      hook { status := response.status, headers := response.headers } model
+
+def runHttpEventStreamJson
+    (config : BedrockConverseStreamConfig)
+    (model : LeanAgent.AI.ModelRef)
+    (prepared : PreparedRequest)
+    (options : BedrockOptions := {}) : IO String := do
+  LeanAgent.AI.Util.Abort.throwIfAborted options.signal
+  let response ← LeanAgent.Http.requestAwsEventStreamJsonResponse
+    { method := "POST"
+      url := prepared.url
+      body := some prepared.payload.compress
+      timeoutSeconds := config.timeoutSeconds
+      connectTimeoutSeconds := config.connectTimeoutSeconds
+      maxResponseBytes := config.maxResponseBytes
+      noProxy := config.noProxy
+      userAgent := config.userAgent
+      headers := prepared.headers
+    }
+  callResponseHook options model response
+  if response.status < 200 || response.status >= 300 then
+    throw (IO.userError (LeanAgent.AI.Util.Diagnostics.providerHttpErrorMessage response.status response.body))
+  pure response.body
+
+def jsonString? : Lean.Json → Option String
+  | .str value => some value
+  | _ => none
+
+def optionalStringField (json : Lean.Json) (key : String) : Option String :=
+  (LeanAgent.Json.optVal? json key).bind jsonString?
+
+def optionalObjectField (json : Lean.Json) (key : String) : Option Lean.Json :=
+  match LeanAgent.Json.optVal? json key with
+  | some value =>
+      match value.getObj? with
+      | .ok _ => some value
+      | .error _ => none
+  | none => none
+
+def natFieldD (json : Lean.Json) (key : String) (default : Nat := 0) : Nat :=
+  match LeanAgent.Json.optVal? json key with
+  | some value => value.getNat?.toOption.getD default
+  | none => default
+
+def parseMetadataUsage (usage : Lean.Json) : LeanAgent.AI.Usage :=
+  let input := natFieldD usage "inputTokens"
+  let output := natFieldD usage "outputTokens"
+  let cacheRead := natFieldD usage "cacheReadInputTokens"
+  let cacheWrite := natFieldD usage "cacheWriteInputTokens"
+  let totalTokens := natFieldD usage "totalTokens" (input + output)
+  { input := input
+    output := output
+    cacheRead := cacheRead
+    cacheWrite := cacheWrite
+    totalTokens := totalTokens
+  }
+
+def bedrockErrorPrefix (name : String) : String :=
+  match name with
+  | "internalServerException" => "Internal server error"
+  | "modelStreamErrorException" => "Model stream error"
+  | "validationException" => "Validation error"
+  | "throttlingException" => "Throttling error"
+  | "serviceUnavailableException" => "Service unavailable"
+  | _ => name
+
+def hasDataRetentionHint (message : String) : Bool :=
+  message.toLower.contains "data retention mode"
+
+def formatBedrockStreamError (name : String) (payload : Lean.Json) : String :=
+  let errPrefix := bedrockErrorPrefix name;
+  let baseMessage :=
+    Option.getD
+      (optionalStringField payload "message" <|> optionalStringField payload "originalMessage")
+      (payload.compress);
+  let withPrefix :=
+    if errPrefix.isEmpty || errPrefix == name then
+      if baseMessage == payload.compress then errPrefix else s!"{errPrefix}: {baseMessage}"
+    else
+      s!"{errPrefix}: {baseMessage}";
+  if hasDataRetentionHint baseMessage then
+    withPrefix ++ s!" See {dataRetentionDocsUrl} for supported data retention modes."
+  else
+    withPrefix
+
+inductive StreamingBlockKind where
+  | text
+  | thinking
+  | toolCall
+deriving BEq
+
+structure StreamingBlock where
+  streamIndex : Nat
+  contentIndex : Nat
+  kind : StreamingBlockKind
+  text : String := ""
+  thinkingSignature : Option String := none
+  id : String := ""
+  name : String := ""
+  partialArguments : String := ""
+  ended : Bool := false
+deriving BEq
+
+structure StreamingState where
+  blocks : Array StreamingBlock := #[]
+  order : Array Nat := #[]
+  usage : LeanAgent.AI.Usage := LeanAgent.AI.Usage.empty
+  stopReason : LeanAgent.AI.StopReason := .stop
+  errorMessage : Option String := none
+  sawMessageStart : Bool := false
+  sawMessageStop : Bool := false
+deriving BEq
+
+inductive ParsedStreamEvent where
+  | textStart (contentIndex : Nat)
+  | textDelta (contentIndex : Nat) (delta : String)
+  | textEnd (contentIndex : Nat) (content : String)
+  | thinkingStart (contentIndex : Nat)
+  | thinkingDelta (contentIndex : Nat) (delta : String)
+  | thinkingEnd (contentIndex : Nat) (content : String)
+  | toolCallStart (contentIndex : Nat)
+  | toolCallDelta (contentIndex : Nat) (delta : String)
+  | toolCallEnd (contentIndex : Nat) (call : LeanAgent.AI.ToolCall)
+deriving BEq
+
+def findBlock? (state : StreamingState) (streamIndex : Nat) : Option StreamingBlock :=
+  state.blocks.find? fun block => block.streamIndex == streamIndex
+
+def updateBlock (state : StreamingState) (next : StreamingBlock) : StreamingState :=
+  { state with
+    blocks := state.blocks.map fun block =>
+      if block.streamIndex == next.streamIndex then next else block
+  }
+
+def pushBlock (state : StreamingState) (block : StreamingBlock) : StreamingState :=
+  { state with
+    blocks := state.blocks.push block
+    order := state.order.push block.streamIndex
+  }
+
+def startEventForBlock (block : StreamingBlock) : ParsedStreamEvent :=
+  match block.kind with
+  | .text => .textStart block.contentIndex
+  | .thinking => .thinkingStart block.contentIndex
+  | .toolCall => .toolCallStart block.contentIndex
+
+def toolCallFromBlock (block : StreamingBlock) : LeanAgent.AI.ToolCall :=
+  { id := block.id
+    name := block.name
+    arguments := LeanAgent.AI.Util.JsonParse.parseStreamingJson block.partialArguments
+  }
+
+def contentBlockFromStreamingBlock (block : StreamingBlock) : LeanAgent.AI.ContentBlock :=
+  match block.kind with
+  | .text => .text { text := block.text }
+  | .thinking =>
+      .thinking
+        { thinking := block.text
+          thinkingSignature := block.thinkingSignature
+        }
+  | .toolCall => .toolCall (toolCallFromBlock block)
+
+def contentFromStreamingState (state : StreamingState) : Array LeanAgent.AI.ContentBlock :=
+  state.order.filterMap fun streamIndex =>
+    match findBlock? state streamIndex with
+    | some block => some (contentBlockFromStreamingBlock block)
+    | none => none
+
+def messageFromStreamingState
+    (api provider model : String)
+    (timestamp : Nat)
+    (state : StreamingState) : LeanAgent.AI.AssistantMessage :=
+  { content := contentFromStreamingState state
+    api := api
+    provider := provider
+    model := model
+    usage := state.usage
+    stopReason := state.stopReason
+    errorMessage := state.errorMessage
+    timestamp := timestamp
+  }
+
+def parsedEventToAssistantEvent
+    (message : LeanAgent.AI.AssistantMessage) : ParsedStreamEvent → LeanAgent.AI.AssistantMessageEvent
+  | .textStart index => .textStart index message
+  | .textDelta index delta => .textDelta index delta message
+  | .textEnd index content => .textEnd index content message
+  | .thinkingStart index => .thinkingStart index message
+  | .thinkingDelta index delta => .thinkingDelta index delta message
+  | .thinkingEnd index content => .thinkingEnd index content message
+  | .toolCallStart index => .toolCallStart index message
+  | .toolCallDelta index delta => .toolCallDelta index delta message
+  | .toolCallEnd index call => .toolCallEnd index call message
+
+def ensureTextBlock
+    (state : StreamingState)
+    (events : Array ParsedStreamEvent)
+    (streamIndex : Nat) : StreamingState × Array ParsedStreamEvent × StreamingBlock :=
+  match findBlock? state streamIndex with
+  | some block => (state, events, block)
+  | none =>
+      let block : StreamingBlock :=
+        { streamIndex := streamIndex
+          contentIndex := state.order.size
+          kind := .text
+        }
+      let state := pushBlock state block
+      (state, events.push (startEventForBlock block), block)
+
+def ensureThinkingBlock
+    (state : StreamingState)
+    (events : Array ParsedStreamEvent)
+    (streamIndex : Nat) : StreamingState × Array ParsedStreamEvent × StreamingBlock :=
+  match findBlock? state streamIndex with
+  | some block => (state, events, block)
+  | none =>
+      let block : StreamingBlock :=
+        { streamIndex := streamIndex
+          contentIndex := state.order.size
+          kind := .thinking
+        }
+      let state := pushBlock state block
+      (state, events.push (startEventForBlock block), block)
+
+def applyTextDelta
+    (state : StreamingState)
+    (events : Array ParsedStreamEvent)
+    (streamIndex : Nat)
+    (delta : String) : StreamingState × Array ParsedStreamEvent :=
+  if delta.isEmpty then
+    (state, events)
+  else
+    let (state, events, block) := ensureTextBlock state events streamIndex
+    if block.kind != .text then
+      (state, events)
+    else
+      let block := { block with text := block.text ++ delta }
+      (updateBlock state block, events.push (.textDelta block.contentIndex delta))
+
+def applyThinkingSignature
+    (state : StreamingState)
+    (streamIndex : Nat)
+    (signature : String) : StreamingState :=
+  if signature.isEmpty then
+    state
+  else
+    match findBlock? state streamIndex with
+    | some block =>
+        if block.kind != .thinking then
+          state
+        else
+          let current := block.thinkingSignature.getD ""
+          updateBlock state { block with thinkingSignature := some (current ++ signature) }
+    | none =>
+        let (state, _, block) := ensureThinkingBlock state #[] streamIndex
+        let current := block.thinkingSignature.getD ""
+        updateBlock state { block with thinkingSignature := some (current ++ signature) }
+
+def applyThinkingDelta
+    (state : StreamingState)
+    (events : Array ParsedStreamEvent)
+    (streamIndex : Nat)
+    (delta : String)
+    (signature : String := "") : StreamingState × Array ParsedStreamEvent :=
+  let (state, events, block) := ensureThinkingBlock state events streamIndex
+  if block.kind != .thinking then
+    (state, events)
+  else
+    let block :=
+      { block with
+        text := block.text ++ delta
+        thinkingSignature :=
+          if signature.isEmpty then
+            block.thinkingSignature
+          else
+            some (block.thinkingSignature.getD "" ++ signature)
+      }
+    let state := updateBlock state block
+    let events := if delta.isEmpty then events else events.push (.thinkingDelta block.contentIndex delta)
+    (state, events)
+
+def applyToolInputDelta
+    (state : StreamingState)
+    (events : Array ParsedStreamEvent)
+    (streamIndex : Nat)
+    (delta : String) : StreamingState × Array ParsedStreamEvent :=
+  match findBlock? state streamIndex with
+  | some block =>
+      if block.kind != .toolCall || delta.isEmpty then
+        (state, events)
+      else
+        let block := { block with partialArguments := block.partialArguments ++ delta }
+        (updateBlock state block, events.push (.toolCallDelta block.contentIndex delta))
+  | none => (state, events)
+
+def applyContentBlockStart
+    (state : StreamingState)
+    (events : Array ParsedStreamEvent)
+    (event : Lean.Json) : StreamingState × Array ParsedStreamEvent :=
+  let streamIndex := natFieldD event "contentBlockIndex" state.order.size
+  match optionalObjectField event "start" >>= fun start => optionalObjectField start "toolUse" with
+  | some toolUse =>
+      match findBlock? state streamIndex with
+      | some _ => (state, events)
+      | none =>
+          let block : StreamingBlock :=
+            { streamIndex := streamIndex
+              contentIndex := state.order.size
+              kind := .toolCall
+              id := optionalStringField toolUse "toolUseId" |>.getD ""
+              name := optionalStringField toolUse "name" |>.getD ""
+            }
+          let state := pushBlock state block
+          (state, events.push (startEventForBlock block))
+  | none => (state, events)
+
+def applyContentBlockDelta
+    (state : StreamingState)
+    (events : Array ParsedStreamEvent)
+    (event : Lean.Json) : StreamingState × Array ParsedStreamEvent :=
+  let streamIndex := natFieldD event "contentBlockIndex" 0
+  match optionalObjectField event "delta" with
+  | none => (state, events)
+  | some delta =>
+      let (state, events) :=
+        match optionalStringField delta "text" with
+        | some text => applyTextDelta state events streamIndex text
+        | none => (state, events)
+      let (state, events) :=
+        match optionalObjectField delta "toolUse" with
+        | some toolUse =>
+            applyToolInputDelta state events streamIndex (optionalStringField toolUse "input" |>.getD "")
+        | none => (state, events)
+      match optionalObjectField delta "reasoningContent" with
+      | some reasoningContent =>
+          let text := optionalStringField reasoningContent "text" |>.getD ""
+          let signature := optionalStringField reasoningContent "signature" |>.getD ""
+          applyThinkingDelta state events streamIndex text signature
+      | none => (state, events)
+
+def applyContentBlockStop
+    (state : StreamingState)
+    (events : Array ParsedStreamEvent)
+    (event : Lean.Json) : StreamingState × Array ParsedStreamEvent :=
+  let streamIndex := natFieldD event "contentBlockIndex" 0
+  match findBlock? state streamIndex with
+  | none => (state, events)
+  | some block =>
+      if block.ended then
+        (state, events)
+      else
+        let block := { block with ended := true }
+        let state := updateBlock state block
+        let event :=
+          match block.kind with
+          | .text => ParsedStreamEvent.textEnd block.contentIndex block.text
+          | .thinking => ParsedStreamEvent.thinkingEnd block.contentIndex block.text
+          | .toolCall => ParsedStreamEvent.toolCallEnd block.contentIndex (toolCallFromBlock block)
+        (state, events.push event)
+
+def applyMessageStart (state : StreamingState) (event : Lean.Json) : Except String StreamingState := do
+  match optionalStringField event "role" with
+  | some "assistant" => pure { state with sawMessageStart := true }
+  | some role => throw s!"Unexpected assistant message start but got {role} message start instead"
+  | none => pure { state with sawMessageStart := true }
+
+def applyMessageStop (state : StreamingState) (event : Lean.Json) : StreamingState :=
+  let stopReason := mapStopReason (optionalStringField event "stopReason")
+  let errorMessage :=
+    if stopReason == .error then
+      some "Bedrock returned an error stop reason"
+    else
+      state.errorMessage
+  { state with
+    sawMessageStop := true
+    stopReason := stopReason
+    errorMessage := errorMessage
+  }
+
+def applyMetadata (state : StreamingState) (event : Lean.Json) : StreamingState :=
+  match optionalObjectField event "usage" with
+  | some usage => { state with usage := parseMetadataUsage usage }
+  | none => state
+
+def applyStreamItem
+    (state : StreamingState)
+    (events : Array ParsedStreamEvent)
+    (item : Lean.Json) : Except String (StreamingState × Array ParsedStreamEvent) := do
+  match optionalObjectField item "messageStart" with
+  | some event => pure (← applyMessageStart state event, events)
+  | none =>
+      match optionalObjectField item "contentBlockStart" with
+      | some event => pure (applyContentBlockStart state events event)
+      | none =>
+          match optionalObjectField item "contentBlockDelta" with
+          | some event => pure (applyContentBlockDelta state events event)
+          | none =>
+              match optionalObjectField item "contentBlockStop" with
+              | some event => pure (applyContentBlockStop state events event)
+              | none =>
+                  match optionalObjectField item "messageStop" with
+                  | some event => pure (applyMessageStop state event, events)
+                  | none =>
+                      match optionalObjectField item "metadata" with
+                      | some event => pure (applyMetadata state event, events)
+                      | none =>
+                          let exceptionNames :=
+                            [ "internalServerException"
+                            , "modelStreamErrorException"
+                            , "validationException"
+                            , "throttlingException"
+                            , "serviceUnavailableException"
+                            ]
+                          match exceptionNames.findSome? (fun name =>
+                              (optionalObjectField item name).map fun payload => (name, payload)) with
+                          | some (name, payload) => throw (formatBedrockStreamError name payload)
+                          | none => pure (state, events)
+
+def parseStreamingItems (raw : String) : Except String (Array Lean.Json) := do
+  let parsed ← Lean.Json.parse raw
+  let items ← parsed.getArr?
+  pure items
+
+def parseStreamingEventStream
+    (api provider model : String)
+    (timestamp : Nat)
+    (raw : String) : Except String LeanAgent.AI.AssistantMessageEventStream := do
+  let items ← parseStreamingItems raw
+  let mut state : StreamingState := {}
+  let mut parsedEvents : Array ParsedStreamEvent := #[]
+  for item in items do
+    let (nextState, nextEvents) ← applyStreamItem state parsedEvents item
+    state := nextState
+    parsedEvents := nextEvents
+  let message := messageFromStreamingState api provider model timestamp state
+  let events :=
+    #[LeanAgent.AI.AssistantMessageEvent.start message]
+      ++ parsedEvents.map (parsedEventToAssistantEvent message)
+      ++ #[LeanAgent.AI.completionEvent message]
+  pure { events := events, finalResult := message }
 
 def completeStreamWithOptions
     (config : BedrockConverseStreamConfig)
@@ -550,8 +1343,22 @@ def completeStreamWithOptions
     (context : LeanAgent.AI.Context)
     (options : BedrockOptions := {}) : IO LeanAgent.AI.AssistantMessageEventStream := do
   let requestModel := modelRef config model
-  let payload := requestToJsonWithOptions requestModel input modelName thinkingLevelMap reasoning context options
-  let _ ← applyPayloadHook options requestModel payload
-  throw (IO.userError transportUnavailableMessage)
+  let prepared ← prepareRequestWithOptions
+    config
+    model
+    input
+    modelName
+    thinkingLevelMap
+    reasoning
+    context
+    options
+  let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
+  let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
+    (runHttpEventStreamJson config requestModel prepared options)
+    options.signal
+  let timestamp ← IO.monoMsNow
+  match parseStreamingEventStream model.api model.provider model.id timestamp raw with
+  | .ok stream => pure stream
+  | .error err => throw (IO.userError s!"failed to parse Bedrock streaming response: {err}\n{raw}")
 
 end LeanAgent.AI.Api.BedrockConverseStream

@@ -66,3 +66,12 @@ lean_exe «lean-agent» where
 @[test_driver]
 lean_exe «lean-agent-test» where
   root := `Tests
+
+lean_exe «ai-import-smoke» where
+  root := `AIOnlyImportMain
+
+lean_exe «compat-import-smoke» where
+  root := `CompatOnlyImportMain
+
+lean_exe «oauth-import-smoke» where
+  root := `OAuthOnlyImportMain

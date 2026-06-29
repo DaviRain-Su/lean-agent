@@ -15,6 +15,13 @@ open LeanAgent
 def api : String := LeanAgent.AI.Api.GoogleShared.apiVertex
 def apiVersion : String := "v1"
 def vertexCredentialsMarker : String := "gcp-vertex-credentials"
+def defaultAdcPath : String := "~/.config/gcloud/application_default_credentials.json"
+def cloudPlatformScope : String := "https://www.googleapis.com/auth/cloud-platform"
+
+@[extern "lean_agent_sign_jwt_rs256"]
+opaque signJwtRs256
+  (privateKeyPem headerJson payloadJson : @& String)
+  : IO String
 
 structure GoogleVertexConfig where
   apiKey : String := ""
@@ -172,6 +179,204 @@ def resolveLocation (options : GoogleVertexOptions) : IO String := do
       | none =>
           throw (IO.userError "Vertex AI requires a location. Set GOOGLE_CLOUD_LOCATION or pass location in options.")
 
+private def jsonField? (json : Lean.Json) (name : String) : Option Lean.Json :=
+  match json.getObjVal? name with
+  | .ok value => some value
+  | .error _ => none
+
+private def jsonStringField? (json : Lean.Json) (name : String) : Option String :=
+  match jsonField? json name with
+  | some value => value.getStr?.toOption
+  | none => none
+
+private def jsonNatField? (json : Lean.Json) (name : String) : Option Nat :=
+  match jsonField? json name with
+  | some value => value.getNat?.toOption
+  | none => none
+
+private def parseJsonBody (body : String) : IO Lean.Json :=
+  match Lean.Json.parse body with
+  | .ok json => pure json
+  | .error err => throw (IO.userError s!"Invalid JSON response: {err}")
+
+private def bodySuffix (body : String) : String :=
+  let trimmed := body.trimAscii.toString
+  if trimmed.isEmpty then "" else s!"; body={body}"
+
+private def encodeHexDigit (value : Nat) : Char :=
+  if value < 10 then
+    Char.ofNat ('0'.toNat + value)
+  else
+    Char.ofNat ('A'.toNat + (value - 10))
+
+private def percentEncodeByte (value : Nat) : String :=
+  String.singleton '%' ++
+    String.singleton (encodeHexDigit (value / 16)) ++
+    String.singleton (encodeHexDigit (value % 16))
+
+private def isFormUnreserved (char : Char) : Bool :=
+  char.isAlphanum || char == '-' || char == '.' || char == '_' || char == '~'
+
+private def urlEncodeFormComponent (value : String) : String :=
+  String.intercalate ""
+    (value.toList.map fun char =>
+      if isFormUnreserved char then
+        String.singleton char
+      else if char == ' ' then
+        "+"
+      else
+        percentEncodeByte char.toNat)
+
+private def formUrlEncodedBody (fields : Array (String × String)) : String :=
+  String.intercalate "&"
+    (fields.toList.map fun (field, value) =>
+      urlEncodeFormComponent field ++ "=" ++ urlEncodeFormComponent value)
+
+private structure ServiceAccountCredential where
+  clientEmail : String
+  privateKey : String
+  tokenUri : String
+
+private structure AuthorizedUserCredential where
+  clientId : String
+  clientSecret : String
+  refreshToken : String
+  tokenUri : String
+
+private inductive AdcCredential where
+  | serviceAccount (credential : ServiceAccountCredential)
+  | authorizedUser (credential : AuthorizedUserCredential)
+
+private def defaultGoogleTokenUri : String := "https://oauth2.googleapis.com/token"
+
+private def resolveAdcCredentialsPath (options : GoogleVertexOptions) : IO System.FilePath := do
+  let path ←
+    match ← envValue? options.env "GOOGLE_APPLICATION_CREDENTIALS" with
+    | some path => pure path
+    | none => pure defaultAdcPath
+  LeanAgent.AI.Auth.expandHomePath path
+
+private def parseAdcCredential (json : Lean.Json) : Except String AdcCredential := do
+  let credentialType ← LeanAgent.Json.requiredString json "type"
+  match credentialType with
+  | "service_account" =>
+      let clientEmail ← LeanAgent.Json.requiredString json "client_email"
+      let privateKey ← LeanAgent.Json.requiredString json "private_key"
+      let tokenUri := (jsonStringField? json "token_uri").getD defaultGoogleTokenUri
+      pure (.serviceAccount { clientEmail, privateKey, tokenUri })
+  | "authorized_user" =>
+      let clientId ← LeanAgent.Json.requiredString json "client_id"
+      let clientSecret ← LeanAgent.Json.requiredString json "client_secret"
+      let refreshToken ← LeanAgent.Json.requiredString json "refresh_token"
+      let tokenUri := (jsonStringField? json "token_uri").getD defaultGoogleTokenUri
+      pure (.authorizedUser { clientId, clientSecret, refreshToken, tokenUri })
+  | other =>
+      throw s!"unsupported Google ADC credential type: {other}"
+
+private def loadAdcCredential (options : GoogleVertexOptions) : IO AdcCredential := do
+  let path ← resolveAdcCredentialsPath options
+  let raw ←
+    try
+      IO.FS.readFile path
+    catch err =>
+      throw (IO.userError s!"Failed to read Google ADC credentials from {path}: {err.toString}")
+  let json ← parseJsonBody raw
+  match parseAdcCredential json with
+  | .ok credential => pure credential
+  | .error err => throw (IO.userError s!"Invalid Google ADC credentials in {path}: {err}")
+
+private def tokenRequest
+    (config : GoogleVertexConfig)
+    (url : String)
+    (body : String) :
+    IO LeanAgent.Http.JsonPostResponse :=
+  LeanAgent.Http.requestResponse
+    { method := "POST"
+      url := url
+      body := some body
+      timeoutSeconds := config.timeoutSeconds
+      connectTimeoutSeconds := config.connectTimeoutSeconds
+      maxResponseBytes := config.maxResponseBytes
+      noProxy := config.noProxy
+      userAgent := config.userAgent
+      headers :=
+        #[ ("Content-Type", "application/x-www-form-urlencoded")
+         , ("Accept", "application/json")
+         ]
+    }
+
+private def readAccessToken
+    (response : LeanAgent.Http.JsonPostResponse)
+    (source : String) :
+    IO String := do
+  if response.status < 200 || response.status >= 300 then
+    throw (IO.userError s!"Google ADC token request failed for {source} ({response.status}){bodySuffix response.body}")
+  let json ← parseJsonBody response.body
+  match jsonStringField? json "access_token" with
+  | some token =>
+      if token.trimAscii.toString.isEmpty then
+        throw (IO.userError s!"Google ADC token response for {source} was empty")
+      else
+        pure token
+  | none =>
+      throw (IO.userError s!"Google ADC token response for {source} missing access_token: {json.compress}")
+
+private def serviceAccountAssertion
+    (credential : ServiceAccountCredential)
+    (nowMs : Nat) :
+    IO String := do
+  let nowSeconds := nowMs / 1000
+  let header :=
+    LeanAgent.Json.obj
+      [ ("alg", LeanAgent.Json.str "RS256")
+      , ("typ", LeanAgent.Json.str "JWT")
+      ]
+  let claims :=
+    LeanAgent.Json.obj
+      [ ("iss", LeanAgent.Json.str credential.clientEmail)
+      , ("sub", LeanAgent.Json.str credential.clientEmail)
+      , ("scope", LeanAgent.Json.str cloudPlatformScope)
+      , ("aud", LeanAgent.Json.str credential.tokenUri)
+      , ("iat", LeanAgent.Json.nat nowSeconds)
+      , ("exp", LeanAgent.Json.nat (nowSeconds + 3600))
+      ]
+  signJwtRs256 credential.privateKey header.compress claims.compress
+
+private def fetchServiceAccountAccessToken
+    (config : GoogleVertexConfig)
+    (_options : GoogleVertexOptions)
+    (credential : ServiceAccountCredential) :
+    IO String := do
+  let nowMs ← LeanAgent.AI.Auth.epochMsNow
+  let assertion ← serviceAccountAssertion credential nowMs
+  let response ← tokenRequest config credential.tokenUri
+    (formUrlEncodedBody
+      #[ ("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer")
+       , ("assertion", assertion)
+       ])
+  readAccessToken response "service_account"
+
+private def fetchAuthorizedUserAccessToken
+    (config : GoogleVertexConfig)
+    (credential : AuthorizedUserCredential) :
+    IO String := do
+  let response ← tokenRequest config credential.tokenUri
+    (formUrlEncodedBody
+      #[ ("grant_type", "refresh_token")
+       , ("refresh_token", credential.refreshToken)
+       , ("client_id", credential.clientId)
+       , ("client_secret", credential.clientSecret)
+       ])
+  readAccessToken response "authorized_user"
+
+private def fetchAdcAccessToken
+    (config : GoogleVertexConfig)
+    (options : GoogleVertexOptions) :
+    IO String := do
+  match ← loadAdcCredential options with
+  | .serviceAccount credential => fetchServiceAccountAccessToken config options credential
+  | .authorizedUser credential => fetchAuthorizedUserAccessToken config credential
+
 def applyPayloadHook
     (options : GoogleVertexOptions)
     (model : LeanAgent.AI.ModelRef)
@@ -210,16 +415,30 @@ def requestHeaders
     (config.headers ++ (authHeaders ++ #[("accept", "application/json")]))
     (LeanAgent.AI.Util.Headers.providerHeadersToArray options.headers)
 
+def resolvedRequestHeaders
+    (config : GoogleVertexConfig)
+    (options : GoogleVertexOptions) : IO (Array (String × String)) := do
+  let headers := requestHeaders config options
+  if LeanAgent.Http.hasHeaderNameCI headers "authorization" ||
+      LeanAgent.Http.hasHeaderNameCI headers "x-goog-api-key" then
+    pure headers
+  else if config.apiKey.trimAscii.toString == vertexCredentialsMarker then
+    let token ← fetchAdcAccessToken config options
+    pure (headers.push ("Authorization", "Bearer " ++ token))
+  else
+    pure headers
+
 def runHttpJson
     (config : GoogleVertexConfig)
     (model : LeanAgent.AI.ModelRef)
     (url : String)
     (payload : Lean.Json)
     (options : GoogleVertexOptions := {}) : IO String := do
+  let headers ← resolvedRequestHeaders config options
   let response ← LeanAgent.Http.postJsonResponse
     { url := url
       apiKey := ""
-      headers := requestHeaders config options
+      headers := headers
       timeoutSeconds := config.timeoutSeconds
       connectTimeoutSeconds := config.connectTimeoutSeconds
       maxResponseBytes := config.maxResponseBytes

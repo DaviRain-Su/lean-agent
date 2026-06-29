@@ -7,12 +7,38 @@ This is intentionally a small transport boundary: Lean code owns request JSON an
 response parsing, while native code owns TLS, proxy handling, and HTTP transport.
 It does not execute the `curl` command-line program.
 -/
-@[extern "lean_agent_http_post_json"]
-opaque postJsonRaw
-  (url apiKey payload noProxy userAgent extraHeaders : @& String)
+@[extern "lean_agent_http_request"]
+opaque requestRaw
+  (method url authorization body noProxy userAgent extraHeaders : @& String)
   (timeoutSeconds connectTimeoutSeconds : UInt32)
   (maxResponseBytes : UInt64)
   : IO String
+
+/--
+POST/GET helper for APIs that return AWS event-stream binary frames.
+
+The native boundary unwraps the event-stream payload into a JSON array of event
+objects so Lean can keep using string-based parsing without shelling out to
+external tools or carrying raw binary through Lean `String`.
+-/
+@[extern "lean_agent_http_request_aws_eventstream_json"]
+opaque requestAwsEventStreamJsonRaw
+  (method url authorization body noProxy userAgent extraHeaders : @& String)
+  (timeoutSeconds connectTimeoutSeconds : UInt32)
+  (maxResponseBytes : UInt64)
+  : IO String
+
+structure RequestConfig where
+  method : String := "GET"
+  url : String
+  authorization : Option String := none
+  body : Option String := none
+  timeoutSeconds : UInt32 := 120
+  connectTimeoutSeconds : UInt32 := 30
+  maxResponseBytes : UInt64 := 33554432
+  noProxy : Option String := none
+  userAgent : String := "lean-agent/0.1.0"
+  headers : Array (String × String) := #[]
 
 structure JsonPostConfig where
   url : String
@@ -129,11 +155,12 @@ def encodeHeader? (header : String × String) : Option String :=
 def encodeHeaders (headers : Array (String × String)) : String :=
   String.intercalate "\n" (headers.toList.filterMap encodeHeader?)
 
-def postJsonResponse (config : JsonPostConfig) (payload : String) : IO JsonPostResponse := do
-  let raw ← postJsonRaw
+def requestResponse (config : RequestConfig) : IO JsonPostResponse := do
+  let raw ← requestRaw
+    config.method
     config.url
-    config.apiKey
-    payload
+    (config.authorization.getD "")
+    (config.body.getD "")
     (config.noProxy.getD "")
     config.userAgent
     (encodeHeaders config.headers)
@@ -143,6 +170,56 @@ def postJsonResponse (config : JsonPostConfig) (payload : String) : IO JsonPostR
   match parseStatusEnvelope raw with
   | .ok response => pure response
   | .error err => throw (IO.userError err)
+
+def requestAwsEventStreamJsonResponse (config : RequestConfig) : IO JsonPostResponse := do
+  let raw ← requestAwsEventStreamJsonRaw
+    config.method
+    config.url
+    (config.authorization.getD "")
+    (config.body.getD "")
+    (config.noProxy.getD "")
+    config.userAgent
+    (encodeHeaders config.headers)
+    config.timeoutSeconds
+    config.connectTimeoutSeconds
+    config.maxResponseBytes
+  match parseStatusEnvelope raw with
+  | .ok response => pure response
+  | .error err => throw (IO.userError err)
+
+def hasHeaderNameCI (headers : Array (String × String)) (name : String) : Bool :=
+  headers.any fun (headerName, _) => headerName.toLower == name.toLower
+
+def withDefaultHeader
+    (headers : Array (String × String))
+    (name value : String) : Array (String × String) :=
+  if hasHeaderNameCI headers name then
+    headers
+  else
+    headers.push (name, value)
+
+def postJsonResponse (config : JsonPostConfig) (payload : String) : IO JsonPostResponse := do
+  let headers :=
+    withDefaultHeader
+      (withDefaultHeader config.headers "Content-Type" "application/json")
+      "Accept"
+      "application/json"
+  requestResponse
+    { method := "POST"
+      url := config.url
+      authorization :=
+        if hasHeaderNameCI config.headers "Authorization" || config.apiKey.isEmpty then
+          none
+        else
+          some ("Bearer " ++ config.apiKey)
+      body := some payload
+      timeoutSeconds := config.timeoutSeconds
+      connectTimeoutSeconds := config.connectTimeoutSeconds
+      maxResponseBytes := config.maxResponseBytes
+      noProxy := config.noProxy
+      userAgent := config.userAgent
+      headers := headers
+    }
 
 def postJson (config : JsonPostConfig) (payload : String) : IO String := do
   pure (← postJsonResponse config payload).body

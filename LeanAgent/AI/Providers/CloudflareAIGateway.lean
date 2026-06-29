@@ -1,5 +1,6 @@
 import LeanAgent.AI.Api.Cloudflare
 import LeanAgent.AI.Providers.CloudflareAuth
+import LeanAgent.AI.Providers.Streams
 import LeanAgent.Models
 
 namespace LeanAgent.AI.Providers.CloudflareAIGateway
@@ -64,8 +65,8 @@ def provider : IO LeanAgent.Models.Provider :=
       auth := { apiKey := some LeanAgent.AI.Providers.CloudflareAuth.cloudflareAIGatewayAuth }
       models := models
       apis :=
-        #[ { api := "openai-completions", streams := LeanAgent.Models.openAICompatibleStreams }
-         , { api := "openai-responses", streams := LeanAgent.Models.openAIResponsesStreams }
+        #[ { api := "openai-completions", streams := LeanAgent.AI.Providers.Streams.openAICompatibleStreams }
+         , { api := "openai-responses", streams := LeanAgent.AI.Providers.Streams.openAIResponsesStreams }
          ]
     }
 

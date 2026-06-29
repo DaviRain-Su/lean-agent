@@ -10,6 +10,7 @@ import LeanAgent.AI.Providers.DeepSeek
 import LeanAgent.AI.Providers.Fireworks
 import LeanAgent.AI.Providers.Google
 import LeanAgent.AI.Providers.GoogleVertex
+import LeanAgent.AI.Providers.GitHubCopilot
 import LeanAgent.AI.Providers.Groq
 import LeanAgent.AI.Providers.HuggingFace
 import LeanAgent.AI.Providers.KimiCoding
@@ -60,9 +61,10 @@ def getBuiltinModel? (providerId modelId : String) : Option LeanAgent.Models.Mod
 
 def catalogProviders : IO (Array LeanAgent.Models.Provider) := do
   pure
-    #[ ← LeanAgent.AI.Providers.DeepSeek.provider
+     #[ ← LeanAgent.AI.Providers.DeepSeek.provider
      , ← LeanAgent.AI.Providers.OpenAI.provider
      , ← LeanAgent.AI.Providers.OpenAICodex.provider
+     , ← LeanAgent.AI.Providers.GitHubCopilot.provider
      , ← LeanAgent.AI.Providers.OpenRouter.provider
      , ← LeanAgent.AI.Providers.Groq.provider
      , ← LeanAgent.AI.Providers.XAI.provider

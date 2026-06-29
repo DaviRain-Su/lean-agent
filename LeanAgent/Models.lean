@@ -1,5 +1,7 @@
 import LeanAgent.Core
 import LeanAgent.AI.Auth
+import LeanAgent.AI.Auth.OAuthBridge
+import LeanAgent.AI.OAuth.Core
 import LeanAgent.AI.Api.AnthropicMessages
 import LeanAgent.AI.Api.AzureOpenAIResponses
 import LeanAgent.AI.Api.BedrockConverseStream
@@ -12,6 +14,7 @@ import LeanAgent.AI.Api.OpenAICodexResponses
 import LeanAgent.AI.Api.OpenAIResponses
 import LeanAgent.AI.Api.SimpleOptions
 import LeanAgent.AI.EventStream
+import LeanAgent.Models.Core
 import LeanAgent.AI.Types
 
 namespace LeanAgent.Models
@@ -31,6 +34,17 @@ def openAIBaseUrl : String := "https://api.openai.com/v1"
 def openAICodexProviderId : String := "openai-codex"
 def openAICodexDefaultModel : String := "gpt-5.5"
 def openAICodexBaseUrl : String := LeanAgent.AI.Api.OpenAICodexResponses.defaultBaseUrl
+
+def githubCopilotProviderId : String := "github-copilot"
+def githubCopilotApiKeyEnv : String := "COPILOT_GITHUB_TOKEN"
+def githubCopilotDefaultModel : String := "gpt-5-mini"
+def githubCopilotBaseUrl : String := "https://api.individual.githubcopilot.com"
+def githubCopilotHeaders : LeanAgent.AI.Auth.ProviderHeaders :=
+  #[ ("User-Agent", "GitHubCopilotChat/0.35.0")
+   , ("Editor-Version", "vscode/1.107.0")
+   , ("Editor-Plugin-Version", "copilot-chat/0.35.0")
+   , ("Copilot-Integration-Id", "vscode-chat")
+   ]
 
 def azureOpenAIResponsesProviderId : String := "azure-openai-responses"
 def azureOpenAIResponsesApiKeyEnv : String := "AZURE_OPENAI_API_KEY"
@@ -188,64 +202,6 @@ def zaiCodingCNApiKeyEnv : String := "ZAI_CODING_CN_API_KEY"
 def zaiCodingCNDefaultModel : String := "glm-4.5-air"
 def zaiCodingCNBaseUrl : String := "https://open.bigmodel.cn/api/coding/paas/v4"
 
-structure ModelCompat where
-  supportsStore : Bool := true
-  supportsDeveloperRole : Bool := true
-  requiresReasoningContentOnAssistantMessages : Bool := false
-  thinkingFormat : Option String := none
-  supportsReasoningEffort : Bool := true
-  maxTokensField : String := "max_tokens"
-  supportsLongCacheRetention : Bool := true
-  sendSessionAffinityHeaders : Bool := false
-  supportsTemperature : Bool := true
-  supportsEagerToolInputStreaming : Bool := true
-  supportsCacheControlOnTools : Bool := true
-  allowEmptySignature : Bool := false
-  forceAdaptiveThinking : Bool := false
-deriving Repr, BEq
-
-structure ModelInfo where
-  id : String
-  name : String
-  provider : String
-  api : String
-  baseUrl : String
-  cost : LeanAgent.AI.UsageCost := {}
-  contextWindow : Nat := 0
-  maxTokens : Nat := 0
-  reasoning : Bool := false
-  thinkingLevelMap : Array LeanAgent.AI.ThinkingLevelMapEntry := #[]
-  input : Array String := #["text"]
-  supportsToolCalls : Bool := true
-  supportsJsonOutput : Bool := true
-  headers : LeanAgent.AI.Auth.ProviderHeaders := #[]
-  compat : ModelCompat := {}
-deriving Repr, BEq
-
-def ModelInfo.qualifiedId (model : ModelInfo) : String :=
-  model.provider ++ "/" ++ model.id
-
-def ModelInfo.toModelRef (model : ModelInfo) : LeanAgent.AI.ModelRef :=
-  { id := model.id
-    api := model.api
-    provider := model.provider
-    baseUrl := some model.baseUrl
-  }
-
-def ModelInfo.toResponsesModel (model : ModelInfo) :
-    LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel :=
-  { id := model.id
-    provider := model.provider
-    api := model.api
-    input := model.input
-    reasoning := model.reasoning
-    supportsDeveloperRole := model.compat.supportsDeveloperRole
-    contextWindow := model.contextWindow
-    maxTokens := model.maxTokens
-    cost := model.cost
-    thinkingLevelMap := model.thinkingLevelMap
-  }
-
 def deepSeekCompat : ModelCompat :=
   { supportsStore := false
     supportsDeveloperRole := false
@@ -275,13 +231,6 @@ def deepSeekV4Pro : ModelInfo :=
     maxTokens := 384000
     reasoning := true
     compat := deepSeekCompat
-  }
-
-def cost (input output cacheRead cacheWrite : Float) : LeanAgent.AI.UsageCost :=
-  { input := input
-    output := output
-    cacheRead := cacheRead
-    cacheWrite := cacheWrite
   }
 
 def catalogOpenAICompatibleModel
@@ -474,6 +423,113 @@ def openAICodexModels : Array ModelInfo :=
    , openAICodexModel "gpt-5.4" "GPT-5.4" 2.5 15.0 0.25 0.0 272000 128000
    , openAICodexModel "gpt-5.4-mini" "GPT-5.4 mini" 0.75 4.5 0.075 0.0 272000 128000
    , openAICodexModel "gpt-5.5" "GPT-5.5" 5.0 30.0 0.5 0.0 272000 128000
+   ]
+
+def githubCopilotModel
+    (id name api : String)
+    (inputCost outputCost cacheReadCost cacheWriteCost : Float)
+    (contextWindow maxTokens : Nat)
+    (reasoning : Bool := true)
+    (compat : ModelCompat := {})
+    (thinkingLevelMap : Array LeanAgent.AI.ThinkingLevelMapEntry := #[])
+    (input : Array String := #["text", "image"]) : ModelInfo :=
+  { (catalogModel githubCopilotProviderId id name api githubCopilotBaseUrl
+      inputCost outputCost cacheReadCost cacheWriteCost
+      contextWindow maxTokens reasoning compat thinkingLevelMap input) with
+    headers := githubCopilotHeaders
+  }
+
+def githubCopilotModels : Array ModelInfo :=
+  #[
+    githubCopilotModel "claude-fable-5" "Claude Fable 5" "openai-completions" 10 50 1 12.5 1000000 128000 true
+      { supportsStore := false, supportsDeveloperRole := false, supportsReasoningEffort := false } #[] #["text", "image"]
+   , githubCopilotModel "claude-haiku-4.5" "Claude Haiku 4.5 (latest)" "anthropic-messages" 1 5 0.1 1.25 200000 64000 true
+      { supportsEagerToolInputStreaming := false } #[] #["text", "image"]
+   , githubCopilotModel "claude-opus-4.5" "Claude Opus 4.5 (latest)" "anthropic-messages" 5 25 0.5 6.25 200000 32000 true
+      {} #[] #["text", "image"]
+   , githubCopilotModel "claude-opus-4.6" "Claude Opus 4.6" "anthropic-messages" 5 25 0.5 6.25 1000000 32000 true
+      { forceAdaptiveThinking := true }
+      #[{ level := .level .xhigh, mapped := some "max" }]
+      #["text", "image"]
+   , githubCopilotModel "claude-opus-4.7" "Claude Opus 4.7" "anthropic-messages" 5 25 0.5 6.25 200000 32000 true
+      { forceAdaptiveThinking := true, supportsTemperature := false }
+      #[{ level := .level .minimal, mapped := some "low" }, { level := .level .xhigh, mapped := some "xhigh" }]
+      #["text", "image"]
+   , githubCopilotModel "claude-opus-4.8" "Claude Opus 4.8" "anthropic-messages" 5 25 0.5 6.25 200000 64000 true
+      { forceAdaptiveThinking := true, supportsTemperature := false }
+      #[{ level := .level .minimal, mapped := some "low" }, { level := .level .xhigh, mapped := some "xhigh" }]
+      #["text", "image"]
+   , githubCopilotModel "claude-sonnet-4" "Claude Sonnet 4 (latest)" "anthropic-messages" 3 15 0.3 3.75 216000 16000 true
+      { supportsEagerToolInputStreaming := false } #[] #["text", "image"]
+   , githubCopilotModel "claude-sonnet-4.5" "Claude Sonnet 4.5 (latest)" "anthropic-messages" 3 15 0.3 3.75 200000 32000 true
+      { supportsEagerToolInputStreaming := false } #[] #["text", "image"]
+   , githubCopilotModel "claude-sonnet-4.6" "Claude Sonnet 4.6" "anthropic-messages" 3 15 0.3 3.75 1000000 32000 true
+      { forceAdaptiveThinking := true }
+      #[{ level := .level .minimal, mapped := some "low" }, { level := .level .xhigh, mapped := some "max" }]
+      #["text", "image"]
+   , githubCopilotModel "gemini-2.5-pro" "Gemini 2.5 Pro" "openai-completions" 1.25 10 0.125 0 128000 64000 true
+      { supportsStore := false, supportsDeveloperRole := false, supportsReasoningEffort := false } #[] #["text", "image"]
+   , githubCopilotModel "gemini-3-flash-preview" "Gemini 3 Flash Preview" "openai-completions" 0.5 3 0.05 0 128000 64000 true
+      { supportsStore := false, supportsDeveloperRole := false, supportsReasoningEffort := false } #[] #["text", "image"]
+   , githubCopilotModel "gemini-3.1-pro-preview" "Gemini 3.1 Pro Preview" "openai-completions" 2 12 0.2 0 200000 64000 true
+      { supportsStore := false, supportsDeveloperRole := false, supportsReasoningEffort := false } #[] #["text", "image"]
+   , githubCopilotModel "gemini-3.5-flash" "Gemini 3.5 Flash" "openai-completions" 1.5 9 0.15 0 200000 64000 true
+      { supportsStore := false, supportsDeveloperRole := false, supportsReasoningEffort := false } #[] #["text", "image"]
+   , githubCopilotModel "gpt-4.1" "GPT-4.1" "openai-completions" 2 8 0.5 0 128000 16384 false
+      { supportsStore := false, supportsDeveloperRole := false, supportsReasoningEffort := false } #[] #["text", "image"]
+   , githubCopilotModel "gpt-5-mini" "GPT-5 Mini" "openai-responses" 0.25 2 0.025 0 264000 64000 true
+      {}
+      #[{ level := .off, mapped := none }, { level := .level .minimal, mapped := some "low" }]
+      #["text", "image"]
+   , githubCopilotModel "gpt-5.2" "GPT-5.2" "openai-responses" 1.75 14 0.175 0 400000 128000 true
+      {}
+      #[ { level := .off, mapped := none }
+       , { level := .level .minimal, mapped := some "low" }
+       , { level := .level .xhigh, mapped := some "xhigh" }
+       ]
+      #["text", "image"]
+   , githubCopilotModel "gpt-5.2-codex" "GPT-5.2 Codex" "openai-responses" 1.75 14 0.175 0 400000 128000 true
+      {}
+      #[ { level := .off, mapped := none }
+       , { level := .level .minimal, mapped := some "low" }
+       , { level := .level .xhigh, mapped := some "xhigh" }
+       ]
+      #["text", "image"]
+   , githubCopilotModel "gpt-5.3-codex" "GPT-5.3 Codex" "openai-responses" 1.75 14 0.175 0 400000 128000 true
+      {}
+      #[ { level := .off, mapped := none }
+       , { level := .level .minimal, mapped := some "low" }
+       , { level := .level .xhigh, mapped := some "xhigh" }
+       ]
+      #["text", "image"]
+   , githubCopilotModel "gpt-5.4" "GPT-5.4" "openai-responses" 2.5 15 0.25 0 400000 128000 true
+      {}
+      #[ { level := .off, mapped := none }
+       , { level := .level .minimal, mapped := some "low" }
+       , { level := .level .xhigh, mapped := some "xhigh" }
+       ]
+      #["text", "image"]
+   , githubCopilotModel "gpt-5.4-mini" "GPT-5.4 mini" "openai-responses" 0.75 4.5 0.075 0 400000 128000 true
+      {}
+      #[ { level := .off, mapped := none }
+       , { level := .level .minimal, mapped := some "low" }
+       , { level := .level .xhigh, mapped := some "xhigh" }
+       ]
+      #["text", "image"]
+   , githubCopilotModel "gpt-5.4-nano" "GPT-5.4 nano" "openai-responses" 0.2 1.25 0.02 0 400000 128000 true
+      {}
+      #[ { level := .off, mapped := none }
+       , { level := .level .minimal, mapped := some "low" }
+       , { level := .level .xhigh, mapped := some "xhigh" }
+       ]
+      #["text", "image"]
+   , githubCopilotModel "gpt-5.5" "GPT-5.5" "openai-responses" 5 30 0.5 0 400000 128000 true
+      {}
+      #[ { level := .off, mapped := none }
+       , { level := .level .minimal, mapped := some "low" }
+       , { level := .level .xhigh, mapped := some "xhigh" }
+       ]
+      #["text", "image"]
    ]
 
 def openRouterCompat : ModelCompat :=
@@ -1574,6 +1630,16 @@ def openAICodexProviderInfo : ProviderInfo :=
     models := openAICodexModels
   }
 
+def githubCopilotProviderInfo : ProviderInfo :=
+  { id := githubCopilotProviderId
+    name := "GitHub Copilot"
+    baseUrl := githubCopilotBaseUrl
+    headers := githubCopilotHeaders
+    apiKeyEnv := githubCopilotApiKeyEnv
+    defaultModel := githubCopilotDefaultModel
+    models := githubCopilotModels
+  }
+
 def azureOpenAIResponsesProviderInfo : ProviderInfo :=
   { id := azureOpenAIResponsesProviderId
     name := "Azure OpenAI"
@@ -1847,6 +1913,7 @@ def defaultCatalog : ProviderCatalog :=
     #[ deepSeekProviderInfo
      , openAIProviderInfo
      , openAICodexProviderInfo
+     , githubCopilotProviderInfo
      , azureOpenAIResponsesProviderInfo
      , openRouterProviderInfo
      , groqProviderInfo
@@ -1924,1053 +1991,6 @@ def provider
       baseUrl := baseUrl
       noProxy := noProxy
     }
-
-inductive ModelsErrorCode where
-  | modelSource
-  | modelValidation
-  | provider
-  | stream
-  | auth
-  | oauth
-deriving BEq
-
-def ModelsErrorCode.toString : ModelsErrorCode → String
-  | .modelSource => "model_source"
-  | .modelValidation => "model_validation"
-  | .provider => "provider"
-  | .stream => "stream"
-  | .auth => "auth"
-  | .oauth => "oauth"
-
-def modelsError (code : ModelsErrorCode) (message : String) : IO.Error :=
-  IO.userError s!"ModelsError({code.toString}): {message}"
-
-structure ProviderStreams where
-  streamSimple :
-    ModelInfo → LeanAgent.AI.Context → LeanAgent.AI.SimpleStreamOptions →
-      IO LeanAgent.AI.AssistantMessageEventStream
-
-def ProviderStreams.completeSimple
-    (streams : ProviderStreams)
-    (model : ModelInfo)
-    (context : LeanAgent.AI.Context)
-    (options : LeanAgent.AI.SimpleStreamOptions := {}) : IO LeanAgent.AI.AssistantMessage := do
-  let stream ← streams.streamSimple model context options
-  pure stream.result
-
-def ProviderStreams.lazy (load : IO ProviderStreams) : ProviderStreams :=
-  { streamSimple := fun model context options =>
-      LeanAgent.AI.Api.Lazy.lazyStream model.toModelRef do
-        let streams ← load
-        streams.streamSimple model context options
-  }
-
-structure Provider where
-  id : String
-  name : String
-  baseUrl : Option String := none
-  headers : LeanAgent.AI.Auth.ProviderHeaders := #[]
-  auth : LeanAgent.AI.Auth.ProviderAuth
-  getModels : IO (Array ModelInfo)
-  refreshModels : Option (IO Unit) := none
-  streamSimple :
-    ModelInfo → LeanAgent.AI.Context → LeanAgent.AI.SimpleStreamOptions →
-      IO LeanAgent.AI.AssistantMessageEventStream
-
-def Provider.completeSimple
-    (provider : Provider)
-    (model : ModelInfo)
-    (context : LeanAgent.AI.Context)
-    (options : LeanAgent.AI.SimpleStreamOptions := {}) : IO LeanAgent.AI.AssistantMessage := do
-  let stream ← provider.streamSimple model context options
-  pure stream.result
-
-structure ApiDispatch where
-  api : String
-  streams : ProviderStreams
-
-structure CreateProviderOptions where
-  id : String
-  name : Option String := none
-  baseUrl : Option String := none
-  headers : LeanAgent.AI.Auth.ProviderHeaders := #[]
-  auth : LeanAgent.AI.Auth.ProviderAuth
-  models : Array ModelInfo := #[]
-  refreshModels : Option (IO (Array ModelInfo)) := none
-  apis : Array ApiDispatch
-
-def apiDispatchFor? (dispatches : Array ApiDispatch) (api : String) : Option ProviderStreams :=
-  dispatches.findSome? fun dispatch =>
-    if dispatch.api == api then some dispatch.streams else none
-
-def createProvider (input : CreateProviderOptions) : IO Provider := do
-  let modelsRef ← IO.mkRef input.models
-  let refreshModels :=
-    input.refreshModels.map fun refresh => do
-      let refreshed ← refresh
-      modelsRef.set refreshed
-  pure
-    { id := input.id
-      name := input.name.getD input.id
-      baseUrl := input.baseUrl
-      headers := input.headers
-      auth := input.auth
-      getModels := modelsRef.get
-      refreshModels := refreshModels
-      streamSimple := fun model context options => do
-        LeanAgent.AI.Api.Lazy.lazyStream model.toModelRef do
-          match apiDispatchFor? input.apis model.api with
-          | some streams => streams.streamSimple model context options
-          | none =>
-              throw (modelsError .stream s!"Provider {input.id} has no API implementation for \"{model.api}\"")
-    }
-
-def hasApi (model : ModelInfo) (api : String) : Bool :=
-  model.api == api
-
-def modelsAreEqual (a b : Option ModelInfo) : Bool :=
-  match a, b with
-  | some a, some b => a.id == b.id && a.provider == b.provider
-  | _, _ => false
-
-def extendedThinkingLevels : Array LeanAgent.AI.ModelThinkingLevel :=
-  #[ .off
-   , .level .minimal
-   , .level .low
-   , .level .medium
-   , .level .high
-   , .level .xhigh
-   ]
-
-def getSupportedThinkingLevels (model : ModelInfo) : Array LeanAgent.AI.ModelThinkingLevel :=
-  if !model.reasoning then
-    #[.off]
-  else
-    extendedThinkingLevels.filter fun level =>
-      match model.thinkingLevelMap.find? (fun entry => entry.level == level) with
-      | some { mapped := none, .. } => false
-      | some _ => true
-      | none => level != .level .xhigh
-
-def thinkingLevelMapValue? (model : ModelInfo) (level : LeanAgent.AI.ModelThinkingLevel) :
-    Option (Option String) :=
-  (model.thinkingLevelMap.find? fun entry => entry.level == level).map (fun entry => entry.mapped)
-
-def thinkingLevelPayloadValueD
-    (model : ModelInfo)
-    (level : LeanAgent.AI.ModelThinkingLevel)
-    (fallback : String) : String :=
-  match thinkingLevelMapValue? model level with
-  | some (some value) => value
-  | _ => fallback
-
-def offThinkingLevelPayloadValue? (model : ModelInfo) : Option String :=
-  match thinkingLevelMapValue? model .off with
-  | some (some value) => some value
-  | _ => none
-
-def anthropicThinkingEffort (model : ModelInfo) (level : LeanAgent.AI.ThinkingLevel) : String :=
-  match thinkingLevelMapValue? model (.level level) with
-  | some (some mapped) => mapped
-  | _ =>
-      match level with
-      | .minimal => "low"
-      | .low => "low"
-      | .medium => "medium"
-      | .high => "high"
-      | .xhigh => "high"
-
-def openAICompletionsOptionsFromSimple
-    (model : ModelInfo)
-    (options : LeanAgent.AI.SimpleStreamOptions) :
-    LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsOptions :=
-  let apiOptions := LeanAgent.AI.Api.OpenAICompletions.optionsFromSimple options
-  let reasoningValue :=
-    match apiOptions.reasoningEffort with
-    | some effort => some (thinkingLevelPayloadValueD model (.level effort) effort.toString)
-    | none =>
-        match apiOptions.reasoning with
-        | some effort => some (thinkingLevelPayloadValueD model (.level effort) effort.toString)
-        | none => none
-  let offValue :=
-    if model.reasoning && reasoningValue.isNone then
-      offThinkingLevelPayloadValue? model
-    else
-      none
-  { apiOptions with
-    reasoningEffortValue := reasoningValue
-    offReasoningEffortValue := offValue
-    supportsReasoningEffort := model.compat.supportsReasoningEffort
-    maxTokensField := model.compat.maxTokensField
-    supportsLongCacheRetention := model.compat.supportsLongCacheRetention
-    sendSessionAffinityHeaders := model.compat.sendSessionAffinityHeaders
-  }
-
-def thinkingLevelIndex? : LeanAgent.AI.ModelThinkingLevel → Option Nat
-  | .off => some 0
-  | .level .minimal => some 1
-  | .level .low => some 2
-  | .level .medium => some 3
-  | .level .high => some 4
-  | .level .xhigh => some 5
-
-def clampThinkingLevel
-    (model : ModelInfo)
-    (level : LeanAgent.AI.ModelThinkingLevel) : LeanAgent.AI.ModelThinkingLevel :=
-  let available := getSupportedThinkingLevels model
-  if available.contains level then
-    level
-  else
-    match thinkingLevelIndex? level with
-    | none => available[0]?.getD .off
-    | some requested =>
-        let upward := extendedThinkingLevels.filter fun candidate =>
-          match thinkingLevelIndex? candidate with
-          | some index => requested <= index && available.contains candidate
-          | none => false
-        match upward[0]? with
-        | some candidate => candidate
-        | none =>
-            let downward := extendedThinkingLevels.filter fun candidate =>
-              match thinkingLevelIndex? candidate with
-              | some index => index < requested && available.contains candidate
-              | none => false
-            match downward.back? with
-            | some candidate => candidate
-            | none => available[0]?.getD .off
-
-def perMillionCost (rate : Float) (tokens : Nat) : Float :=
-  (rate / 1000000.0) * Float.ofNat tokens
-
-def calculateCost (model : ModelInfo) (usage : LeanAgent.AI.Usage) : LeanAgent.AI.UsageCost :=
-  let longWrite := usage.cacheWrite1h.getD 0
-  let shortWrite := usage.cacheWrite - longWrite
-  let input := perMillionCost model.cost.input usage.input
-  let output := perMillionCost model.cost.output usage.output
-  let cacheRead := perMillionCost model.cost.cacheRead usage.cacheRead
-  let cacheWrite :=
-    ((model.cost.cacheWrite * Float.ofNat shortWrite) + (model.cost.input * 2.0 * Float.ofNat longWrite)) /
-      1000000.0
-  { input := input
-    output := output
-    cacheRead := cacheRead
-    cacheWrite := cacheWrite
-    total := input + output + cacheRead + cacheWrite
-  }
-
-def applyUsageCost (model : ModelInfo) (usage : LeanAgent.AI.Usage) : LeanAgent.AI.Usage :=
-  { usage with cost := calculateCost model usage }
-
-def applyUsageCostToMessage (model : ModelInfo) (message : LeanAgent.AI.AssistantMessage) :
-    LeanAgent.AI.AssistantMessage :=
-  { message with usage := applyUsageCost model message.usage }
-
-def mapEventMessage
-    (f : LeanAgent.AI.AssistantMessage → LeanAgent.AI.AssistantMessage) :
-    LeanAgent.AI.AssistantMessageEvent → LeanAgent.AI.AssistantMessageEvent
-  | .start snapshot => .start (f snapshot)
-  | .textStart index snapshot => .textStart index (f snapshot)
-  | .textDelta index delta snapshot => .textDelta index delta (f snapshot)
-  | .textEnd index content snapshot => .textEnd index content (f snapshot)
-  | .thinkingStart index snapshot => .thinkingStart index (f snapshot)
-  | .thinkingDelta index delta snapshot => .thinkingDelta index delta (f snapshot)
-  | .thinkingEnd index content snapshot => .thinkingEnd index content (f snapshot)
-  | .toolCallStart index snapshot => .toolCallStart index (f snapshot)
-  | .toolCallDelta index delta snapshot => .toolCallDelta index delta (f snapshot)
-  | .toolCallEnd index call snapshot => .toolCallEnd index call (f snapshot)
-  | .done reason message => .done reason (f message)
-  | .error reason message => .error reason (f message)
-
-def applyUsageCostToStream
-    (model : ModelInfo)
-    (stream : LeanAgent.AI.AssistantMessageEventStream) :
-    LeanAgent.AI.AssistantMessageEventStream :=
-  let update := applyUsageCostToMessage model
-  { events := stream.events.map (mapEventMessage update)
-    finalResult := update stream.finalResult
-  }
-
-def legacyToolFromAITool (tool : LeanAgent.AI.Tool) : AgentTool :=
-  { name := tool.name
-    description := tool.description
-    inputSchema := tool.parameters
-    execute := fun call =>
-      pure
-        { toolCallId := call.id
-          name := call.name
-          ok := false
-          content := "AI runtime provider placeholder tools are not executable"
-          error := some "tool execution is owned by the agent loop"
-        }
-  }
-
-def contextToProviderRequest (model : ModelInfo) (context : LeanAgent.AI.Context) : ProviderRequest :=
-  { model := model.id
-    system := context.systemPrompt.getD ""
-    messages := context.messages.map LeanAgent.AI.toLegacyMessage
-    tools := context.tools.map legacyToolFromAITool
-  }
-
-def clampMaxTokensToContext (model : ModelInfo) (context : LeanAgent.AI.Context) (maxTokens : Nat) : Nat :=
-  LeanAgent.AI.Api.SimpleOptions.clampMaxTokensToContext model.contextWindow context maxTokens
-
-def resolvedMaxTokens? (model : ModelInfo) (context : LeanAgent.AI.Context) (options : LeanAgent.AI.SimpleStreamOptions) :
-    Option Nat :=
-  LeanAgent.AI.Api.SimpleOptions.resolvedMaxTokens? model.contextWindow model.maxTokens context options
-
-def clampSimpleOptionsToContext
-    (model : ModelInfo)
-    (context : LeanAgent.AI.Context)
-    (options : LeanAgent.AI.SimpleStreamOptions) : LeanAgent.AI.SimpleStreamOptions :=
-  let options :=
-    LeanAgent.AI.Api.SimpleOptions.clampStreamOptionsToContext model.contextWindow model.maxTokens context options
-  match options.reasoning with
-  | none => options
-  | some level =>
-      match clampThinkingLevel model (.level level) with
-      | .off => { options with reasoning := none }
-      | .level clamped => { options with reasoning := some clamped }
-
-def hasHeaderAuth (headers : Array (String × Option String)) : Bool :=
-  headers.any fun (name, value) =>
-    let name := name.toLower
-    let valueSet :=
-      match value with
-      | some value => !value.trimAscii.isEmpty
-      | none => false
-    valueSet &&
-      (name == "authorization" || name == "x-api-key" || name == "x-goog-api-key" ||
-        name == "cf-aig-authorization")
-
-def requireApiKeyOrHeaderAuth
-    (providerId : String)
-    (options : LeanAgent.AI.SimpleStreamOptions) : IO String := do
-  match options.apiKey with
-  | some apiKey => pure apiKey
-  | none =>
-      if hasHeaderAuth options.headers then
-        pure ""
-      else
-        throw (modelsError .auth s!"missing API key for provider {providerId}")
-
-def openAICompatibleStreams : ProviderStreams :=
-  { streamSimple := fun model context options => do
-      let options := clampSimpleOptionsToContext model context options
-      let apiKey ← requireApiKeyOrHeaderAuth model.provider options
-      let config : LeanAgent.AI.Api.OpenAICompletions.OpenAICompatibleConfig :=
-        { apiKey := apiKey
-          baseUrl := model.baseUrl
-        }
-      let request := contextToProviderRequest model context
-      let stream ← LeanAgent.AI.Api.OpenAICompletions.streamWithOptions
-        config
-        request
-        model.api
-        model.provider
-        (openAICompletionsOptionsFromSimple model options)
-      pure (applyUsageCostToStream model stream)
-  }
-
-def openAIResponsesStreams : ProviderStreams :=
-  { streamSimple := fun model context options => do
-      let options := clampSimpleOptionsToContext model context options
-      let apiKey ← requireApiKeyOrHeaderAuth model.provider options
-      let config : LeanAgent.AI.Api.OpenAIResponses.OpenAIResponsesConfig :=
-        { apiKey := apiKey
-          baseUrl := model.baseUrl
-        }
-      LeanAgent.AI.Api.OpenAIResponses.completeStreamWithOptions
-        config
-        model.toResponsesModel
-        context
-        (LeanAgent.AI.Api.OpenAIResponses.optionsFromSimple options)
-  }
-
-def openAICodexResponsesStreams : ProviderStreams :=
-  { streamSimple := fun model context options => do
-      let options := clampSimpleOptionsToContext model context options
-      match options.apiKey with
-      | none => throw (modelsError .oauth s!"missing OAuth access token for provider {model.provider}")
-      | some apiKey =>
-          let config : LeanAgent.AI.Api.OpenAICodexResponses.OpenAICodexResponsesConfig :=
-            { apiKey := apiKey
-              baseUrl := model.baseUrl
-            }
-          LeanAgent.AI.Api.OpenAICodexResponses.completeStreamWithOptions
-            config
-            model.toResponsesModel
-            context
-            (LeanAgent.AI.Api.OpenAICodexResponses.optionsFromSimple options)
-  }
-
-def azureOpenAIResponsesStreams : ProviderStreams :=
-  { streamSimple := fun model context options => do
-      let options := clampSimpleOptionsToContext model context options
-      match options.apiKey with
-      | none => throw (modelsError .auth s!"missing API key for provider {model.provider}")
-      | some apiKey =>
-          let config : LeanAgent.AI.Api.AzureOpenAIResponses.AzureOpenAIResponsesConfig :=
-            { apiKey := apiKey
-              baseUrl := model.baseUrl
-            }
-          LeanAgent.AI.Api.AzureOpenAIResponses.completeStreamWithOptions
-            config
-            model.toResponsesModel
-            context
-            (LeanAgent.AI.Api.AzureOpenAIResponses.optionsFromSimple options)
-  }
-
-def anthropicMessagesOptionsFromSimple
-    (model : ModelInfo)
-    (context : LeanAgent.AI.Context)
-    (options : LeanAgent.AI.SimpleStreamOptions) :
-    LeanAgent.AI.Api.AnthropicMessages.AnthropicMessagesOptions :=
-  let base :=
-    { LeanAgent.AI.Api.AnthropicMessages.optionsFromSimple options with
-      supportsTemperature := model.compat.supportsTemperature
-      sendSessionAffinityHeaders := model.compat.sendSessionAffinityHeaders
-      supportsLongCacheRetention := model.compat.supportsLongCacheRetention
-      supportsEagerToolInputStreaming := model.compat.supportsEagerToolInputStreaming
-      supportsCacheControlOnTools := model.compat.supportsCacheControlOnTools
-      allowEmptySignature := model.compat.allowEmptySignature
-      forceAdaptiveThinking := model.compat.forceAdaptiveThinking
-    }
-  match options.reasoning with
-  | none =>
-      { base with thinkingEnabled := some false }
-  | some level =>
-      let maxTokens := (resolvedMaxTokens? model context options).getD model.maxTokens
-      if model.compat.forceAdaptiveThinking then
-        { base with
-          maxTokens := some maxTokens
-          thinkingEnabled := some true
-          thinkingEffort := some (anthropicThinkingEffort model level)
-        }
-      else
-        let adjusted := LeanAgent.AI.Api.SimpleOptions.adjustMaxTokensForThinking
-          (some maxTokens) model.maxTokens level options.thinkingBudgets
-        let thinkingBudget := Nat.min adjusted.thinkingBudget (maxTokens - Nat.min maxTokens 1024)
-        { base with
-          maxTokens := some maxTokens
-          thinkingEnabled := some true
-          thinkingBudgetTokens := some thinkingBudget
-        }
-
-def anthropicMessagesStreams : ProviderStreams :=
-  { streamSimple := fun model context options => do
-      let options := clampSimpleOptionsToContext model context options
-      let apiKey ← requireApiKeyOrHeaderAuth model.provider options
-      let config : LeanAgent.AI.Api.AnthropicMessages.AnthropicMessagesConfig :=
-        { apiKey := apiKey
-          baseUrl := model.baseUrl
-        }
-      let stream ← LeanAgent.AI.Api.AnthropicMessages.completeStreamWithOptions
-        config
-        model.toModelRef
-        model.input
-        model.maxTokens
-        model.reasoning
-        context
-        (anthropicMessagesOptionsFromSimple model context options)
-      pure (applyUsageCostToStream model stream)
-  }
-
-def modelIdLower (model : ModelInfo) : String :=
-  model.id.toLower
-
-def isGemini3ProModel (model : ModelInfo) : Bool :=
-  let id := modelIdLower model
-  id.startsWith "gemini-3-pro" || id.startsWith "gemini-3.1-pro"
-
-def isGemini3FlashModel (model : ModelInfo) : Bool :=
-  let id := modelIdLower model
-  id.startsWith "gemini-3-flash" ||
-    id.startsWith "gemini-3.1-flash" ||
-    id == "gemini-flash-latest" ||
-    id == "gemini-flash-lite-latest"
-
-def isGemma4Model (model : ModelInfo) : Bool :=
-  (modelIdLower model).contains "gemma-4"
-
-def googleDisabledThinkingLevel? (model : ModelInfo) : Option String :=
-  if isGemini3ProModel model then
-    some "LOW"
-  else if isGemini3FlashModel model || isGemma4Model model then
-    some "MINIMAL"
-  else
-    none
-
-def googleThinkingLevel (model : ModelInfo) (effort : LeanAgent.AI.ThinkingLevel) : String :=
-  if isGemini3ProModel model then
-    match effort with
-    | .minimal => "LOW"
-    | .low => "LOW"
-    | .medium => "HIGH"
-    | .high => "HIGH"
-    | .xhigh => "HIGH"
-  else if isGemma4Model model then
-    match effort with
-    | .minimal => "MINIMAL"
-    | .low => "MINIMAL"
-    | .medium => "HIGH"
-    | .high => "HIGH"
-    | .xhigh => "HIGH"
-  else
-    match effort with
-    | .minimal => "MINIMAL"
-    | .low => "LOW"
-    | .medium => "MEDIUM"
-    | .high => "HIGH"
-    | .xhigh => "HIGH"
-
-def budgetForLevel (budgets : LeanAgent.AI.ThinkingBudgets) :
-    LeanAgent.AI.ThinkingLevel → Option Nat
-  | .minimal => budgets.minimal
-  | .low => budgets.low
-  | .medium => budgets.medium
-  | .high => budgets.high
-  | .xhigh => budgets.high
-
-def googleThinkingBudget
-    (model : ModelInfo)
-    (effort : LeanAgent.AI.ThinkingLevel)
-    (customBudgets : Option LeanAgent.AI.ThinkingBudgets) : Int :=
-  match customBudgets.bind (fun budgets => budgetForLevel budgets effort) with
-  | some budget => Int.ofNat budget
-  | none =>
-      if model.id.contains "2.5-pro" then
-        match effort with
-        | .minimal => 128
-        | .low => 2048
-        | .medium => 8192
-        | .high => 32768
-        | .xhigh => 32768
-      else if model.id.contains "2.5-flash-lite" then
-        match effort with
-        | .minimal => 512
-        | .low => 2048
-        | .medium => 8192
-        | .high => 24576
-        | .xhigh => 24576
-      else if model.id.contains "2.5-flash" then
-        match effort with
-        | .minimal => 128
-        | .low => 2048
-        | .medium => 8192
-        | .high => 24576
-        | .xhigh => 24576
-      else
-        -1
-
-def googleGenerativeAIOptionsFromSimple
-    (model : ModelInfo)
-    (options : LeanAgent.AI.SimpleStreamOptions) :
-    LeanAgent.AI.Api.GoogleGenerativeAI.GoogleGenerativeAIOptions :=
-  let base := LeanAgent.AI.Api.GoogleGenerativeAI.optionsFromSimple options
-  match options.reasoning with
-  | none =>
-      { base with
-        thinkingEnabled := some false
-        thinkingLevel := googleDisabledThinkingLevel? model
-      }
-  | some effort =>
-      if isGemini3ProModel model || isGemini3FlashModel model || isGemma4Model model then
-        { base with
-          thinkingEnabled := some true
-          thinkingLevel := some (googleThinkingLevel model effort)
-        }
-      else
-        let budget := googleThinkingBudget model effort options.thinkingBudgets
-        { base with
-          thinkingEnabled := some true
-          thinkingBudgetTokens := if budget < 0 then none else some budget.toNat
-        }
-
-def googleGenerativeAIStreams : ProviderStreams :=
-  { streamSimple := fun model context options => do
-      let options := clampSimpleOptionsToContext model context options
-      let apiKey ← requireApiKeyOrHeaderAuth model.provider options
-      let config : LeanAgent.AI.Api.GoogleGenerativeAI.GoogleGenerativeAIConfig :=
-        { apiKey := apiKey
-          baseUrl := model.baseUrl
-        }
-      let stream ← LeanAgent.AI.Api.GoogleGenerativeAI.completeStreamWithOptions
-        config
-        model.toModelRef
-        model.input
-        model.reasoning
-        context
-        (googleGenerativeAIOptionsFromSimple model options)
-      pure (applyUsageCostToStream model stream)
-  }
-
-def googleVertexOptionsFromSimple
-    (model : ModelInfo)
-    (options : LeanAgent.AI.SimpleStreamOptions) :
-    LeanAgent.AI.Api.GoogleVertex.GoogleVertexOptions :=
-  let googleOptions := googleGenerativeAIOptionsFromSimple model options
-  { temperature := googleOptions.temperature
-    maxTokens := googleOptions.maxTokens
-    apiKey := googleOptions.apiKey
-    transport := googleOptions.transport
-    cacheRetention := googleOptions.cacheRetention
-    sessionId := googleOptions.sessionId
-    headers := googleOptions.headers
-    onPayload := googleOptions.onPayload
-    onResponse := googleOptions.onResponse
-    timeoutMs := googleOptions.timeoutMs
-    websocketConnectTimeoutMs := googleOptions.websocketConnectTimeoutMs
-    maxRetries := googleOptions.maxRetries
-    maxRetryDelayMs := googleOptions.maxRetryDelayMs
-    metadata := googleOptions.metadata
-    env := googleOptions.env
-    reasoning := googleOptions.reasoning
-    thinkingBudgets := googleOptions.thinkingBudgets
-    toolChoice :=
-      match googleOptions.toolChoice with
-      | some .auto => some .auto
-      | some .none => some .none
-      | some .any => some .any
-      | none => none
-    thinkingEnabled := googleOptions.thinkingEnabled
-    thinkingBudgetTokens := googleOptions.thinkingBudgetTokens
-    thinkingLevel := googleOptions.thinkingLevel
-  }
-
-def googleVertexStreams : ProviderStreams :=
-  { streamSimple := fun model context options => do
-      let options := clampSimpleOptionsToContext model context options
-      let config : LeanAgent.AI.Api.GoogleVertex.GoogleVertexConfig :=
-        { apiKey := options.apiKey.getD ""
-          baseUrl := model.baseUrl
-        }
-      let stream ← LeanAgent.AI.Api.GoogleVertex.completeStreamWithOptions
-        config
-        model.toModelRef
-        model.input
-        model.reasoning
-        context
-        (googleVertexOptionsFromSimple model options)
-      pure (applyUsageCostToStream model stream)
-  }
-
-def usesMistralReasoningEffort (model : ModelInfo) : Bool :=
-  model.id == "mistral-small-2603" ||
-    model.id == "mistral-small-latest" ||
-    model.id == "mistral-medium-3.5"
-
-def mistralReasoningEffort (model : ModelInfo) (level : LeanAgent.AI.ThinkingLevel) : String :=
-  thinkingLevelPayloadValueD model (.level level) "high"
-
-def mistralOptionsFromSimple
-    (model : ModelInfo)
-    (options : LeanAgent.AI.SimpleStreamOptions) :
-    LeanAgent.AI.Api.MistralConversations.MistralOptions :=
-  let base := LeanAgent.AI.Api.MistralConversations.optionsFromSimple options
-  match options.reasoning with
-  | none => base
-  | some requested =>
-      if !model.reasoning then
-        base
-      else
-        match clampThinkingLevel model (.level requested) with
-        | .off => base
-        | .level level =>
-            if usesMistralReasoningEffort model then
-              { base with reasoningEffort := some (mistralReasoningEffort model level) }
-            else
-              { base with promptMode := some "reasoning" }
-
-def mistralConversationsStreams : ProviderStreams :=
-  { streamSimple := fun model context options => do
-      let options := clampSimpleOptionsToContext model context options
-      let apiKey ← requireApiKeyOrHeaderAuth model.provider options
-      let config : LeanAgent.AI.Api.MistralConversations.MistralConversationsConfig :=
-        { apiKey := apiKey
-          baseUrl := model.baseUrl
-        }
-      let stream ← LeanAgent.AI.Api.MistralConversations.completeStreamWithOptions
-        config
-        model.toModelRef
-        model.input
-        context
-        (mistralOptionsFromSimple model options)
-      pure (applyUsageCostToStream model stream)
-  }
-
-def placeholderAuthToken (value : String) : Bool :=
-  value.startsWith "<" && value.endsWith ">"
-
-def bedrockOptionsFromSimple (options : LeanAgent.AI.SimpleStreamOptions) :
-    LeanAgent.AI.Api.BedrockConverseStream.BedrockOptions :=
-  let base := LeanAgent.AI.Api.BedrockConverseStream.optionsFromSimple options
-  let bearerToken :=
-    match options.apiKey with
-    | some key =>
-        let key := key.trimAscii.toString
-        if key.isEmpty || placeholderAuthToken key then none else some key
-    | none => none
-  { base with bearerToken := bearerToken }
-
-def bedrockConverseStreamStreams : ProviderStreams :=
-  { streamSimple := fun model context options => do
-      let options := clampSimpleOptionsToContext model context options
-      let config : LeanAgent.AI.Api.BedrockConverseStream.BedrockConverseStreamConfig :=
-        { baseUrl := model.baseUrl }
-      let stream ← LeanAgent.AI.Api.BedrockConverseStream.completeStreamWithOptions
-        config
-        model.toModelRef
-        model.input
-        model.name
-        model.thinkingLevelMap
-        model.reasoning
-        context
-        (bedrockOptionsFromSimple options)
-      pure (applyUsageCostToStream model stream)
-  }
-
-def googleVertexAdcPath : String := "~/.config/gcloud/application_default_credentials.json"
-
-def googleVertexHasAdcCredentials
-    (ctx : LeanAgent.AI.Auth.AuthContext) : IO Bool := do
-  let credentialsPath ←
-    match ← ctx.env "GOOGLE_APPLICATION_CREDENTIALS" with
-    | some path => pure path
-    | none => pure googleVertexAdcPath
-  let hasCredentials ← ctx.fileExists credentialsPath
-  let project ←
-    match ← ctx.env "GOOGLE_CLOUD_PROJECT" with
-    | some project => pure (some project)
-    | none => ctx.env "GCLOUD_PROJECT"
-  let location ← ctx.env "GOOGLE_CLOUD_LOCATION"
-  pure (hasCredentials && project.isSome && location.isSome)
-
-def googleVertexApiKeyAuth : LeanAgent.AI.Auth.ApiKeyAuth :=
-  { name := "Google Cloud credentials"
-    resolve := fun ctx credential _modelBaseUrl => do
-      let credentialEnv := credential.map (fun value => value.env) |>.getD #[]
-      match credential.bind (fun value => value.key) with
-      | some key =>
-          if key.trimAscii.toString.isEmpty then
-            pure none
-          else
-            pure (some
-              { auth := { apiKey := some key }
-                env := credentialEnv
-                source := some "stored credential"
-              })
-      | none =>
-          match ← ctx.env googleVertexApiKeyEnv with
-          | some key =>
-              pure (some
-                { auth := { apiKey := some key }
-                  env := credentialEnv
-                  source := some googleVertexApiKeyEnv
-                })
-          | none =>
-              if ← googleVertexHasAdcCredentials ctx then
-                pure (some
-                  { auth := { apiKey := some LeanAgent.AI.Api.GoogleVertex.vertexCredentialsMarker }
-                    env := credentialEnv
-                    source := some "gcloud application default credentials"
-                  })
-              else
-                pure none
-  }
-
-def openAICodexOAuthAuth : LeanAgent.AI.Auth.OAuthAuth :=
-  { name := "OpenAI (ChatGPT Plus/Pro)"
-    refresh := fun _ =>
-      throw (IO.userError "OpenAI Codex OAuth refresh is not implemented")
-    toAuth := fun credential =>
-      pure { apiKey := some credential.access }
-  }
-
-def amazonBedrockAmbientAuthSource? (ctx : LeanAgent.AI.Auth.AuthContext) :
-    IO (Option String) := do
-  match ← ctx.env "AWS_BEARER_TOKEN_BEDROCK" with
-  | some _ => pure (some "AWS_BEARER_TOKEN_BEDROCK")
-  | none =>
-      match ← ctx.env "AWS_PROFILE" with
-      | some _ => pure (some "AWS_PROFILE")
-      | none =>
-          let accessKey ← ctx.env "AWS_ACCESS_KEY_ID"
-          let secretKey ← ctx.env "AWS_SECRET_ACCESS_KEY"
-          if accessKey.isSome && secretKey.isSome then
-            pure (some "AWS access keys")
-          else
-            match ← ctx.env "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI" with
-            | some _ => pure (some "ECS task role")
-            | none =>
-                match ← ctx.env "AWS_CONTAINER_CREDENTIALS_FULL_URI" with
-                | some _ => pure (some "ECS task role")
-                | none =>
-                    match ← ctx.env "AWS_WEB_IDENTITY_TOKEN_FILE" with
-                    | some _ => pure (some "web identity token")
-                    | none => pure none
-
-def amazonBedrockApiKeyAuth : LeanAgent.AI.Auth.ApiKeyAuth :=
-  { name := "AWS credentials"
-    resolve := fun ctx credential _modelBaseUrl => do
-      let credentialEnv := credential.map (fun value => value.env) |>.getD #[]
-      match credential.bind (fun value => value.key) with
-      | some key =>
-          if key.trimAscii.toString.isEmpty then
-            pure none
-          else
-            pure
-              (some
-                { auth := { apiKey := some key }
-                  env := credentialEnv
-                  source := some "stored credential"
-                })
-      | none =>
-          let ctx :=
-            match credential with
-            | some value => LeanAgent.AI.Auth.overlayEnvAuthContext ctx value.env
-            | none => ctx
-          match ← amazonBedrockAmbientAuthSource? ctx with
-          | some source =>
-              pure
-                (some
-                  { auth := {}
-                    env := credentialEnv
-                    source := some source
-                  })
-          | none => pure none
-  }
-
-def authForProviderInfo (info : ProviderInfo) : LeanAgent.AI.Auth.ProviderAuth :=
-  if info.id == googleVertexProviderId then
-    { apiKey := some googleVertexApiKeyAuth }
-  else if info.id == openAICodexProviderId then
-    { oauth := some openAICodexOAuthAuth }
-  else if info.id == amazonBedrockProviderId then
-    { apiKey := some amazonBedrockApiKeyAuth }
-  else
-    { apiKey := some (LeanAgent.AI.Auth.envApiKeyAuth (info.name ++ " API key") info.authEnvs) }
-
-def createCatalogProvider (info : ProviderInfo) : IO Provider :=
-  createProvider
-    { id := info.id
-      name := some info.name
-      baseUrl := some info.baseUrl
-      headers := info.headers
-      auth := authForProviderInfo info
-      models := info.models
-      apis :=
-        #[ { api := "openai-completions", streams := openAICompatibleStreams }
-         , { api := "openai-responses", streams := openAIResponsesStreams }
-         , { api := LeanAgent.AI.Api.OpenAICodexResponses.api, streams := openAICodexResponsesStreams }
-         , { api := LeanAgent.AI.Api.AnthropicMessages.api, streams := anthropicMessagesStreams }
-         , { api := LeanAgent.AI.Api.GoogleGenerativeAI.api, streams := googleGenerativeAIStreams }
-         , { api := LeanAgent.AI.Api.GoogleVertex.api, streams := googleVertexStreams }
-         , { api := LeanAgent.AI.Api.MistralConversations.api, streams := mistralConversationsStreams }
-         , { api := LeanAgent.AI.Api.BedrockConverseStream.api, streams := bedrockConverseStreamStreams }
-         ]
-    }
-
-def streamHeaderNames (headers : Array (String × Option String)) : Array String :=
-  headers.map Prod.fst
-
-def authHeadersToStreamHeaders
-    (authHeaders : LeanAgent.AI.Auth.ProviderHeaders)
-    (requestHeaders : Array (String × Option String)) : Array (String × Option String) :=
-  let requestNames := streamHeaderNames requestHeaders
-  let inherited := authHeaders.filterMap fun (name, value) =>
-    if requestNames.contains name then none else some (name, some value)
-  inherited ++ requestHeaders
-
-structure Collection where
-  providersRef : IO.Ref (Array Provider)
-  credentials : LeanAgent.AI.Auth.CredentialStore
-  authContext : LeanAgent.AI.Auth.AuthContext
-
-def createModels
-    (credentials : Option LeanAgent.AI.Auth.CredentialStore := none)
-    (authContext : LeanAgent.AI.Auth.AuthContext := LeanAgent.AI.Auth.defaultProviderAuthContext) :
-    IO Collection := do
-  let credentials ←
-    match credentials with
-    | some credentials => pure credentials
-    | none => LeanAgent.AI.Auth.InMemoryCredentialStore.mk
-  let providersRef ← IO.mkRef (Array.empty : Array Provider)
-  pure { providersRef := providersRef, credentials := credentials, authContext := authContext }
-
-def Collection.getProviders (collection : Collection) : IO (Array Provider) :=
-  collection.providersRef.get
-
-def Collection.getProvider? (collection : Collection) (id : String) : IO (Option Provider) := do
-  let providers ← collection.getProviders
-  pure (providers.find? fun provider => provider.id == id)
-
-def Collection.setProvider (collection : Collection) (provider : Provider) : IO Unit := do
-  collection.providersRef.modify fun providers =>
-    (providers.filter fun current => current.id != provider.id).push provider
-
-def createDefaultModels
-    (credentials : Option LeanAgent.AI.Auth.CredentialStore := none)
-    (authContext : LeanAgent.AI.Auth.AuthContext := LeanAgent.AI.Auth.defaultProviderAuthContext) :
-    IO Collection := do
-  let collection ← createModels credentials authContext
-  for info in defaultCatalog.providers do
-    let provider ← createCatalogProvider info
-    collection.setProvider provider
-  pure collection
-
-def Collection.deleteProvider (collection : Collection) (id : String) : IO Unit := do
-  collection.providersRef.modify fun providers => providers.filter fun provider => provider.id != id
-
-def Collection.clearProviders (collection : Collection) : IO Unit :=
-  collection.providersRef.set #[]
-
-def providerModelsOrEmpty (provider : Provider) : IO (Array ModelInfo) := do
-  try
-    provider.getModels
-  catch _ =>
-    pure #[]
-
-def Collection.getModels (collection : Collection) (providerId : Option String := none) : IO (Array ModelInfo) := do
-  match providerId with
-  | some id =>
-      match ← collection.getProvider? id with
-      | some provider => providerModelsOrEmpty provider
-      | none => pure #[]
-  | none =>
-      let providers ← collection.getProviders
-      let mut models := #[]
-      for provider in providers do
-        models := models ++ (← providerModelsOrEmpty provider)
-      pure models
-
-def Collection.getModel? (collection : Collection) (providerId modelId : String) : IO (Option ModelInfo) := do
-  let models ← collection.getModels (some providerId)
-  pure (models.find? fun model => model.id == modelId)
-
-def Collection.refresh (collection : Collection) (providerId : Option String := none) : IO Unit := do
-  match providerId with
-  | some id =>
-      match ← collection.getProvider? id with
-      | some provider =>
-          match provider.refreshModels with
-          | some refresh => refresh
-          | none => pure ()
-      | none => pure ()
-  | none =>
-      let providers ← collection.getProviders
-      for provider in providers do
-        match provider.refreshModels with
-        | some refresh =>
-            try
-              refresh
-            catch _ =>
-              pure ()
-        | none => pure ()
-
-def Collection.getAuth (collection : Collection) (model : ModelInfo) : IO (Option LeanAgent.AI.Auth.AuthResult) := do
-  match ← collection.getProvider? model.provider with
-  | some provider =>
-      LeanAgent.AI.Auth.resolveProviderAuth provider.id provider.auth collection.credentials collection.authContext
-  | none => pure none
-
-def Collection.requireProvider (collection : Collection) (model : ModelInfo) : IO Provider := do
-  match ← collection.getProvider? model.provider with
-  | some provider => pure provider
-  | none => throw (modelsError .provider s!"Unknown provider: {model.provider}")
-
-def Collection.applyAuth
-    (collection : Collection)
-    (provider : Provider)
-    (model : ModelInfo)
-    (options : LeanAgent.AI.SimpleStreamOptions) :
-    IO (ModelInfo × LeanAgent.AI.SimpleStreamOptions) := do
-  let resolution ←
-    LeanAgent.AI.Auth.resolveProviderAuth provider.id provider.auth collection.credentials collection.authContext
-      { apiKey := options.apiKey, env := options.env }
-      (some model.baseUrl)
-  let providerModelHeaders :=
-    authHeadersToStreamHeaders provider.headers
-      (authHeadersToStreamHeaders model.headers options.headers)
-  match resolution with
-  | none =>
-      pure (model, { options with headers := providerModelHeaders })
-  | some resolution =>
-      let requestModel :=
-        match resolution.auth.baseUrl with
-        | some baseUrl => { model with baseUrl := baseUrl }
-        | none => model
-      let apiKey :=
-        match options.apiKey with
-        | some value => some value
-        | none => resolution.auth.apiKey
-      let requestOptions :=
-        { options with
-          apiKey := apiKey
-          headers :=
-            authHeadersToStreamHeaders provider.headers
-              (authHeadersToStreamHeaders model.headers
-                (authHeadersToStreamHeaders resolution.auth.headers options.headers))
-          env := LeanAgent.AI.Auth.providerEnvMerge resolution.env options.env
-        }
-      pure (requestModel, requestOptions)
-
-def abortedAssistantMessage (model : ModelInfo) (timestamp : Nat) : LeanAgent.AI.AssistantMessage :=
-  { content := #[]
-    api := model.api
-    provider := model.provider
-    model := model.id
-    stopReason := .aborted
-    errorMessage := some LeanAgent.AI.Util.Abort.requestAbortedMessage
-    timestamp := timestamp
-  }
-
-def abortedEventStream (model : ModelInfo) (timestamp : Nat) : LeanAgent.AI.AssistantMessageEventStream :=
-  LeanAgent.AI.fromMessage (abortedAssistantMessage model timestamp)
-
-def errorEventStream (model : ModelInfo) (error : IO.Error) (timestamp : Nat) : LeanAgent.AI.AssistantMessageEventStream :=
-  let message : LeanAgent.AI.AssistantMessage :=
-    { content := #[]
-      api := model.api
-      provider := model.provider
-      model := model.id
-      stopReason := .error
-      errorMessage := some error.toString
-      diagnostics :=
-        #[ LeanAgent.AI.Util.Diagnostics.createAssistantMessageDiagnostic
-            "provider_error"
-            error.toString
-            none
-            timestamp
-         ]
-      timestamp := timestamp
-    }
-  LeanAgent.AI.errorStream message
-
-def Collection.streamSimple
-    (collection : Collection)
-    (model : ModelInfo)
-    (context : LeanAgent.AI.Context)
-    (options : LeanAgent.AI.SimpleStreamOptions := {}) :
-    IO LeanAgent.AI.AssistantMessageEventStream := do
-  if ← LeanAgent.AI.Util.Abort.isAborted options.signal then
-    return abortedEventStream model (← IO.monoMsNow)
-  let provider ← collection.requireProvider model
-  let (requestModel, requestOptions) ← collection.applyAuth provider model options
-  try
-    provider.streamSimple requestModel context requestOptions
-  catch err =>
-    if LeanAgent.AI.Util.Abort.isAbortErrorMessage err.toString then
-      pure (abortedEventStream requestModel (← IO.monoMsNow))
-    else
-      pure (errorEventStream requestModel err (← IO.monoMsNow))
-
-def Collection.completeSimple
-    (collection : Collection)
-    (model : ModelInfo)
-    (context : LeanAgent.AI.Context)
-    (options : LeanAgent.AI.SimpleStreamOptions := {}) : IO LeanAgent.AI.AssistantMessage := do
-  let stream ← collection.streamSimple model context options
-  pure stream.result
 
 structure SelectionOptions where
   model : Option String := none

@@ -1,8 +1,9 @@
+import LeanAgent.AI.Providers.Catalog
 import LeanAgent.Models
 
 namespace LeanAgent.AI.Providers.Together
 
 def provider : IO LeanAgent.Models.Provider :=
-  LeanAgent.Models.createCatalogProvider LeanAgent.Models.togetherProviderInfo
+  LeanAgent.AI.Providers.Catalog.createCatalogProvider LeanAgent.Models.togetherProviderInfo
 
 end LeanAgent.AI.Providers.Together

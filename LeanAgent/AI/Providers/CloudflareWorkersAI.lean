@@ -1,5 +1,6 @@
 import LeanAgent.AI.Api.Cloudflare
 import LeanAgent.AI.Providers.CloudflareAuth
+import LeanAgent.AI.Providers.Streams
 import LeanAgent.Models
 
 namespace LeanAgent.AI.Providers.CloudflareWorkersAI
@@ -50,7 +51,7 @@ def provider : IO LeanAgent.Models.Provider :=
       name := some providerName
       auth := { apiKey := some LeanAgent.AI.Providers.CloudflareAuth.cloudflareWorkersAIAuth }
       models := models
-      apis := #[{ api := "openai-completions", streams := LeanAgent.Models.openAICompatibleStreams }]
+      apis := #[{ api := "openai-completions", streams := LeanAgent.AI.Providers.Streams.openAICompatibleStreams }]
     }
 
 end LeanAgent.AI.Providers.CloudflareWorkersAI

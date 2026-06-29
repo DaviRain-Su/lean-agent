@@ -1,4 +1,5 @@
 import LeanAgent
+import LeanAgent.AI
 
 set_option maxRecDepth 2048
 
@@ -9,6 +10,19 @@ def fail (message : String) : IO Unit :=
 
 def assertTrue (condition : Bool) (message : String) : IO Unit :=
   if condition then pure () else fail message
+
+def waitForSome
+    (read : IO (Option α))
+    (failure : String)
+    (remaining : Nat := 100) : IO α := do
+  match remaining with
+  | 0 => throw (IO.userError failure)
+  | n + 1 =>
+      match ← read with
+      | some value => pure value
+      | none =>
+          IO.sleep 10
+          waitForSome read failure n
 
 def headerValue? (headers : Array (String × String)) (name : String) : Option String :=
   headers.findSome? fun (headerName, value) =>
@@ -955,6 +969,50 @@ def googleVertexModelRef : LeanAgent.AI.ModelRef :=
     baseUrl := some LeanAgent.Models.googleVertexBaseUrl
   }
 
+def googleVertexServiceAccountPrivateKey : String :=
+  String.intercalate "\n"
+    [ "-----BEGIN PRIVATE KEY-----"
+    , "MIICeQIBADANBgkqhkiG9w0BAQEFAASCAmMwggJfAgEAAoGBAKO+3IZCNgRIVSjj"
+    , "mCy70KrvYytmvz5cKwgnJfD40b60ugOGEn1MVjH2TmT5o7Eo6mkh7hL8vTR4/sc9"
+    , "upJkuDsAmCU58Y5XEAL9UzCBKgrW1CnnBkHL9ki3+scvU5V1n0IQR6b6+yEAJeED"
+    , "dPitZBO86SOFpYB7PlP7W28uf75DAgMBAAECgYEAjSqai9TBJOgHIv0z0D0LJJLE"
+    , "+EHYVja3kovNlfWtPbApPah0gDkzhldGNp9RlAYmMQTjbtMdewNlAvggxNy4RiQG"
+    , "N4K/Ag6U0UPi2jgvk6du5xH8ke73TNrc6HH7nz0S4mTs6KcPMXVCjyrvFcXtXFpW"
+    , "hTLsQDC50vKlFIZN/cECQQDZzWIbX8k/umWFLadva4XIDLwaEfBSGPTK/d6u7+a5"
+    , "wDRSAW7l8tseBpwvEWo/4WxbE54OYX+bbNUcW9MNIj35AkEAwHaBnYQQiKHKYIx8"
+    , "27DM+lLc4L9OZaac1A9AsomzcWP+ruPobYOMow0Ix0ZtlStb3HvKw95npoUDpQUf"
+    , "kU4dGwJBAKu1GppAKrW+KpkTBAR4PTEYsRbQe6kNmbeK64r5AOoCGH1qOda5XnvO"
+    , "dEU7MouIGVe4IIxv2x1acKx5y+p3y2kCQQCOqMjWuweOX26lNj1ukpS9kCJNLUCt"
+    , "NFzXCx9Ht64dBKPJewHT+0iJq6WwIFIl2efTfKcFnJtz4PCcpzmI+T+1AkEAyRLr"
+    , "CwCVEkPII7ose21UEqjW3og+tb0LvuWp76p7Brl7nUqI2H+PRPX21JAkoogYgzZ4"
+    , "MR/bhhwyieF89SILmw=="
+    , "-----END PRIVATE KEY-----"
+    , ""
+    ]
+
+def writeGoogleVertexServiceAccountCredentials
+    (path : System.FilePath)
+    (tokenUri : String) : IO Unit := do
+  IO.FS.writeFile path
+    ((LeanAgent.Json.obj
+      [ ("type", LeanAgent.Json.str "service_account")
+      , ("client_email", LeanAgent.Json.str "test-service@example.com")
+      , ("private_key", LeanAgent.Json.str googleVertexServiceAccountPrivateKey)
+      , ("token_uri", LeanAgent.Json.str tokenUri)
+      ]).compress)
+
+def writeGoogleVertexAuthorizedUserCredentials
+    (path : System.FilePath)
+    (tokenUri : String) : IO Unit := do
+  IO.FS.writeFile path
+    ((LeanAgent.Json.obj
+      [ ("type", LeanAgent.Json.str "authorized_user")
+      , ("client_id", LeanAgent.Json.str "test-client-id")
+      , ("client_secret", LeanAgent.Json.str "test-client-secret")
+      , ("refresh_token", LeanAgent.Json.str "test-refresh-token")
+      , ("token_uri", LeanAgent.Json.str tokenUri)
+      ]).compress)
+
 def mistralModelRef : LeanAgent.AI.ModelRef :=
   { id := LeanAgent.Models.mistralDefaultModel
     api := LeanAgent.AI.Api.MistralConversations.api
@@ -1156,7 +1214,7 @@ def testAnthropicMessagesCompatOptions : IO Unit := do
         }
       thinkingLevelMap := #[{ level := .level .xhigh, mapped := some "max" }]
     }
-  let options := LeanAgent.Models.anthropicMessagesOptionsFromSimple
+  let options := LeanAgent.AI.Providers.Streams.anthropicMessagesOptionsFromSimple
     model
     {}
     { reasoning := some .xhigh, temperature := some 0.2 }
@@ -2177,7 +2235,7 @@ def testGoogleVertexUrlsAndHeaders : IO Unit := do
 
 def testGoogleVertexAuthResolution : IO Unit := do
   let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
-  let auth := LeanAgent.Models.authForProviderInfo LeanAgent.Models.googleVertexProviderInfo
+  let auth := LeanAgent.AI.Providers.Catalog.authForProviderInfo LeanAgent.Models.googleVertexProviderInfo
   let keyCtx : LeanAgent.AI.Auth.AuthContext :=
     { env := fun name => pure (if name == LeanAgent.Models.googleVertexApiKeyEnv then some "vertex-key" else none)
       fileExists := fun _ => pure false
@@ -2201,7 +2259,7 @@ def testGoogleVertexAuthResolution : IO Unit := do
             some "us-central1"
           else
             none)
-      fileExists := fun path => pure (path == LeanAgent.Models.googleVertexAdcPath)
+      fileExists := fun path => pure (path == LeanAgent.AI.Providers.Catalog.googleVertexAdcPath)
     }
   match ← LeanAgent.AI.Auth.resolveProviderAuth
       LeanAgent.Models.googleVertexProviderId
@@ -2405,17 +2463,17 @@ def testMistralReasoningAndPromptCacheOptions : IO Unit := do
     match LeanAgent.Models.mistralModels.find? (fun model => model.id == "mistral-large-latest") with
     | some model => pure model
     | none => throw (IO.userError "expected Mistral Large model")
-  let smallOptions := LeanAgent.Models.mistralOptionsFromSimple
+  let smallOptions := LeanAgent.AI.Providers.Streams.mistralOptionsFromSimple
     small2603
     { reasoning := some .medium }
   assertTrue (smallOptions.reasoningEffort == some "high") "expected Mistral Small 4 reasoning effort"
   assertTrue smallOptions.promptMode.isNone "expected no prompt mode for reasoning-effort models"
-  let magistralOptions := LeanAgent.Models.mistralOptionsFromSimple
+  let magistralOptions := LeanAgent.AI.Providers.Streams.mistralOptionsFromSimple
     magistral
     { reasoning := some .medium }
   assertTrue (magistralOptions.promptMode == some "reasoning") "expected Magistral prompt mode"
   assertTrue magistralOptions.reasoningEffort.isNone "expected no reasoning effort for Magistral"
-  let noReasoning := LeanAgent.Models.mistralOptionsFromSimple
+  let noReasoning := LeanAgent.AI.Providers.Streams.mistralOptionsFromSimple
     small2603
     {}
   assertTrue noReasoning.reasoningEffort.isNone "expected no Mistral reasoning controls without request"
@@ -2682,150 +2740,94 @@ def testBedrockConverseRequestPayload : IO Unit := do
   | some metadata => assertTrue (jsonStringField? metadata "session" == some "s1") "expected Bedrock metadata"
   | none => fail "expected Bedrock request metadata"
 
-def testBedrockConverseHelpersAndTransportBoundary : IO Unit := do
-  assertTrue (LeanAgent.AI.Api.BedrockConverseStream.mapStopReason (some "END_TURN") == .stop)
-    "expected Bedrock END_TURN stop"
-  assertTrue (LeanAgent.AI.Api.BedrockConverseStream.mapStopReason (some "MAX_TOKENS") == .length)
-    "expected Bedrock MAX_TOKENS length"
-  assertTrue (LeanAgent.AI.Api.BedrockConverseStream.mapStopReason (some "TOOL_USE") == .toolUse)
-    "expected Bedrock TOOL_USE"
-  assertTrue (LeanAgent.AI.Api.BedrockConverseStream.mapStopReason (some "OTHER") == .error)
-    "expected Bedrock unknown stop reason error"
-  assertTrue
-    (LeanAgent.AI.Api.BedrockConverseStream.standardEndpointRegion?
-      "https://bedrock-runtime.us-west-2.amazonaws.com" == some "us-west-2")
-    "expected Bedrock endpoint region"
-  assertTrue
-    (LeanAgent.AI.Api.BedrockConverseStream.standardEndpointRegion?
-      "https://custom-bedrock.example.com" == none)
-    "expected custom Bedrock endpoint to have no standard region"
-  assertTrue
-    (LeanAgent.AI.Api.BedrockConverseStream.shouldUseExplicitEndpoint
-      "https://bedrock-runtime.us-east-1.amazonaws.com" none false)
-    "expected standard endpoint to be explicit without configured region/profile"
-  assertTrue
-    (!LeanAgent.AI.Api.BedrockConverseStream.shouldUseExplicitEndpoint
-      "https://bedrock-runtime.us-east-1.amazonaws.com" (some "us-west-2") false)
-    "expected configured region to avoid explicit endpoint"
-  let headers := LeanAgent.AI.Api.BedrockConverseStream.requestHeaders
-    { headers := #[("X-Config", "yes")] }
-    { headers :=
-        #[ ("Authorization", some "bad")
-         , ("x-amz-date", some "bad")
-         , ("X-Trace", some "trace-1")
+def testBedrockConverseGovCloudThinkingDisplayOmitted : IO Unit := do
+  let model : LeanAgent.AI.ModelRef :=
+    { id := "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0"
+      api := LeanAgent.AI.Api.BedrockConverseStream.api
+      provider := LeanAgent.Models.amazonBedrockProviderId
+      baseUrl := some LeanAgent.Models.amazonBedrockBaseUrl
+    }
+  let payload := LeanAgent.AI.Api.BedrockConverseStream.requestToJsonWithOptions
+    model
+    #["text"]
+    "Claude Sonnet 4.5 (GovCloud)"
+    #[]
+    true
+    { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }] }
+    { reasoning := some .medium
+      thinkingDisplay := some .omitted
+      region := some "us-gov-west-1"
+    }
+  match jsonObjectField? payload "additionalModelRequestFields" with
+  | some fields =>
+      match jsonObjectField? fields "thinking" with
+      | some thinking =>
+          assertTrue (LeanAgent.Json.optVal? thinking "display" == none)
+            "expected GovCloud Bedrock thinking display to be omitted"
+      | none => fail "expected GovCloud Bedrock thinking object"
+  | none => fail "expected GovCloud Bedrock additional fields"
+
+def testBedrockConversePreparedRequestSigV4 : IO Unit := do
+  let model : LeanAgent.AI.ModelRef :=
+    { id := "anthropic.claude-3-7-sonnet-20250219-v1:0"
+      api := LeanAgent.AI.Api.BedrockConverseStream.api
+      provider := LeanAgent.Models.amazonBedrockProviderId
+      baseUrl := some LeanAgent.Models.amazonBedrockBaseUrl
+    }
+  let prepared ← LeanAgent.AI.Api.BedrockConverseStream.prepareRequestWithTimestamp
+    { baseUrl := LeanAgent.Models.amazonBedrockBaseUrl }
+    model
+    #["text"]
+    "Claude 3.7 Sonnet Bedrock Fixture"
+    #[]
+    true
+    { messages :=
+        #[.user
+            { content := #[LeanAgent.AI.text "Auth surface fixture bedrock-auth-sigv4-session."]
+              timestamp := 1
+            }]
+    }
+    { amzDate := "20250115T120000Z", dateStamp := "20250115" }
+    { maxTokens := some 32
+      region := some "us-east-1"
+      env :=
+        #[ ("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE")
+         , ("AWS_SECRET_ACCESS_KEY", "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY")
+         , ("AWS_SESSION_TOKEN", "IQoJb3JpZ2luX2VjEOr//////////wEaCXVzLWVhc3QtMSJHMEUCIQDn")
          ]
     }
-  assertTrue (headerValueCaseInsensitive? headers "X-Config" == some "yes")
-    "expected Bedrock config header"
-  assertTrue (headerValueCaseInsensitive? headers "X-Trace" == some "trace-1")
-    "expected Bedrock custom header"
-  assertTrue (headerValueCaseInsensitive? headers "Authorization" == none)
-    "expected Bedrock reserved auth header to be filtered"
-  let sawPayload ← IO.mkRef false
-  let failed ←
-    try
-      let _ ← LeanAgent.AI.Api.BedrockConverseStream.completeStreamWithOptions
-        { baseUrl := LeanAgent.Models.amazonBedrockBaseUrl }
-        bedrockModelRef
-        #["text", "image"]
-        "Claude Opus 4.6 (US)"
-        #[]
-        true
-        { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }] }
-        { onPayload := some (fun payload model => do
-            sawPayload.set true
-            assertTrue (jsonStringField? payload "modelId" == some model.id)
-              "expected Bedrock payload hook model id"
-            pure none)
-        }
-      pure false
-    catch err =>
-      assertTrue (err.toString.contains "AWS SigV4") "expected Bedrock transport boundary error"
-      pure true
-  assertTrue failed "expected Bedrock transport to fail explicitly"
-  assertTrue (← sawPayload.get) "expected Bedrock payload hook before transport boundary"
-
-def testCompatBedrockTypedLegacyAliasBoundary : IO Unit := do
-  let sawPayload ← IO.mkRef false
-  let tool : LeanAgent.AI.Tool :=
-    { name := "read"
-      description := "Read a file"
-      parameters := LeanAgent.Json.obj [("type", LeanAgent.Json.str "object")]
-    }
-  let model : LeanAgent.Models.ModelInfo :=
-    { id := LeanAgent.Models.amazonBedrockDefaultModel
-      name := "Claude Opus 4.6 (US)"
-      provider := LeanAgent.Models.amazonBedrockProviderId
-      api := LeanAgent.AI.Api.BedrockConverseStream.api
-      baseUrl := LeanAgent.Models.amazonBedrockBaseUrl
-      contextWindow := 200000
-      maxTokens := 64000
-      reasoning := true
-      thinkingLevelMap := #[{ level := .level .xhigh, mapped := some "max" }]
-      input := #["text", "image"]
-    }
-  let failed ←
-    try
-      let _ ← LeanAgent.AI.Compat.Aliases.streamBedrockConverseStream
-        model
-        { systemPrompt := some "system"
-          messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
-          tools := #[tool]
-        }
-        { apiKey := some "<authenticated>"
-          bearerToken := some "bedrock-bearer"
-          region := some "us-west-2"
-          profile := some "dev"
-          maxTokens := some 123
-          toolChoice := some (.tool "read")
-          reasoning := some .xhigh
-          thinkingDisplay := some .summarized
-          metadata := some (LeanAgent.Json.obj [("session", LeanAgent.Json.str "typed-bedrock")])
-          onPayload := some (fun payload ref => do
-            sawPayload.set true
-            assertTrue (ref.api == LeanAgent.AI.Api.BedrockConverseStream.api)
-              "expected typed Bedrock payload hook model api"
-            assertTrue (jsonStringField? payload "modelId" == some LeanAgent.Models.amazonBedrockDefaultModel)
-              "expected typed Bedrock model id"
-            match jsonObjectField? payload "inferenceConfig" with
-            | some inference =>
-                assertTrue (LeanAgent.Json.optVal? inference "maxTokens" == some (LeanAgent.Json.nat 123))
-                  "expected typed Bedrock max tokens"
-            | none => fail "expected typed Bedrock inference config"
-            match jsonObjectField? payload "toolConfig" with
-            | some toolConfig =>
-                match jsonObjectField? toolConfig "toolChoice" with
-                | some choice =>
-                    match jsonObjectField? choice "tool" with
-                    | some selected =>
-                        assertTrue (jsonStringField? selected "name" == some "read")
-                          "expected typed Bedrock specific tool choice"
-                    | none => fail "expected typed Bedrock tool choice object"
-                | none => fail "expected typed Bedrock tool choice"
-            | none => fail "expected typed Bedrock tool config"
-            match jsonObjectField? payload "additionalModelRequestFields" with
-            | some fields =>
-                match jsonObjectField? fields "thinking", jsonObjectField? fields "output_config" with
-                | some thinking, some outputConfig =>
-                    assertTrue (jsonStringField? thinking "display" == some "summarized")
-                      "expected typed Bedrock thinking display"
-                    assertTrue (jsonStringField? outputConfig "effort" == some "max")
-                      "expected typed Bedrock xhigh effort mapping"
-                | _, _ => fail "expected typed Bedrock thinking fields"
-            | none => fail "expected typed Bedrock additional request fields"
-            match jsonObjectField? payload "requestMetadata" with
-            | some metadata =>
-                assertTrue (jsonStringField? metadata "session" == some "typed-bedrock")
-                  "expected typed Bedrock metadata"
-            | none => fail "expected typed Bedrock request metadata"
-            pure none)
-        }
-      pure false
-    catch err =>
-      assertTrue (err.toString.contains "AWS SigV4") "expected Bedrock transport boundary error"
-      pure true
-  assertTrue failed "expected typed Bedrock alias to fail at transport boundary"
-  assertTrue (← sawPayload.get) "expected typed Bedrock alias payload hook"
+  assertTrue (prepared.auth.mode == .sigv4) "expected Bedrock SigV4 auth mode"
+  assertTrue (prepared.region == "us-east-1") "expected Bedrock request region"
+  assertTrue
+    (prepared.requestPath == "/model/anthropic.claude-3-7-sonnet-20250219-v1%3A0/converse-stream")
+    "expected Bedrock request path encoding"
+  assertTrue
+    (prepared.url ==
+      "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-3-7-sonnet-20250219-v1%3A0/converse-stream")
+    "expected Bedrock request URL"
+  assertTrue (jsonStringField? prepared.payload "modelId" == some model.id)
+    "expected prepared Bedrock payload model id"
+  assertTrue (headerValueCaseInsensitive? prepared.headers "content-type" == some "application/json")
+    "expected Bedrock content type header"
+  assertTrue
+    (headerValueCaseInsensitive? prepared.headers "host" == some "bedrock-runtime.us-east-1.amazonaws.com")
+    "expected Bedrock host header"
+  assertTrue
+    (headerValueCaseInsensitive? prepared.headers "x-amz-date" == some "20250115T120000Z")
+    "expected Bedrock x-amz-date"
+  assertTrue
+    (headerValueCaseInsensitive? prepared.headers "x-amz-content-sha256" ==
+      some "0767c6a798a11c4b4421ee09d6c7cd070a18411039e22e1f06beb05c305d49d0")
+    "expected Bedrock payload SHA256"
+  assertTrue
+    (headerValueCaseInsensitive? prepared.headers "x-amz-security-token" ==
+      some "IQoJb3JpZ2luX2VjEOr//////////wEaCXVzLWVhc3QtMSJHMEUCIQDn")
+    "expected Bedrock session token header"
+  assertTrue
+    (headerValueCaseInsensitive? prepared.headers "authorization" ==
+      some
+        "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20250115/us-east-1/bedrock/aws4_request, SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date;x-amz-security-token, Signature=f1b63a6d40b48e8fdb558c9b76d69b24fb8c99cb549e3c54f39bb9f3ed4713ae")
+    "expected Bedrock SigV4 authorization header"
 
 def testGitHubCopilotDynamicHeaders : IO Unit := do
   let userOnly : Array LeanAgent.AI.Message :=
@@ -3263,6 +3265,35 @@ def testOpenAIResponsesStreamingRequiresTerminalEvent : IO Unit := do
         (err.contains "OpenAI Responses stream ended before a terminal response event")
         "expected terminal event error"
 
+def testOpenAIResponsesStreamingIncompleteTerminalEvent : IO Unit := do
+  let raw := String.intercalate "\n"
+    [ "data: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp_incomplete\",\"status\":\"incomplete\",\"usage\":{\"input_tokens\":30,\"output_tokens\":12,\"total_tokens\":42,\"input_tokens_details\":{\"cached_tokens\":5}}}}"
+    , ""
+    ]
+  match LeanAgent.AI.Api.OpenAIResponses.parseStreamingEventStream
+    "openai-responses" "openai" "gpt-5.5" 12 raw with
+  | .ok stream =>
+      assertTrue stream.isComplete "expected incomplete terminal event stream to finalize"
+      assertTrue (stream.result.responseId == some "resp_incomplete") "expected incomplete response id"
+      assertTrue (stream.result.stopReason == .length) "expected incomplete terminal event to map to length"
+      assertTrue (stream.result.usage.input == 25) "expected cached input subtraction for incomplete event"
+      assertTrue (stream.result.usage.output == 12) "expected incomplete output usage"
+      assertTrue (stream.result.usage.cacheRead == 5) "expected incomplete cache read usage"
+      assertTrue (stream.result.usage.totalTokens == 42) "expected incomplete total usage"
+  | .error err => fail s!"expected incomplete terminal event parse success: {err}"
+
+def testOpenAIResponsesStreamingFailedTerminalEvent : IO Unit := do
+  let raw := String.intercalate "\n"
+    [ "data: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_failed\",\"status\":\"failed\",\"error\":{\"code\":\"server_error\",\"message\":\"boom\"}}}"
+    , ""
+    ]
+  match LeanAgent.AI.Api.OpenAIResponses.parseStreamingEventStream
+    "openai-responses" "openai" "gpt-5.5" 13 raw with
+  | .ok _ => fail "expected failed terminal event parse to fail"
+  | .error err =>
+      assertTrue (err.contains "server_error: boom")
+        "expected failed terminal event to surface provider error"
+
 def testDiagnosticsExtractsProviderError : IO Unit := do
   let body := "{\"error\":{\"message\":\"rate limit exceeded\",\"type\":\"rate_limit_error\",\"code\":\"rate_limit\"}}"
   let info := LeanAgent.AI.Util.Diagnostics.providerErrorInfoFromBody body
@@ -3418,14 +3449,14 @@ def testModelsClampMaxTokensToContext : IO Unit := do
       messages := #[.user { content := #[LeanAgent.AI.text "abcd"], timestamp := 1 }]
     }
   assertTrue
-    (LeanAgent.Models.clampMaxTokensToContext model context 4000 == 902)
+    (LeanAgent.AI.Providers.Streams.clampMaxTokensToContext model context 4000 == 902)
     "expected max tokens to fit context minus estimate and safety"
   assertTrue
-    (LeanAgent.Models.clampMaxTokensToContext { model with contextWindow := 0 } context 0 == 1)
+    (LeanAgent.AI.Providers.Streams.clampMaxTokensToContext { model with contextWindow := 0 } context 0 == 1)
     "expected unknown context window to preserve minimum"
-  let unknownMax := LeanAgent.Models.clampSimpleOptionsToContext { model with maxTokens := 0 } context {}
+  let unknownMax := LeanAgent.AI.Providers.Streams.clampSimpleOptionsToContext { model with maxTokens := 0 } context {}
   assertTrue unknownMax.maxTokens.isNone "expected unknown model maxTokens to stay unset"
-  let defaulted := LeanAgent.Models.clampSimpleOptionsToContext model context {}
+  let defaulted := LeanAgent.AI.Providers.Streams.clampSimpleOptionsToContext model context {}
   assertTrue (defaulted.maxTokens == some 902) "expected model maxTokens default to be clamped"
 
 def testProviderEnvValueResolution : IO Unit := do
@@ -4417,6 +4448,13 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
       assertTrue (provider.defaultModel == LeanAgent.Models.azureOpenAIResponsesDefaultModel)
         "expected Azure OpenAI Responses default model"
   | none => fail "expected Azure OpenAI Responses provider by env"
+  match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.githubCopilotApiKeyEnv with
+  | some provider =>
+      assertTrue (provider.id == LeanAgent.Models.githubCopilotProviderId)
+        "expected GitHub Copilot provider by env"
+      assertTrue (provider.defaultModel == LeanAgent.Models.githubCopilotDefaultModel)
+        "expected GitHub Copilot default model"
+  | none => fail "expected GitHub Copilot provider by env"
   match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.mistralApiKeyEnv with
   | some provider =>
       assertTrue (provider.id == LeanAgent.Models.mistralProviderId) "expected Mistral provider by env"
@@ -4431,9 +4469,9 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
   | none => fail "expected Bedrock provider by AWS env"
 
 def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
-  let collection ← LeanAgent.Models.createDefaultModels
+  let collection ← LeanAgent.AI.Providers.All.builtinModels
   let providers ← collection.getProviders
-  assertTrue (providers.size == 32) "expected default provider family"
+  assertTrue (providers.size == 35) "expected default provider family"
   match ← collection.getModel? LeanAgent.Models.openAIProviderId LeanAgent.Models.openAIDefaultModel with
   | some model =>
       assertTrue (model.api == "openai-responses") "expected OpenAI Responses API"
@@ -4463,6 +4501,18 @@ def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
       assertTrue (model.api == "openai-completions") "expected OpenRouter OpenAI-compatible API"
       assertTrue model.reasoning "expected OpenRouter reasoning metadata"
   | none => fail "expected OpenRouter model in default runtime collection"
+  match ← collection.getModel?
+      LeanAgent.Models.githubCopilotProviderId
+      LeanAgent.Models.githubCopilotDefaultModel with
+  | some model =>
+      assertTrue (model.api == "openai-responses") "expected GitHub Copilot Responses default model"
+      assertTrue (model.baseUrl == LeanAgent.Models.githubCopilotBaseUrl)
+        "expected GitHub Copilot default base URL"
+      assertTrue
+        (model.headers.any fun (name, value) =>
+          name == "Copilot-Integration-Id" && value == "vscode-chat")
+        "expected GitHub Copilot model headers"
+  | none => fail "expected GitHub Copilot model in default runtime collection"
   match ← collection.getModel? LeanAgent.Models.fireworksProviderId LeanAgent.Models.fireworksDefaultModel with
   | some model =>
       assertTrue (model.baseUrl == LeanAgent.Models.fireworksBaseUrl) "expected Fireworks OpenAI-compatible base URL"
@@ -4636,6 +4686,180 @@ def assertOpenAICodexProviderFactoryMatchesInfo : IO Unit := do
       | none => fail "expected OpenAI Codex OAuth auth"
   | none => fail "expected OpenAI Codex OAuth auth handler"
 
+def assertAnthropicProviderFactoryMatchesInfo : IO Unit := do
+  let provider ← LeanAgent.AI.Providers.Anthropic.provider
+  let info := LeanAgent.Models.anthropicProviderInfo
+  assertTrue (provider.id == info.id) "expected Anthropic provider id"
+  assertTrue (provider.name == info.name) "expected Anthropic provider name"
+  assertTrue (provider.baseUrl == some info.baseUrl) "expected Anthropic provider base URL"
+  let models ← provider.getModels
+  assertTrue (models == info.models) "expected Anthropic provider models"
+  match provider.auth.apiKey with
+  | some apiKeyAuth =>
+      let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+      let envCtx : LeanAgent.AI.Auth.AuthContext :=
+        { env := fun name =>
+            pure (if name == LeanAgent.Models.anthropicApiKeyEnv then some "anthropic-api-key" else none)
+          fileExists := fun _ => pure false
+        }
+      match ← LeanAgent.AI.Auth.resolveProviderAuth provider.id { apiKey := some apiKeyAuth } store envCtx with
+      | some result =>
+          assertTrue (result.auth.apiKey == some "anthropic-api-key")
+            "expected Anthropic env API key auth"
+          assertTrue (result.source == some LeanAgent.Models.anthropicApiKeyEnv)
+            "expected Anthropic env auth source"
+      | none => fail "expected Anthropic env auth"
+  | none => fail "expected Anthropic API key auth handler"
+  match provider.auth.oauth with
+  | some oauth =>
+      let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+      let _ ← store.modify LeanAgent.Models.anthropicProviderId fun _ =>
+        pure
+          (some
+            (.oauth
+              { access := "sk-ant-oat-access-token"
+                refresh := "anthropic-refresh-token"
+                expires := 2000
+              }))
+      let ctx : LeanAgent.AI.Auth.AuthContext :=
+        { env := fun _ => pure none
+          fileExists := fun _ => pure false
+          nowMs := pure 1000
+        }
+      match ← LeanAgent.AI.Auth.resolveProviderAuth provider.id { oauth := some oauth } store ctx with
+      | some result =>
+          assertTrue (result.auth.apiKey == some "sk-ant-oat-access-token")
+            "expected Anthropic OAuth access token auth"
+          assertTrue (result.source == some "OAuth") "expected Anthropic OAuth source"
+      | none => fail "expected Anthropic OAuth auth"
+  | none => fail "expected Anthropic OAuth auth handler"
+
+def assertGitHubCopilotProviderFactoryMatchesInfo : IO Unit := do
+  let provider ← LeanAgent.AI.Providers.GitHubCopilot.provider
+  let info := LeanAgent.Models.githubCopilotProviderInfo
+  assertTrue (provider.id == info.id) "expected GitHub Copilot provider id"
+  assertTrue (provider.name == info.name) "expected GitHub Copilot provider name"
+  assertTrue (provider.baseUrl == some info.baseUrl) "expected GitHub Copilot provider base URL"
+  assertTrue (provider.headers == info.headers) "expected GitHub Copilot provider headers"
+  let models ← provider.getModels
+  assertTrue (models == info.models) "expected GitHub Copilot provider models"
+  match provider.auth.apiKey with
+  | some apiKeyAuth =>
+      let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+      let envCtx : LeanAgent.AI.Auth.AuthContext :=
+        { env := fun name =>
+            pure (if name == LeanAgent.Models.githubCopilotApiKeyEnv then some "copilot-env-token" else none)
+          fileExists := fun _ => pure false
+        }
+      match ← LeanAgent.AI.Auth.resolveProviderAuth provider.id { apiKey := some apiKeyAuth } store envCtx with
+      | some result =>
+          assertTrue (result.auth.apiKey == some "copilot-env-token")
+            "expected GitHub Copilot env API key auth"
+          assertTrue (result.source == some LeanAgent.Models.githubCopilotApiKeyEnv)
+            "expected GitHub Copilot env auth source"
+      | none => fail "expected GitHub Copilot env auth"
+  | none => fail "expected GitHub Copilot API key auth handler"
+  match provider.auth.oauth with
+  | some oauth =>
+      let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+      let _ ← store.modify LeanAgent.Models.githubCopilotProviderId fun _ =>
+        pure
+          (some
+            (.oauth
+              { access := "tid=test;exp=9999999999;proxy-ep=proxy.enterprise.githubcopilot.com;"
+                refresh := "ghu_refresh_token"
+                expires := 2000
+                extra :=
+                  #[ ( "availableModelIds"
+                     , LeanAgent.Json.arr #[LeanAgent.Json.str LeanAgent.Models.githubCopilotDefaultModel] )
+                   ]
+              }))
+      let ctx : LeanAgent.AI.Auth.AuthContext :=
+        { env := fun _ => pure none
+          fileExists := fun _ => pure false
+          nowMs := pure 1000
+        }
+      match ← LeanAgent.AI.Auth.resolveProviderAuth provider.id { oauth := some oauth } store ctx with
+      | some result =>
+          assertTrue
+            (result.auth.apiKey ==
+              some "tid=test;exp=9999999999;proxy-ep=proxy.enterprise.githubcopilot.com;")
+            "expected GitHub Copilot OAuth access token auth"
+          assertTrue (result.auth.baseUrl == some "https://api.enterprise.githubcopilot.com")
+            "expected GitHub Copilot OAuth base URL rewrite"
+          assertTrue
+            (result.auth.allowedModelIds == some #[LeanAgent.Models.githubCopilotDefaultModel])
+            "expected GitHub Copilot OAuth allowed model ids"
+          assertTrue (result.source == some "OAuth") "expected GitHub Copilot OAuth source"
+      | none => fail "expected GitHub Copilot OAuth auth"
+  | none => fail "expected GitHub Copilot OAuth auth handler"
+
+def testBuiltinModelsGitHubCopilotOAuthFiltersModelList : IO Unit := do
+  let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+  let credential : LeanAgent.AI.Auth.OAuthCredential :=
+    { access := "tid=test;exp=9999999999;proxy-ep=proxy.enterprise.githubcopilot.com;"
+      refresh := "ghu_refresh_token"
+      expires := 2000
+      extra :=
+        #[ ( "availableModelIds"
+           , LeanAgent.Json.arr #[LeanAgent.Json.str LeanAgent.Models.githubCopilotDefaultModel] )
+         ]
+    }
+  let _ ← store.modify LeanAgent.Models.githubCopilotProviderId fun _ =>
+    pure (some (.oauth credential))
+  let collection ← LeanAgent.AI.Providers.All.builtinModels
+    (some store)
+    { env := fun _ => pure none
+      fileExists := fun _ => pure false
+      nowMs := pure 1000
+    }
+  let models ← collection.getModels (some LeanAgent.Models.githubCopilotProviderId)
+  let expected := LeanAgent.AI.OAuth.GitHubCopilot.modifyModels LeanAgent.Models.githubCopilotModels credential
+  assertTrue (models == expected)
+    "expected builtin models collection to apply GitHub Copilot OAuth model filtering"
+  assertTrue (models.size == 1)
+    "expected GitHub Copilot OAuth availableModelIds to filter the model list"
+  match models[0]? with
+  | some model =>
+      assertTrue (model.id == LeanAgent.Models.githubCopilotDefaultModel)
+        "expected GitHub Copilot OAuth filtered default model"
+      assertTrue (model.baseUrl == "https://api.enterprise.githubcopilot.com")
+        "expected GitHub Copilot OAuth filtered model base URL rewrite"
+  | none => fail "expected filtered GitHub Copilot model"
+
+def testDefaultModelsGitHubCopilotOAuthFiltersModelList : IO Unit := do
+  let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+  let credential : LeanAgent.AI.Auth.OAuthCredential :=
+    { access := "tid=test;exp=9999999999;proxy-ep=proxy.enterprise.githubcopilot.com;"
+      refresh := "ghu_refresh_token"
+      expires := 2000
+      extra :=
+        #[ ( "availableModelIds"
+           , LeanAgent.Json.arr #[LeanAgent.Json.str LeanAgent.Models.githubCopilotDefaultModel] )
+         ]
+    }
+  let _ ← store.modify LeanAgent.Models.githubCopilotProviderId fun _ =>
+    pure (some (.oauth credential))
+  let collection ← LeanAgent.AI.Providers.All.builtinModels
+    (some store)
+    { env := fun _ => pure none
+      fileExists := fun _ => pure false
+      nowMs := pure 1000
+    }
+  let models ← collection.getModels (some LeanAgent.Models.githubCopilotProviderId)
+  let expected := LeanAgent.AI.OAuth.GitHubCopilot.modifyModels LeanAgent.Models.githubCopilotModels credential
+  assertTrue (models == expected)
+    "expected default models collection to apply GitHub Copilot OAuth model filtering"
+  assertTrue (models.size == 1)
+    "expected default models collection to filter GitHub Copilot models by availableModelIds"
+  match ← collection.getModel?
+      LeanAgent.Models.githubCopilotProviderId
+      LeanAgent.Models.githubCopilotDefaultModel with
+  | some model =>
+      assertTrue (model.baseUrl == "https://api.enterprise.githubcopilot.com")
+        "expected default models collection GitHub Copilot model base URL rewrite"
+  | none => fail "expected default models collection GitHub Copilot default model"
+
 def assertAmazonBedrockProviderFactoryMatchesInfo : IO Unit := do
   let provider ← LeanAgent.AI.Providers.AmazonBedrock.provider
   let info := LeanAgent.Models.amazonBedrockProviderInfo
@@ -4672,6 +4896,7 @@ def testOpenAICompatibleProviderFactoriesMatchCatalog : IO Unit := do
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.DeepSeek.provider LeanAgent.Models.deepSeekProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.OpenAI.provider LeanAgent.Models.openAIProviderInfo
   assertOpenAICodexProviderFactoryMatchesInfo
+  assertGitHubCopilotProviderFactoryMatchesInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.AzureOpenAIResponses.provider LeanAgent.Models.azureOpenAIResponsesProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.OpenRouter.provider LeanAgent.Models.openRouterProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Groq.provider LeanAgent.Models.groqProviderInfo
@@ -4696,7 +4921,7 @@ def testOpenAICompatibleProviderFactoriesMatchCatalog : IO Unit := do
     LeanAgent.Models.xiaomiTokenPlanSGPProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.ZAI.provider LeanAgent.Models.zaiProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.ZAICodingCN.provider LeanAgent.Models.zaiCodingCNProviderInfo
-  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Anthropic.provider LeanAgent.Models.anthropicProviderInfo
+  assertAnthropicProviderFactoryMatchesInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.KimiCoding.provider LeanAgent.Models.kimiCodingProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.MiniMax.provider LeanAgent.Models.minimaxProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.MiniMaxCN.provider LeanAgent.Models.minimaxCNProviderInfo
@@ -4789,6 +5014,12 @@ def oauthExtraString? (credential : LeanAgent.AI.Auth.OAuthCredential) (name : S
 
 def fakeOAuthAuth (refreshCalls : IO.Ref Nat) : LeanAgent.AI.Auth.OAuthAuth :=
   { name := "Fake OAuth"
+    login := fun _ =>
+      pure
+        { access := "oauth-login-token"
+          refresh := "oauth-login-refresh"
+          expires := 3000
+        }
     refresh := fun credential => do
       refreshCalls.modify (· + 1)
       pure
@@ -4804,17 +5035,49 @@ def fakeOAuthAuth (refreshCalls : IO.Ref Nat) : LeanAgent.AI.Auth.OAuthAuth :=
         }
   }
 
+def testEnvApiKeyAuthLoginPromptsForSecret : IO Unit := do
+  let sawSecretPrompt ← IO.mkRef false
+  let sawSignal ← IO.mkRef false
+  let auth := LeanAgent.AI.Auth.envApiKeyAuth "Fake API key" #["FAKE_API_KEY"]
+  match auth.login with
+  | some login =>
+      let credential ← login
+        { prompt := fun prompt =>
+            match prompt with
+            | .secret message placeholder signal => do
+                sawSecretPrompt.set
+                  (message == "Enter Fake API key" && placeholder.isNone)
+                sawSignal.set signal.isSome
+                pure "typed-secret"
+            | _ => throw (IO.userError "expected secret auth prompt")
+          notify := fun _ => fail "unexpected auth event during API-key login"
+          signal := some { isAborted := pure false }
+        }
+      assertTrue (credential.key == some "typed-secret")
+        "expected envApiKeyAuth login to return prompted key"
+      assertTrue (credential.env.isEmpty)
+        "expected envApiKeyAuth login to avoid provider env by default"
+      assertTrue (← sawSecretPrompt.get)
+        "expected envApiKeyAuth login to request a secret prompt"
+      assertTrue (← sawSignal.get)
+        "expected envApiKeyAuth login to forward the login abort signal"
+  | none => fail "expected envApiKeyAuth login handler"
+
 def testLazyOAuthLoadsOnceAndDelegates : IO Unit := do
   let loadCalls ← IO.mkRef 0
   let loginCalls ← IO.mkRef 0
   let refreshCalls ← IO.mkRef 0
   let toAuthCalls ← IO.mkRef 0
+  let progressMessages ← IO.mkRef (#[] : Array String)
+  let sawPromptSignal ← IO.mkRef false
   let loaded : LeanAgent.AI.Auth.OAuthAuth :=
     { name := "Loaded OAuth"
-      login := some do
+      login := fun callbacks => do
         loginCalls.modify (· + 1)
+        callbacks.notify (.progress "Loaded lazy OAuth login")
+        let prompted ← callbacks.prompt (.text "Loaded login prompt" (some "lazy-token") callbacks.signal)
         pure
-          { access := "login-token"
+          { access := prompted
             refresh := "login-refresh"
             expires := 3000
           }
@@ -4837,11 +5100,30 @@ def testLazyOAuthLoadsOnceAndDelegates : IO Unit := do
   let auth ← lazy.toAuth refreshed
   assertTrue (auth.apiKey == some "old-token-refreshed") "expected lazy OAuth toAuth delegation"
   assertTrue (auth.baseUrl == some "https://lazy-oauth.test") "expected lazy OAuth auth base URL"
-  match lazy.login with
-  | some login =>
-      let credential ← login
-      assertTrue (credential.access == "login-token") "expected lazy OAuth login delegation"
-  | none => fail "expected lazy OAuth login wrapper"
+  let credential ← lazy.login
+    { prompt := fun prompt =>
+        match prompt with
+        | .text message placeholder signal => do
+            sawPromptSignal.set signal.isSome
+            assertTrue (message == "Loaded login prompt")
+              "expected lazy OAuth login prompt message"
+            assertTrue (placeholder == some "lazy-token")
+              "expected lazy OAuth login prompt placeholder"
+            pure "login-token"
+        | _ => throw (IO.userError "expected text prompt during lazy OAuth login")
+      notify := fun event =>
+        match event with
+        | .progress message =>
+            progressMessages.modify (·.push message)
+        | _ => fail "unexpected non-progress event during lazy OAuth login"
+      signal := some { isAborted := pure false }
+    }
+  assertTrue (credential.access == "login-token") "expected lazy OAuth login delegation"
+  let progress ← progressMessages.get
+  assertTrue (progress == #["Loaded lazy OAuth login"])
+    "expected lazy OAuth login to forward notifications"
+  assertTrue (← sawPromptSignal.get)
+    "expected lazy OAuth login to forward the login abort signal"
   assertTrue ((← loadCalls.get) == 1) "expected lazy OAuth to load exactly once"
   assertTrue ((← refreshCalls.get) == 1) "expected lazy OAuth refresh to run once"
   assertTrue ((← toAuthCalls.get) == 1) "expected lazy OAuth toAuth to run once"
@@ -5021,6 +5303,62 @@ def testModelsAuthOAuthExpiredCredentialRefreshes : IO Unit := do
       assertTrue (credential.expires == 2000) "expected refreshed expiry to be persisted"
   | _ => fail "expected persisted OAuth credential"
 
+def testModelsAuthOAuthConcurrentRefreshesSerialize : IO Unit := do
+  let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+  let _ ← store.modify "fake" fun _ =>
+    pure
+      (some
+        (.oauth
+          { access := "expired-token"
+            refresh := "refresh-1"
+            expires := 999
+          }))
+  let refreshCalls ← IO.mkRef 0
+  let oauth : LeanAgent.AI.Auth.OAuthAuth :=
+    { name := "Concurrent OAuth"
+      login := fun _ => throw (IO.userError "unexpected concurrent OAuth login")
+      refresh := fun credential => do
+        refreshCalls.modify (· + 1)
+        IO.sleep 200
+        pure
+          { credential with
+            access := "concurrent-refreshed-token"
+            refresh := "refresh-2"
+            expires := 2000
+          }
+      toAuth := fun credential =>
+        pure { apiKey := some credential.access }
+    }
+  let auth := { fakeProviderAuth with oauth := some oauth }
+  let firstTask ←
+    IO.asTask
+      (LeanAgent.AI.Auth.resolveProviderAuth "fake" auth store (fakeAuthContextWithNow 1000))
+  let secondTask ←
+    IO.asTask
+      (LeanAgent.AI.Auth.resolveProviderAuth "fake" auth store (fakeAuthContextWithNow 1000))
+  let first ←
+    match ← IO.wait firstTask with
+    | .ok result => pure result
+    | .error err => throw err
+  let second ←
+    match ← IO.wait secondTask with
+    | .ok result => pure result
+    | .error err => throw err
+  match first, second with
+  | some firstResult, some secondResult =>
+      assertTrue (firstResult.auth.apiKey == some "concurrent-refreshed-token")
+        "expected first concurrent OAuth request to see the refreshed token"
+      assertTrue (secondResult.auth.apiKey == some "concurrent-refreshed-token")
+        "expected second concurrent OAuth request to reuse the refreshed token"
+  | _, _ => fail "expected concurrent OAuth refreshes to resolve auth"
+  assertTrue ((← refreshCalls.get) == 1)
+    "expected concurrent OAuth refreshes to serialize to a single refresh"
+  match ← store.read "fake" with
+  | some (.oauth credential) =>
+      assertTrue (credential.access == "concurrent-refreshed-token")
+        "expected serialized OAuth refresh to persist the refreshed token"
+  | _ => fail "expected serialized concurrent refresh to persist OAuth credential"
+
 def testModelsAuthOAuthRefreshFailureUsesModelsErrorOauth : IO Unit := do
   let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
   let _ ← store.modify "fake" fun _ =>
@@ -5034,6 +5372,7 @@ def testModelsAuthOAuthRefreshFailureUsesModelsErrorOauth : IO Unit := do
   let refreshCalls ← IO.mkRef 0
   let failingOAuth : LeanAgent.AI.Auth.OAuthAuth :=
     { name := "Failing OAuth"
+      login := fun _ => throw (IO.userError "unexpected failing OAuth login")
       refresh := fun _ => do
         refreshCalls.modify (· + 1)
         throw (IO.userError "refresh failed")
@@ -5090,6 +5429,7 @@ def fakeOAuthProviderForRegistry
       else
         pure { credential with access := credential.access ++ "-refreshed", expires := 5000 }
     getApiKey := fun credential => "Bearer " ++ credential.access
+    toAuth := fun credential => { apiKey := some ("Bearer " ++ credential.access) }
   }
 
 def testOAuthProviderRegistryCrud : IO Unit := do
@@ -5114,6 +5454,129 @@ def testOAuthProviderRegistryCrud : IO Unit := do
   LeanAgent.AI.OAuth.resetOAuthProviders
   assertTrue ((← LeanAgent.AI.OAuth.getOAuthProvider? "registry-test").isNone)
     "expected reset to remove custom OAuth provider"
+  let builtIns ← LeanAgent.AI.OAuth.getOAuthProviderInfoList
+  assertTrue (builtIns.any (·.id == LeanAgent.AI.OAuth.Anthropic.providerId))
+    "expected reset to keep Anthropic built-in OAuth provider"
+  assertTrue (builtIns.any (·.id == LeanAgent.AI.OAuth.OpenAICodex.providerId))
+    "expected reset to keep OpenAI Codex built-in OAuth provider"
+  assertTrue (builtIns.any (·.id == LeanAgent.AI.OAuth.GitHubCopilot.providerId))
+    "expected reset to keep GitHub Copilot built-in OAuth provider"
+
+def testModelsCollectionAppliesRegisteredOAuthModelHook : IO Unit := do
+  LeanAgent.AI.OAuth.resetOAuthProviders
+  let refreshCalls ← IO.mkRef 0
+  let providerId := "hooked-oauth"
+  LeanAgent.AI.OAuth.registerOAuthProvider
+    { fakeOAuthProviderForRegistry providerId "Hooked OAuth" refreshCalls with
+      modifyModels := some fun models credential =>
+        let keepModelId? := oauthExtraString? credential "keepModelId"
+        let baseUrl? := oauthExtraString? credential "baseUrl"
+        models.filterMap fun model =>
+          if model.provider != providerId then
+            some model
+          else if keepModelId? == some model.id then
+            some { model with baseUrl := baseUrl? }
+          else
+            none
+    }
+  let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+  let _ ← store.modify providerId fun _ =>
+    pure
+      (some
+        (.oauth
+          { access := "hook-token"
+            refresh := "hook-refresh"
+            expires := 2000
+            extra :=
+              #[ ("keepModelId", LeanAgent.Json.str "hook-model")
+               , ("baseUrl", LeanAgent.Json.str "https://hooked-oauth.test")
+               ]
+          }))
+  let provider ← LeanAgent.Models.createProvider
+    { id := providerId
+      name := some "Hooked OAuth Provider"
+      auth := { apiKey := none, oauth := some (fakeOAuthAuth refreshCalls) }
+      models :=
+        #[ { id := "hook-model"
+             name := "Hook Model"
+             provider := providerId
+             api := "openai-completions"
+             baseUrl := "https://original.test"
+           }
+         , { id := "drop-model"
+             name := "Drop Model"
+             provider := providerId
+             api := "openai-completions"
+             baseUrl := "https://original.test"
+           }
+         ]
+      apis := #[{ api := "openai-completions", streams := LeanAgent.AI.Providers.Streams.openAICompatibleStreams }]
+    }
+  let collection ← LeanAgent.Models.createModels (some store) (fakeAuthContextWithNow 1000)
+  collection.setProvider provider
+  let models ← collection.getModels (some providerId)
+  assertTrue (models.size == 1)
+    "expected registered OAuth model hook to filter the provider model list"
+  match models[0]? with
+  | some model =>
+      assertTrue (model.id == "hook-model")
+        "expected registered OAuth model hook to keep the selected model"
+      assertTrue (model.baseUrl == "https://hooked-oauth.test")
+        "expected registered OAuth model hook to rewrite the selected model base URL"
+  | none => fail "expected hooked OAuth provider model"
+  LeanAgent.AI.OAuth.resetOAuthProviders
+
+def testOAuthStandaloneModuleImportBootstrapsBuiltIns : IO Unit := do
+  let cwd ← IO.currentDir
+  let entry := cwd / "OAuthOnlyImportMain.lean"
+  let output ← IO.Process.output
+    { cmd := "lake"
+      args := #["env", "lean", "--run", entry.toString]
+      stdin := .null
+      stdout := .piped
+      stderr := .piped
+    }
+  if output.exitCode != 0 then
+    fail s!"expected standalone LeanAgent.AI.OAuth import to succeed: {output.stderr}"
+  let rendered := output.stdout.trimAscii.toString
+  assertTrue (rendered.contains LeanAgent.AI.OAuth.Anthropic.providerId)
+    "expected standalone OAuth entrypoint import to include Anthropic built-in"
+  assertTrue (rendered.contains LeanAgent.AI.OAuth.GitHubCopilot.providerId)
+    "expected standalone OAuth entrypoint import to include GitHub Copilot built-in"
+  assertTrue (rendered.contains LeanAgent.AI.OAuth.OpenAICodex.providerId)
+    "expected standalone OAuth entrypoint import to include OpenAI Codex built-in"
+
+def testCompatStandaloneModuleImportIncludesLegacyAliases : IO Unit := do
+  let cwd ← IO.currentDir
+  let entry := cwd / "CompatOnlyImportMain.lean"
+  let output ← IO.Process.output
+    { cmd := "lake"
+      args := #["env", "lean", "--run", entry.toString]
+      stdin := .null
+      stdout := .piped
+      stderr := .piped
+    }
+  if output.exitCode != 0 then
+    fail s!"expected standalone LeanAgent.AI.Compat import to succeed: {output.stderr}"
+  let rendered := output.stdout.trimAscii.toString
+  assertTrue (rendered.contains "openai-responses")
+    "expected standalone Compat entrypoint import to include built-in API providers"
+
+def testAIStandaloneModuleImportIncludesCoreSurface : IO Unit := do
+  let cwd ← IO.currentDir
+  let entry := cwd / "AIOnlyImportMain.lean"
+  let output ← IO.Process.output
+    { cmd := "lake"
+      args := #["env", "lean", "--run", entry.toString]
+      stdin := .null
+      stdout := .piped
+      stderr := .piped
+    }
+  if output.exitCode != 0 then
+    fail s!"expected standalone LeanAgent.AI import to succeed: {output.stderr}"
+  let rendered := output.stdout.trimAscii.toString
+  assertTrue (rendered == "ai-import-ok")
+    "expected standalone AI barrel import to expose the core public surface"
 
 def testOAuthRefreshTokenDispatch : IO Unit := do
   LeanAgent.AI.OAuth.resetOAuthProviders
@@ -5472,6 +5935,138 @@ def testGitHubCopilotOAuthModifiesModelsFromCredential : IO Unit := do
     (enterpriseModels.all (fun model => model.baseUrl == "https://copilot-api.enterprise.example"))
     "expected enterprise base URL fallback for Copilot models"
 
+def localGitHubCopilotRuntime
+    (port : Nat)
+    (deviceCodePath : String := "/copilot/device-code")
+    (knownModelIds : Array String := #[])
+    (onRequest : Option (LeanAgent.Http.RequestConfig → IO Unit) := none) :
+    LeanAgent.AI.OAuth.GitHubCopilot.Runtime :=
+  { urlsForDomain := fun _ =>
+      { deviceCodeUrl := s!"http://127.0.0.1:{port}{deviceCodePath}"
+        accessTokenUrl := s!"http://127.0.0.1:{port}/copilot/access-token"
+        copilotTokenUrl := s!"http://127.0.0.1:{port}/copilot/token"
+      }
+    baseUrl := fun _ _ => s!"http://127.0.0.1:{port}/copilot"
+    request := fun config => do
+      match onRequest with
+      | some hook => hook config
+      | none => pure ()
+      LeanAgent.Http.requestResponse
+        { config with
+          timeoutSeconds := 5
+          connectTimeoutSeconds := 5
+          maxResponseBytes := 4096
+          noProxy := some "*"
+        }
+    nowMs := LeanAgent.AI.Auth.epochMsNow
+    sleepMs := fun ms => IO.sleep (UInt32.ofNat ms)
+    knownModelIds := knownModelIds
+  }
+
+def localOpenAICodexRuntime
+    (port : Nat)
+    (deviceUserCodePath : String := "/codex/deviceauth/usercode")
+    (deviceTokenPath : String := "/codex/deviceauth/token")
+    (tokenPath : String := "/codex/oauth/token")
+    (state : String := "state-123")
+    (verifier : String := "browser-verifier")
+    (challenge : String := "browser-challenge")
+    (originator : String := "lean-agent")
+    (onRequest : Option (LeanAgent.Http.RequestConfig → IO Unit) := none) :
+    LeanAgent.AI.OAuth.OpenAICodex.Runtime :=
+  { urls :=
+      { authorizeUrl := s!"http://127.0.0.1:{port}/codex/oauth/authorize"
+        tokenUrl := s!"http://127.0.0.1:{port}{tokenPath}"
+        redirectUri := "http://localhost:1455/auth/callback"
+        deviceUserCodeUrl := s!"http://127.0.0.1:{port}{deviceUserCodePath}"
+        deviceTokenUrl := s!"http://127.0.0.1:{port}{deviceTokenPath}"
+        deviceVerificationUri := s!"http://127.0.0.1:{port}/codex/device"
+        deviceRedirectUri := s!"http://127.0.0.1:{port}/codex/deviceauth/callback"
+      }
+    request := fun config => do
+      match onRequest with
+      | some hook => hook config
+      | none => pure ()
+      LeanAgent.Http.requestResponse
+        { config with
+          timeoutSeconds := 5
+          connectTimeoutSeconds := 5
+          maxResponseBytes := 4096
+          noProxy := some "*"
+        }
+    generatePKCE := pure { verifier, challenge }
+    generateState := pure state
+    nowMs := pure 1000
+    sleepMs := fun ms => IO.sleep (UInt32.ofNat ms)
+    originator := originator
+  }
+
+def localAnthropicRuntime
+    (port : Nat)
+    (tokenPath : String := "/anthropic/oauth/token")
+    (verifier : String := "anthropic-verifier")
+    (challenge : String := "anthropic-challenge")
+    (onRequest : Option (LeanAgent.Http.RequestConfig → IO Unit) := none) :
+    LeanAgent.AI.OAuth.Anthropic.Runtime :=
+  { authorizeUrl := s!"http://127.0.0.1:{port}/anthropic/oauth/authorize"
+    tokenUrl := s!"http://127.0.0.1:{port}{tokenPath}"
+    redirectUri := "http://localhost:53692/callback"
+    request := fun config => do
+      match onRequest with
+      | some hook => hook config
+      | none => pure ()
+      LeanAgent.Http.requestResponse
+        { config with
+          timeoutSeconds := 5
+          connectTimeoutSeconds := 5
+          maxResponseBytes := 4096
+          noProxy := some "*"
+        }
+    generatePKCE := pure { verifier, challenge }
+    nowMs := pure 1000
+  }
+
+def testAnthropicOAuthRegisterBuiltInProvider : IO Unit := do
+  LeanAgent.AI.OAuth.resetOAuthProviders
+  LeanAgent.AI.OAuth.Anthropic.registerBuiltIn
+  match ← LeanAgent.AI.OAuth.getOAuthProvider? LeanAgent.AI.OAuth.Anthropic.providerId with
+  | some provider =>
+      assertTrue (provider.id == LeanAgent.AI.OAuth.Anthropic.providerId)
+        "expected registered Anthropic OAuth provider id"
+      assertTrue (provider.name == LeanAgent.AI.OAuth.Anthropic.name)
+        "expected registered Anthropic OAuth provider name"
+      assertTrue provider.usesCallbackServer
+        "expected Anthropic OAuth provider to enable localhost callback flow"
+      let apiKey := provider.getApiKey
+        { access := "sk-ant-oat-access-token"
+          refresh := "anthropic-refresh-token"
+          expires := 2000
+        }
+      assertTrue (apiKey == "sk-ant-oat-access-token")
+        "expected Anthropic OAuth getApiKey"
+  | none => fail "expected registered Anthropic OAuth provider"
+  LeanAgent.AI.OAuth.resetOAuthProviders
+
+def testOpenAICodexOAuthRegisterBuiltInProvider : IO Unit := do
+  LeanAgent.AI.OAuth.resetOAuthProviders
+  LeanAgent.AI.OAuth.OpenAICodex.registerBuiltIn
+  match ← LeanAgent.AI.OAuth.getOAuthProvider? LeanAgent.AI.OAuth.OpenAICodex.providerId with
+  | some provider =>
+      assertTrue (provider.id == LeanAgent.AI.OAuth.OpenAICodex.providerId)
+        "expected registered OpenAI Codex OAuth provider id"
+      assertTrue (provider.name == "ChatGPT Plus/Pro (Codex Subscription)")
+        "expected registered OpenAI Codex OAuth provider name"
+      assertTrue provider.usesCallbackServer
+        "expected OpenAI Codex OAuth provider to enable localhost callback flow"
+      let apiKey := provider.getApiKey
+        { access := "codex-test-token"
+          refresh := "codex-refresh"
+          expires := 2000
+        }
+      assertTrue (apiKey == "codex-test-token") "expected OpenAI Codex OAuth getApiKey"
+  | none => fail "expected registered OpenAI Codex OAuth provider"
+  LeanAgent.AI.OAuth.resetOAuthProviders
+
 def testGitHubCopilotOAuthRegisterBuiltInProvider : IO Unit := do
   LeanAgent.AI.OAuth.resetOAuthProviders
   LeanAgent.AI.OAuth.GitHubCopilot.registerBuiltIn
@@ -5489,21 +6084,6 @@ def testGitHubCopilotOAuthRegisterBuiltInProvider : IO Unit := do
           expires := 2000
         }
       assertTrue (apiKey == "copilot-test-token") "expected Copilot OAuth getApiKey"
-      let loginFailed ←
-        try
-          let callbacks : LeanAgent.AI.OAuth.OAuthLoginCallbacks :=
-            { onAuth := fun _ => pure ()
-              onDeviceCode := fun _ => pure ()
-              onPrompt := fun _ => pure ""
-              onSelect := fun _ => pure none
-            }
-          let _ ← provider.login callbacks
-          pure false
-        catch err =>
-          assertTrue (err.toString.contains "not yet implemented")
-            "expected Copilot login to report not-yet-implemented"
-          pure true
-      assertTrue loginFailed "expected Copilot login to fail gracefully"
       pure ()
   | none => fail "expected registered Copilot OAuth provider"
   LeanAgent.AI.OAuth.resetOAuthProviders
@@ -5759,6 +6339,8 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
     "expected all providers to include Anthropic catalog provider"
   assertTrue (providerIds.contains LeanAgent.Models.openAICodexProviderId)
     "expected all providers to include OpenAI Codex catalog provider"
+  assertTrue (providerIds.contains LeanAgent.Models.githubCopilotProviderId)
+    "expected all providers to include GitHub Copilot catalog provider"
   assertTrue (providerIds.contains LeanAgent.Models.azureOpenAIResponsesProviderId)
     "expected all providers to include Azure OpenAI Responses catalog provider"
   assertTrue (providerIds.contains LeanAgent.Models.googleProviderId)
@@ -5826,6 +6408,12 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
       assertTrue (model.api == LeanAgent.AI.Api.OpenAICodexResponses.api)
         "expected OpenAI Codex builtin model"
   | none => fail "expected OpenAI Codex builtin model lookup"
+  match LeanAgent.AI.Providers.All.getBuiltinModel?
+    LeanAgent.Models.githubCopilotProviderId
+    LeanAgent.Models.githubCopilotDefaultModel with
+  | some model =>
+      assertTrue (model.api == "openai-responses") "expected GitHub Copilot builtin model"
+  | none => fail "expected GitHub Copilot builtin model lookup"
   match LeanAgent.AI.Providers.All.getBuiltinModel?
     LeanAgent.Models.googleProviderId
     LeanAgent.Models.googleDefaultModel with
@@ -5901,10 +6489,13 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
   | none => fail "expected Cloudflare AI Gateway builtin model lookup"
   let collection ← LeanAgent.AI.Providers.All.builtinModels none fakeCloudflareAuthContext
   let providers ← collection.getProviders
-  assertTrue (providers.size == 34) "expected implemented builtin text providers"
+  assertTrue (providers.size == 35) "expected implemented builtin text providers"
   match ← collection.getProvider? LeanAgent.AI.Providers.CloudflareWorkersAI.providerId with
   | some _ => pure ()
   | none => fail "expected Workers AI provider in builtin collection"
+  match ← collection.getProvider? LeanAgent.Models.githubCopilotProviderId with
+  | some _ => pure ()
+  | none => fail "expected GitHub Copilot provider in builtin collection"
   match ← collection.getModel?
     LeanAgent.AI.Providers.CloudflareAIGateway.providerId
     "gpt-4o-mini" with
@@ -6107,6 +6698,32 @@ def testModelsCollectionDispatchesWithAuth : IO Unit := do
   assertTrue (LeanAgent.AI.contentPlainText message.content == "runtime-ok") "expected runtime stream result"
   assertTrue ((← seenApiKey.get) == some "env-secret") "expected collection to inject auth"
 
+def testModelsCollectionGenericStreamAndCompleteDispatchWithAuth : IO Unit := do
+  let seenApiKey ← IO.mkRef (none : Option String)
+  let collection ← LeanAgent.Models.createModels none fakeAuthContext
+  let provider ← LeanAgent.Models.createProvider
+    { id := "fake"
+      name := some "Fake"
+      auth := fakeProviderAuth
+      models := #[fakeRuntimeModel]
+      apis := #[{ api := "fake-api", streams := fakeRuntimeStreams seenApiKey }]
+    }
+  collection.setProvider provider
+  let context : LeanAgent.AI.Context :=
+    { systemPrompt := some "system"
+      messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 0 }]
+    }
+  let stream ← collection.stream fakeRuntimeModel context {}
+  assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "runtime-ok")
+    "expected collection generic stream dispatch result"
+  assertTrue ((← seenApiKey.get) == some "env-secret")
+    "expected collection generic stream to inject auth"
+  let message ← collection.complete fakeRuntimeModel context {}
+  assertTrue (LeanAgent.AI.contentPlainText message.content == "runtime-ok")
+    "expected collection generic complete dispatch result"
+  assertTrue ((← seenApiKey.get) == some "env-secret")
+    "expected collection generic complete to inject auth"
+
 def testModelsCollectionAppliesCloudflareAIGatewayAuth : IO Unit := do
   let seenApiKey ← IO.mkRef (some "unset" : Option String)
   let seenBaseUrl ← IO.mkRef ""
@@ -6177,6 +6794,38 @@ def testCompatApiRegistryDispatchesAndUnregisters : IO Unit := do
   LeanAgent.AI.Compat.unregisterApiProviders "compat-test"
   assertTrue ((← LeanAgent.AI.Compat.getApiProvider? fakeRuntimeModel.api).isNone)
     "expected compat source unregister"
+  LeanAgent.AI.Compat.resetApiProviders
+
+def testCompatGenericStreamAndCompleteDispatch : IO Unit := do
+  LeanAgent.AI.Compat.resetApiProviders
+  let seenApiKey ← IO.mkRef (none : Option String)
+  LeanAgent.AI.Compat.registerApiProvider
+    { api := "openai-completions", streams := fakeRuntimeStreams seenApiKey }
+    (some "compat-generic-openai")
+  let model :=
+    { fakeRuntimeModel with
+      id := "compat-openai-generic"
+      provider := LeanAgent.Models.openAIProviderId
+      api := "openai-completions"
+    }
+  let context : LeanAgent.AI.Context :=
+    { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 0 }] }
+  let stream ← LeanAgent.AI.Compat.stream
+    model
+    context
+    { apiKey := some "compat-stream-key" }
+  assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "runtime-ok")
+    "expected compat generic stream dispatch"
+  assertTrue ((← seenApiKey.get) == some "compat-stream-key")
+    "expected compat generic stream to pass api key"
+  let message ← LeanAgent.AI.Compat.complete
+    model
+    context
+    { apiKey := some "compat-complete-key" }
+  assertTrue (LeanAgent.AI.contentPlainText message.content == "runtime-ok")
+    "expected compat generic complete dispatch"
+  assertTrue ((← seenApiKey.get) == some "compat-complete-key")
+    "expected compat generic complete to pass api key"
   LeanAgent.AI.Compat.resetApiProviders
 
 def fakeImagesModel : LeanAgent.AI.ImagesModel :=
@@ -6471,6 +7120,7 @@ def testImagesCollectionAppliesOAuthAuth : IO Unit := do
   let refreshCalls ← IO.mkRef 0
   let oauthAuth : LeanAgent.AI.Auth.OAuthAuth :=
     { name := "Image OAuth"
+      login := fun _ => throw (IO.userError "unexpected image OAuth login")
       refresh := fun credential => do
         refreshCalls.modify (· + 1)
         pure { credential with access := credential.access ++ "-refreshed", expires := 5000 }
@@ -6708,7 +7358,7 @@ def testCompatLegacyAliasesRejectMismatchedApi : IO Unit := do
   LeanAgent.AI.Compat.resetApiProviders
 
 def testCompatLegacyAliasesUseRegistryForNonBuiltins : IO Unit := do
-  LeanAgent.AI.Compat.resetApiProviders
+  LeanAgent.AI.Compat.clearApiProviders
   let seenApiKey ← IO.mkRef (none : Option String)
   let model :=
     { fakeRuntimeModel with
@@ -6723,7 +7373,7 @@ def testCompatLegacyAliasesUseRegistryForNonBuiltins : IO Unit := do
     catch err =>
       assertTrue (err.toString.contains "No API provider registered") "expected missing Anthropic alias provider"
       pure true
-  assertTrue missing "expected missing non-builtin alias provider"
+  assertTrue missing "expected missing alias provider after clearing compat registry"
   LeanAgent.AI.Compat.registerApiProvider
     { api := "anthropic-messages", streams := fakeRuntimeStreams seenApiKey }
     (some "compat-alias-anthropic")
@@ -6848,12 +7498,12 @@ def testModelsClampSimpleOptionsClampsReasoning : IO Unit := do
       maxTokens := 1000
       thinkingLevelMap := #[{ level := .level .xhigh, mapped := some "xhigh" }]
     }
-  let options := LeanAgent.Models.clampSimpleOptionsToContext model {} { reasoning := some .xhigh }
+  let options := LeanAgent.AI.Providers.Streams.clampSimpleOptionsToContext model {} { reasoning := some .xhigh }
   assertTrue (options.reasoning == some .xhigh) "expected mapped xhigh to be preserved"
   let noXHigh := { model with thinkingLevelMap := #[] }
-  let downgraded := LeanAgent.Models.clampSimpleOptionsToContext noXHigh {} { reasoning := some .xhigh }
+  let downgraded := LeanAgent.AI.Providers.Streams.clampSimpleOptionsToContext noXHigh {} { reasoning := some .xhigh }
   assertTrue (downgraded.reasoning == some .high) "expected unmapped xhigh to downgrade to high"
-  let noReasoning := LeanAgent.Models.clampSimpleOptionsToContext fakeRuntimeModel {} { reasoning := some .high }
+  let noReasoning := LeanAgent.AI.Providers.Streams.clampSimpleOptionsToContext fakeRuntimeModel {} { reasoning := some .high }
   assertTrue noReasoning.reasoning.isNone "expected non-reasoning model to disable reasoning"
 
 def fauxContext (text : String := "hi") : LeanAgent.AI.Context :=
@@ -7328,13 +7978,194 @@ def testJsonEventShape : IO Unit := do
 def httpServerScript : String :=
   String.intercalate "\n"
     [ "import json"
+    , "import base64"
+    , "import struct"
     , "import sys"
+    , "import zlib"
+    , "from urllib.parse import parse_qs"
     , "from http.server import BaseHTTPRequestHandler, HTTPServer"
+    , "def _aws_eventstream_header(name, value):"
+    , "    name_bytes = name.encode('utf-8')"
+    , "    value_bytes = value.encode('utf-8')"
+    , "    return bytes([len(name_bytes)]) + name_bytes + bytes([7]) + len(value_bytes).to_bytes(2, 'big') + value_bytes"
+    , "def _aws_eventstream_frame(kind, payload, message_type='event'):"
+    , "    headers = [_aws_eventstream_header(':message-type', message_type)]"
+    , "    if message_type == 'event':"
+    , "        headers.append(_aws_eventstream_header(':event-type', kind))"
+    , "    else:"
+    , "        headers.append(_aws_eventstream_header(':exception-type', kind))"
+    , "    headers.append(_aws_eventstream_header(':content-type', 'application/json'))"
+    , "    header_bytes = b''.join(headers)"
+    , "    payload_bytes = json.dumps(payload, separators=(',', ':')).encode('utf-8')"
+    , "    total_len = 16 + len(header_bytes) + len(payload_bytes)"
+    , "    prelude = struct.pack('>II', total_len, len(header_bytes))"
+    , "    prelude_crc = struct.pack('>I', zlib.crc32(prelude) & 0xffffffff)"
+    , "    without_crc = prelude + prelude_crc + header_bytes + payload_bytes"
+    , "    message_crc = struct.pack('>I', zlib.crc32(without_crc) & 0xffffffff)"
+    , "    return without_crc + message_crc"
     , "class Handler(BaseHTTPRequestHandler):"
     , "    retry_count = 0"
+    , "    def do_GET(self):"
+    , "        if self.path == '/copilot/token':"
+    , "            auth = self.headers.get('Authorization') or ''"
+    , "            if auth in ['Bearer ghu_refresh_token', 'Bearer github-access-token']:"
+    , "                payload = json.dumps({'token': 'tid=test;exp=9999999999;proxy-ep=proxy.individual.githubcopilot.com;', 'expires_at': 9999999999}).encode('utf-8')"
+    , "                self.send_response(200)"
+    , "            else:"
+    , "                payload = json.dumps({'error': 'unauthorized'}).encode('utf-8')"
+    , "                self.send_response(401)"
+    , "            self.send_header('Content-Type', 'application/json')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
+    , "        if self.path == '/copilot/models':"
+    , "            auth = self.headers.get('Authorization') or ''"
+    , "            if auth == 'Bearer tid=test;exp=9999999999;proxy-ep=proxy.individual.githubcopilot.com;':"
+    , "                payload = json.dumps({'data': [{'id': 'gpt-4.1', 'model_picker_enabled': True, 'capabilities': {'supports': {'tool_calls': True}}}, {'id': 'claude-opus-4.7', 'model_picker_enabled': True, 'policy': {'state': 'disabled'}, 'capabilities': {'supports': {'tool_calls': True}}}, {'id': 'gpt-5.4-nano', 'model_picker_enabled': False, 'capabilities': {'supports': {'tool_calls': True}}}]}).encode('utf-8')"
+    , "                self.send_response(200)"
+    , "            else:"
+    , "                payload = json.dumps({'data': []}).encode('utf-8')"
+    , "                self.send_response(401)"
+    , "            self.send_header('Content-Type', 'application/json')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
+    , "        payload = json.dumps({'method': 'GET', 'path': self.path, 'auth': self.headers.get('Authorization'), 'ua': self.headers.get('User-Agent'), 'x_custom': self.headers.get('X-Custom')}).encode('utf-8')"
+    , "        self.send_response(200)"
+    , "        self.send_header('Content-Type', 'application/json')"
+    , "        self.send_header('Content-Length', str(len(payload)))"
+    , "        self.end_headers()"
+    , "        self.wfile.write(payload)"
     , "    def do_POST(self):"
     , "        length = int(self.headers.get('Content-Length', '0'))"
     , "        body = self.rfile.read(length).decode('utf-8')"
+    , "        if self.path == '/copilot/device-code':"
+    , "            ok = 'client_id=' in body and 'scope=read%3Auser' in body"
+    , "            payload = json.dumps({'device_code': 'device-code', 'user_code': 'ABCD-EFGH', 'verification_uri': 'https://github.com/login/device', 'interval': 1, 'expires_in': 900} if ok else {'error': 'bad_request'}).encode('utf-8')"
+    , "            self.send_response(200 if ok else 400)"
+    , "            self.send_header('Content-Type', 'application/json')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
+    , "        if self.path == '/copilot/device-code-invalid-uri':"
+    , "            payload = json.dumps({'device_code': 'device-code', 'user_code': 'ABCD-EFGH', 'verification_uri': '$(id>/tmp/pwned)', 'interval': 1, 'expires_in': 900}).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'application/json')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
+    , "        if self.path == '/copilot/device-code-escaped-uri':"
+    , "            payload = json.dumps({'device_code': 'device-code', 'user_code': 'ABCD-EFGH', 'verification_uri': 'https://github.com/login/\\u001b]8;;evil', 'interval': 1, 'expires_in': 900}).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'application/json')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
+    , "        if self.path == '/copilot/access-token':"
+    , "            ok = 'client_id=' in body and 'device_code=device-code' in body and 'grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code' in body"
+    , "            payload = json.dumps({'access_token': 'ghu_refresh_token'} if ok else {'error': 'bad_request'}).encode('utf-8')"
+    , "            self.send_response(200 if ok else 400)"
+    , "            self.send_header('Content-Type', 'application/json')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
+    , "        if self.path.startswith('/copilot/models/') and self.path.endswith('/policy'):"
+    , "            payload = b''"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Length', '0')"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
+    , "        if self.path == '/codex/deviceauth/usercode':"
+    , "            request = json.loads(body or '{}')"
+    , "            ok = request.get('client_id') == 'app_EMoamEEZ73f0CkXaXp7hrann'"
+    , "            payload = json.dumps({'device_auth_id': 'device-auth-id', 'user_code': 'ABCD-1234', 'interval': '1'} if ok else {'error': 'bad_request'}).encode('utf-8')"
+    , "            self.send_response(200 if ok else 400)"
+    , "            self.send_header('Content-Type', 'application/json')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
+    , "        if self.path == '/codex/deviceauth/usercode-404':"
+    , "            payload = json.dumps({'error': 'not_found'}).encode('utf-8')"
+    , "            self.send_response(404)"
+    , "            self.send_header('Content-Type', 'application/json')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
+    , "        if self.path == '/codex/deviceauth/token':"
+    , "            request = json.loads(body or '{}')"
+    , "            ok = request.get('device_auth_id') == 'device-auth-id' and request.get('user_code') == 'ABCD-1234'"
+    , "            payload = json.dumps({'authorization_code': 'oauth-device-code', 'code_verifier': 'device-code-verifier'} if ok else {'error': 'bad_request'}).encode('utf-8')"
+    , "            self.send_response(200 if ok else 400)"
+    , "            self.send_header('Content-Type', 'application/json')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
+    , "        if self.path == '/codex/oauth/token':"
+    , "            params = parse_qs(body, keep_blank_values=True)"
+    , "            grant_type = (params.get('grant_type') or [''])[0]"
+    , "            if grant_type == 'authorization_code':"
+    , "                code = (params.get('code') or [''])[0]"
+    , "                verifier = (params.get('code_verifier') or [''])[0]"
+    , "                if code == 'oauth-browser-code' and verifier == 'browser-verifier':"
+    , "                    payload = json.dumps({'access_token': 'e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdF90ZXN0In19.sig', 'refresh_token': 'codex-browser-refresh', 'expires_in': 3600}).encode('utf-8')"
+    , "                    self.send_response(200)"
+    , "                elif code == 'oauth-device-code' and verifier == 'device-code-verifier':"
+    , "                    payload = json.dumps({'access_token': 'e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdF90ZXN0In19.sig', 'refresh_token': 'codex-device-refresh', 'expires_in': 3600}).encode('utf-8')"
+    , "                    self.send_response(200)"
+    , "                else:"
+    , "                    payload = json.dumps({'error': 'invalid_grant'}).encode('utf-8')"
+    , "                    self.send_response(400)"
+    , "            elif grant_type == 'refresh_token':"
+    , "                refresh_token = (params.get('refresh_token') or [''])[0]"
+    , "                if refresh_token == 'codex-refresh-token':"
+    , "                    payload = json.dumps({'access_token': 'e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdF90ZXN0In19.sig', 'refresh_token': 'codex-refresh-2', 'expires_in': 1800}).encode('utf-8')"
+    , "                    self.send_response(200)"
+    , "                else:"
+    , "                    payload = json.dumps({'error': {'message': 'bad refresh token'}}).encode('utf-8')"
+    , "                    self.send_response(401)"
+    , "            else:"
+    , "                payload = json.dumps({'error': 'unsupported_grant_type'}).encode('utf-8')"
+    , "                self.send_response(400)"
+    , "            self.send_header('Content-Type', 'application/json')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
+    , "        if self.path == '/anthropic/oauth/token':"
+    , "            request = json.loads(body or '{}')"
+    , "            grant_type = request.get('grant_type')"
+    , "            if grant_type == 'authorization_code':"
+    , "                if request.get('code') == 'manual-anthropic-code' and request.get('code_verifier') == 'anthropic-verifier':"
+    , "                    payload = json.dumps({'access_token': 'sk-ant-oat-access-token', 'refresh_token': 'anthropic-browser-refresh', 'expires_in': 3600}).encode('utf-8')"
+    , "                    self.send_response(200)"
+    , "                else:"
+    , "                    payload = json.dumps({'error': 'invalid_grant'}).encode('utf-8')"
+    , "                    self.send_response(400)"
+    , "            elif grant_type == 'refresh_token':"
+    , "                if request.get('refresh_token') == 'anthropic-refresh-token':"
+    , "                    payload = json.dumps({'access_token': 'sk-ant-oat-refreshed-token', 'refresh_token': 'anthropic-refresh-2', 'expires_in': 1800}).encode('utf-8')"
+    , "                    self.send_response(200)"
+    , "                else:"
+    , "                    payload = json.dumps({'error': {'message': 'bad anthropic refresh token'}}).encode('utf-8')"
+    , "                    self.send_response(401)"
+    , "            else:"
+    , "                payload = json.dumps({'error': 'unsupported_grant_type'}).encode('utf-8')"
+    , "                self.send_response(400)"
+    , "            self.send_header('Content-Type', 'application/json')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/retry-openai/chat/completions':"
     , "            Handler.retry_count += 1"
     , "            if Handler.retry_count == 1:"
@@ -7533,6 +8364,18 @@ def httpServerScript : String :=
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
     , "            return"
+    , "        if self.path == '/responses-stream-early-eof/responses':"
+    , "            payload = ("
+    , "                'data: ' + json.dumps({'type': 'response.created', 'response': {'id': 'resp_stream_early_http'}}) + '\\n\\n' +"
+    , "                'data: ' + json.dumps({'type': 'response.output_item.added', 'output_index': 0, 'item': {'type': 'reasoning', 'id': 'rs_stream_early_http', 'summary': []}}) + '\\n\\n' +"
+    , "                'data: ' + json.dumps({'type': 'response.reasoning_text.delta', 'output_index': 0, 'delta': 'partial reasoning before eof'}) + '\\n\\n'"
+    , "            ).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'text/event-stream')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/azure-responses/responses?api-version=2025-01-01':"
     , "            request = json.loads(body)"
     , "            text = '|'.join([request.get('model') or '', str(request.get('stream')), self.headers.get('api-key') or '', self.headers.get('Authorization') or '', self.headers.get('X-Trace') or ''])"
@@ -7577,6 +8420,58 @@ def httpServerScript : String :=
     , "            ).encode('utf-8')"
     , "            self.send_response(200)"
     , "            self.send_header('Content-Type', 'text/event-stream')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
+    , "        if self.path == '/google-oauth-service-account':"
+    , "            params = parse_qs(body)"
+    , "            assertion = (params.get('assertion') or [''])[0]"
+    , "            parts = assertion.split('.')"
+    , "            if (params.get('grant_type') or [''])[0] != 'urn:ietf:params:oauth:grant-type:jwt-bearer' or len(parts) != 3:"
+    , "                payload = json.dumps({'error': 'invalid_request', 'body': body}).encode('utf-8')"
+    , "                self.send_response(400)"
+    , "                self.send_header('Content-Type', 'application/json')"
+    , "                self.send_header('Content-Length', str(len(payload)))"
+    , "                self.end_headers()"
+    , "                self.wfile.write(payload)"
+    , "                return"
+    , "            def _b64json(segment):"
+    , "                segment += '=' * ((4 - len(segment) % 4) % 4)"
+    , "                return json.loads(base64.urlsafe_b64decode(segment.encode('utf-8')).decode('utf-8'))"
+    , "            header = _b64json(parts[0])"
+    , "            claims = _b64json(parts[1])"
+    , "            expected_aud = 'http://127.0.0.1:%s/google-oauth-service-account' % sys.argv[1]"
+    , "            valid = header.get('alg') == 'RS256' and header.get('typ') == 'JWT' and claims.get('iss') == 'test-service@example.com' and claims.get('sub') == 'test-service@example.com' and claims.get('scope') == 'https://www.googleapis.com/auth/cloud-platform' and claims.get('aud') == expected_aud and isinstance(claims.get('iat'), int) and isinstance(claims.get('exp'), int) and claims.get('exp', 0) > claims.get('iat', 0)"
+    , "            if not valid:"
+    , "                payload = json.dumps({'error': 'invalid_assertion', 'header': header, 'claims': claims}).encode('utf-8')"
+    , "                self.send_response(400)"
+    , "                self.send_header('Content-Type', 'application/json')"
+    , "                self.send_header('Content-Length', str(len(payload)))"
+    , "                self.end_headers()"
+    , "                self.wfile.write(payload)"
+    , "                return"
+    , "            payload = json.dumps({'access_token': 'adc-service-token', 'expires_in': 3600}).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'application/json')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
+    , "        if self.path == '/google-oauth-authorized-user':"
+    , "            params = parse_qs(body)"
+    , "            valid = (params.get('grant_type') or [''])[0] == 'refresh_token' and (params.get('refresh_token') or [''])[0] == 'test-refresh-token' and (params.get('client_id') or [''])[0] == 'test-client-id' and (params.get('client_secret') or [''])[0] == 'test-client-secret'"
+    , "            if not valid:"
+    , "                payload = json.dumps({'error': 'invalid_request', 'body': body}).encode('utf-8')"
+    , "                self.send_response(400)"
+    , "                self.send_header('Content-Type', 'application/json')"
+    , "                self.send_header('Content-Length', str(len(payload)))"
+    , "                self.end_headers()"
+    , "                self.wfile.write(payload)"
+    , "                return"
+    , "            payload = json.dumps({'access_token': 'adc-authorized-user-token', 'expires_in': 3600}).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'application/json')"
     , "            self.send_header('Content-Length', str(len(payload)))"
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
@@ -7683,6 +8578,30 @@ def httpServerScript : String :=
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
     , "            return"
+    , "        if self.path.startswith('/bedrock/model/') and self.path.endswith('/converse-stream'):"
+    , "            request = json.loads(body or '{}')"
+    , "            text = '|'.join([request.get('modelId') or '', self.headers.get('Authorization') or '', self.headers.get('X-Trace') or ''])"
+    , "            midpoint = len(text) // 2"
+    , "            payload = b''.join(["
+    , "                _aws_eventstream_frame('messageStart', {'role': 'assistant'}),"
+    , "                _aws_eventstream_frame('contentBlockDelta', {'contentBlockIndex': 0, 'delta': {'reasoningContent': {'text': 'plan', 'signature': 'sig-bedrock'}}}),"
+    , "                _aws_eventstream_frame('contentBlockStop', {'contentBlockIndex': 0}),"
+    , "                _aws_eventstream_frame('contentBlockDelta', {'contentBlockIndex': 1, 'delta': {'text': text[:midpoint]}}),"
+    , "                _aws_eventstream_frame('contentBlockDelta', {'contentBlockIndex': 1, 'delta': {'text': text[midpoint:]}}),"
+    , "                _aws_eventstream_frame('contentBlockStop', {'contentBlockIndex': 1}),"
+    , "                _aws_eventstream_frame('contentBlockStart', {'contentBlockIndex': 2, 'start': {'toolUse': {'toolUseId': 'tool_bedrock', 'name': 'read'}}}),"
+    , "                _aws_eventstream_frame('contentBlockDelta', {'contentBlockIndex': 2, 'delta': {'toolUse': {'input': '{\"path\":\"README.md\"}'}}}),"
+    , "                _aws_eventstream_frame('contentBlockStop', {'contentBlockIndex': 2}),"
+    , "                _aws_eventstream_frame('messageStop', {'stopReason': 'TOOL_USE'}),"
+    , "                _aws_eventstream_frame('metadata', {'usage': {'inputTokens': 4, 'outputTokens': 5, 'cacheReadInputTokens': 1, 'cacheWriteInputTokens': 2, 'totalTokens': 12}}),"
+    , "            ])"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'application/vnd.amazon.eventstream')"
+    , "            self.send_header('x-amzn-requestid', 'bedrock-http-test')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/large':"
     , "            payload = b'x' * 1024"
     , "            self.send_response(200)"
@@ -7772,6 +8691,238 @@ def localHttpConfig (port : Nat) (path : String) (maxResponseBytes : UInt64 := 4
     userAgent := "lean-agent-test/0.1.0"
   }
 
+def localRequestConfig (port : Nat) (path : String) : LeanAgent.Http.RequestConfig :=
+  { url := s!"http://127.0.0.1:{port}{path}"
+    timeoutSeconds := 5
+    connectTimeoutSeconds := 5
+    maxResponseBytes := 4096
+    noProxy := some "*"
+    userAgent := "lean-agent-test/0.1.0"
+  }
+
+def testBedrockConverseHelpersAndTransportBoundary : IO Unit := do
+  assertTrue (LeanAgent.AI.Api.BedrockConverseStream.mapStopReason (some "END_TURN") == .stop)
+    "expected Bedrock END_TURN stop"
+  assertTrue (LeanAgent.AI.Api.BedrockConverseStream.mapStopReason (some "MAX_TOKENS") == .length)
+    "expected Bedrock MAX_TOKENS length"
+  assertTrue (LeanAgent.AI.Api.BedrockConverseStream.mapStopReason (some "TOOL_USE") == .toolUse)
+    "expected Bedrock TOOL_USE"
+  assertTrue (LeanAgent.AI.Api.BedrockConverseStream.mapStopReason (some "OTHER") == .error)
+    "expected Bedrock unknown stop reason error"
+  assertTrue
+    (LeanAgent.AI.Api.BedrockConverseStream.standardEndpointRegion?
+      "https://bedrock-runtime.us-west-2.amazonaws.com" == some "us-west-2")
+    "expected Bedrock endpoint region"
+  assertTrue
+    (LeanAgent.AI.Api.BedrockConverseStream.standardEndpointRegion?
+      "https://custom-bedrock.example.com" == none)
+    "expected custom Bedrock endpoint to have no standard region"
+  assertTrue
+    (LeanAgent.AI.Api.BedrockConverseStream.shouldUseExplicitEndpoint
+      "https://bedrock-runtime.us-east-1.amazonaws.com" none false)
+    "expected standard endpoint to be explicit without configured region/profile"
+  assertTrue
+    (!LeanAgent.AI.Api.BedrockConverseStream.shouldUseExplicitEndpoint
+      "https://bedrock-runtime.us-east-1.amazonaws.com" (some "us-west-2") false)
+    "expected configured region to avoid explicit endpoint"
+  assertTrue
+    (LeanAgent.AI.Api.BedrockConverseStream.modelArnRegion?
+      "arn:aws-us-gov:bedrock:us-gov-west-1:123456789012:inference-profile/global.anthropic.claude-opus-4-7-v1" ==
+        some "us-gov-west-1")
+    "expected Bedrock ARN region extraction"
+  let headers := LeanAgent.AI.Api.BedrockConverseStream.requestHeaders
+    { headers := #[("X-Config", "yes")] }
+    { headers :=
+        #[ ("Authorization", some "bad")
+         , ("x-amz-date", some "bad")
+         , ("X-Trace", some "trace-1")
+         ]
+    }
+  assertTrue (headerValueCaseInsensitive? headers "X-Config" == some "yes")
+    "expected Bedrock config header"
+  assertTrue (headerValueCaseInsensitive? headers "X-Trace" == some "trace-1")
+    "expected Bedrock custom header"
+  assertTrue (headerValueCaseInsensitive? headers "Authorization" == none)
+    "expected Bedrock reserved auth header to be filtered"
+  let port := 18117
+  let sawPayload ← IO.mkRef false
+  let sawResponse ← IO.mkRef false
+  withHttpServer port do
+    let baseUrl := s!"http://127.0.0.1:{port}/bedrock"
+    let model : LeanAgent.AI.ModelRef :=
+      { id := "anthropic.claude-3-7-sonnet-20250219-v1:0"
+        api := LeanAgent.AI.Api.BedrockConverseStream.api
+        provider := LeanAgent.Models.amazonBedrockProviderId
+        baseUrl := some baseUrl
+      }
+    let expectedText := String.intercalate "|" [model.id, "Bearer bedrock-test-token", "bedrock-trace"]
+    let stream ← LeanAgent.AI.Api.BedrockConverseStream.completeStreamWithOptions
+      { baseUrl := baseUrl
+        timeoutSeconds := 5
+        connectTimeoutSeconds := 5
+        maxResponseBytes := 4096
+        noProxy := some "*"
+        userAgent := "lean-agent-test/0.1.0"
+      }
+      model
+      #["text", "image"]
+      "Claude Opus 4.6 (US)"
+      #[]
+      true
+      { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }] }
+      { bearerToken := some "bedrock-test-token"
+        headers := #[("X-Trace", some "bedrock-trace")]
+        onPayload := some (fun payload ref => do
+          sawPayload.set true
+          assertTrue (ref.api == LeanAgent.AI.Api.BedrockConverseStream.api)
+            "expected Bedrock payload hook api"
+          assertTrue (jsonStringField? payload "modelId" == some model.id)
+            "expected Bedrock payload hook model id"
+          pure none)
+        onResponse := some (fun response _ => do
+          sawResponse.set true
+          assertTrue (response.status == 200) "expected Bedrock HTTP 200"
+          assertTrue
+            (headerValueCaseInsensitive? response.headers "x-amzn-requestid" == some "bedrock-http-test")
+            "expected Bedrock request id header"
+        )
+      }
+    assertTrue stream.isComplete "expected completed Bedrock stream"
+    assertTrue (stream.result.stopReason == .toolUse) "expected Bedrock tool-use stop"
+    assertTrue (stream.result.usage.input == 4) "expected Bedrock input tokens"
+    assertTrue (stream.result.usage.output == 5) "expected Bedrock output tokens"
+    assertTrue (stream.result.usage.cacheRead == 1) "expected Bedrock cache read"
+    assertTrue (stream.result.usage.cacheWrite == 2) "expected Bedrock cache write"
+    assertTrue (stream.result.usage.totalTokens == 12) "expected Bedrock total tokens"
+    assertTrue
+      (stream.result.content.any fun
+        | .thinking thinking => thinking.thinking == "plan" && thinking.thinkingSignature == some "sig-bedrock"
+        | _ => false)
+      "expected Bedrock thinking block"
+    assertTrue
+      (LeanAgent.AI.contentPlainText stream.result.content == s!"plan\n{expectedText}")
+      "expected Bedrock plain-text content"
+    match LeanAgent.AI.contentToolCalls stream.result.content |>.toList with
+    | [call] =>
+        assertTrue (call.id == "tool_bedrock") "expected Bedrock tool id"
+        assertTrue (call.name == "read") "expected Bedrock tool name"
+        assertTrue (LeanAgent.Json.optVal? call.arguments "path" == some (LeanAgent.Json.str "README.md"))
+          "expected Bedrock tool arguments"
+    | _ => fail "expected one Bedrock tool call"
+    assertTrue
+      (stream.events.any fun
+        | .thinkingDelta _ "plan" _ => true
+        | _ => false)
+      "expected Bedrock thinking delta event"
+    assertTrue
+      (stream.events.any fun
+        | .textDelta _ delta _ => !delta.isEmpty && expectedText.contains delta
+        | _ => false)
+      "expected Bedrock text delta events"
+    assertTrue
+      (stream.events.any fun
+        | .toolCallDelta _ delta _ => delta == "{\"path\":\"README.md\"}"
+        | _ => false)
+      "expected Bedrock tool delta event"
+    assertTrue (← sawPayload.get) "expected Bedrock payload hook before runtime"
+    assertTrue (← sawResponse.get) "expected Bedrock response hook"
+
+def testCompatBedrockTypedLegacyAliasBoundary : IO Unit := do
+  let sawPayload ← IO.mkRef false
+  let sawResponse ← IO.mkRef false
+  let tool : LeanAgent.AI.Tool :=
+    { name := "read"
+      description := "Read a file"
+      parameters := LeanAgent.Json.obj [("type", LeanAgent.Json.str "object")]
+    }
+  let port := 18118
+  let model : LeanAgent.Models.ModelInfo :=
+    { id := LeanAgent.Models.amazonBedrockDefaultModel
+      name := "Claude Opus 4.6 (US)"
+      provider := LeanAgent.Models.amazonBedrockProviderId
+      api := LeanAgent.AI.Api.BedrockConverseStream.api
+      baseUrl := s!"http://127.0.0.1:{port}/bedrock"
+      contextWindow := 200000
+      maxTokens := 64000
+      reasoning := true
+      thinkingLevelMap := #[{ level := .level .xhigh, mapped := some "max" }]
+      input := #["text", "image"]
+    }
+  withHttpServer port do
+    let expectedText :=
+      String.intercalate "|" [model.id, "Bearer bedrock-bearer", "typed-bedrock-trace"]
+    let stream ← LeanAgent.AI.Compat.Aliases.streamBedrockConverseStream
+      model
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+        tools := #[tool]
+      }
+      { bearerToken := some "bedrock-bearer"
+        region := some "us-west-2"
+        profile := some "dev"
+        maxTokens := some 123
+        toolChoice := some (.tool "read")
+        reasoning := some .xhigh
+        thinkingDisplay := some .summarized
+        headers := #[("X-Trace", some "typed-bedrock-trace")]
+        metadata := some (LeanAgent.Json.obj [("session", LeanAgent.Json.str "typed-bedrock")])
+        onPayload := some (fun payload ref => do
+          sawPayload.set true
+          assertTrue (ref.api == LeanAgent.AI.Api.BedrockConverseStream.api)
+            "expected typed Bedrock payload hook model api"
+          assertTrue (jsonStringField? payload "modelId" == some LeanAgent.Models.amazonBedrockDefaultModel)
+            "expected typed Bedrock model id"
+          match jsonObjectField? payload "inferenceConfig" with
+          | some inference =>
+              assertTrue (LeanAgent.Json.optVal? inference "maxTokens" == some (LeanAgent.Json.nat 123))
+                "expected typed Bedrock max tokens"
+          | none => fail "expected typed Bedrock inference config"
+          match jsonObjectField? payload "toolConfig" with
+          | some toolConfig =>
+              match jsonObjectField? toolConfig "toolChoice" with
+              | some choice =>
+                  match jsonObjectField? choice "tool" with
+                  | some selected =>
+                      assertTrue (jsonStringField? selected "name" == some "read")
+                        "expected typed Bedrock specific tool choice"
+                  | none => fail "expected typed Bedrock tool choice object"
+              | none => fail "expected typed Bedrock tool choice"
+          | none => fail "expected typed Bedrock tool config"
+          match jsonObjectField? payload "additionalModelRequestFields" with
+          | some fields =>
+              match jsonObjectField? fields "thinking", jsonObjectField? fields "output_config" with
+              | some thinking, some outputConfig =>
+                  assertTrue (jsonStringField? thinking "display" == some "summarized")
+                    "expected typed Bedrock thinking display"
+                  assertTrue (jsonStringField? outputConfig "effort" == some "max")
+                    "expected typed Bedrock xhigh effort mapping"
+              | _, _ => fail "expected typed Bedrock thinking fields"
+          | none => fail "expected typed Bedrock additional request fields"
+          match jsonObjectField? payload "requestMetadata" with
+          | some metadata =>
+              assertTrue (jsonStringField? metadata "session" == some "typed-bedrock")
+                "expected typed Bedrock metadata"
+          | none => fail "expected typed Bedrock request metadata"
+          pure none)
+        onResponse := some (fun response _ => do
+          sawResponse.set true
+          assertTrue (response.status == 200) "expected typed Bedrock HTTP 200"
+        )
+      }
+    assertTrue stream.isComplete "expected typed Bedrock alias stream to complete"
+    assertTrue (stream.result.stopReason == .toolUse) "expected typed Bedrock alias tool-use stop"
+    assertTrue
+      (LeanAgent.AI.contentPlainText stream.result.content == s!"plan\n{expectedText}")
+      "expected typed Bedrock alias streamed text"
+    match LeanAgent.AI.contentToolCalls stream.result.content |>.toList with
+    | [call] =>
+        assertTrue (call.name == "read") "expected typed Bedrock alias tool name"
+        assertTrue (LeanAgent.Json.optVal? call.arguments "path" == some (LeanAgent.Json.str "README.md"))
+          "expected typed Bedrock alias tool arguments"
+    | _ => fail "expected one typed Bedrock alias tool call"
+    assertTrue (← sawPayload.get) "expected typed Bedrock alias payload hook"
+    assertTrue (← sawResponse.get) "expected typed Bedrock alias response hook"
+
 def testHttpEnvelopeParsing : IO Unit := do
   match LeanAgent.Http.parseStatusEnvelope "201\nlegacy body\nsecond line" with
   | .ok response =>
@@ -7814,6 +8965,966 @@ def testHttpClientCustomHeaders : IO Unit := do
     assertTrue (response.status == 201) "expected HTTP status 201"
     assertTrue (response.body.contains "\"x_custom\": \"custom-value\"") "expected custom header"
     assertTrue (response.body.contains "\"auth\": \"Bearer override-token\"") "expected authorization override"
+
+def testHttpClientGenericRequest : IO Unit := do
+  let port := 18113
+  withHttpServer port do
+    let getResponse ← LeanAgent.Http.requestResponse
+      { (localRequestConfig port "/generic-get?x=1") with
+        method := "GET"
+        authorization := some "Bearer generic-token"
+        headers := #[("X-Custom", "generic-value")]
+      }
+    assertTrue (getResponse.status == 200) "expected generic GET status"
+    assertTrue (getResponse.body.contains "\"method\": \"GET\"") "expected generic GET method echo"
+    assertTrue (getResponse.body.contains "\"path\": \"/generic-get?x=1\"") "expected generic GET path"
+    assertTrue (getResponse.body.contains "\"auth\": \"Bearer generic-token\"") "expected generic GET auth"
+    assertTrue (getResponse.body.contains "\"x_custom\": \"generic-value\"") "expected generic GET custom header"
+    let postResponse ← LeanAgent.Http.requestResponse
+      { (localRequestConfig port "/generic-form") with
+        method := "POST"
+        authorization := some "Bearer raw-form-token"
+        body := some "client_id=test&scope=read%3Auser"
+        headers :=
+          #[ ("Content-Type", "application/x-www-form-urlencoded")
+           , ("Accept", "application/json")
+           ]
+      }
+    assertTrue (postResponse.status == 201) "expected generic POST status"
+    assertTrue (postResponse.body.contains "\"body\": \"client_id=test&scope=read%3Auser\"")
+      "expected generic POST raw body"
+    assertTrue (postResponse.body.contains "\"auth\": \"Bearer raw-form-token\"")
+      "expected generic POST raw authorization"
+
+def testAnthropicOAuthRefreshExchangesToken : IO Unit := do
+  let port := 18118
+  withHttpServer port do
+    let seenBodies ← IO.mkRef (#[] : Array String)
+    let runtime :=
+      localAnthropicRuntime
+        port
+        "/anthropic/oauth/token"
+        "anthropic-verifier"
+        "anthropic-challenge"
+        (some fun config => do
+          if config.url.endsWith "/anthropic/oauth/token" then
+            match config.body with
+            | some body => seenBodies.modify (·.push body)
+            | none => pure ()
+          else
+            pure ())
+    let credential ← LeanAgent.AI.OAuth.Anthropic.refreshAnthropicTokenWith
+      runtime
+      "anthropic-refresh-token"
+    assertTrue (credential.access == "sk-ant-oat-refreshed-token")
+      "expected refreshed Anthropic access token"
+    assertTrue (credential.refresh == "anthropic-refresh-2")
+      "expected refreshed Anthropic refresh token"
+    assertTrue (credential.expires == 1501000)
+      "expected refreshed Anthropic expiry from runtime clock with skew"
+    let bodies ← seenBodies.get
+    assertTrue (bodies.any (·.contains "\"grant_type\":\"refresh_token\""))
+      "expected refresh grant JSON request body"
+    assertTrue (bodies.any (·.contains "\"refresh_token\":\"anthropic-refresh-token\""))
+      "expected refresh token in Anthropic request body"
+    assertTrue (!bodies.any (·.contains "\"scope\""))
+      "expected Anthropic refresh request to omit scope"
+
+def testAnthropicOAuthBrowserLoginUsesManualCode : IO Unit := do
+  let port := 18117
+  withHttpServer port do
+    let seenAuth ← IO.mkRef (none : Option LeanAgent.AI.OAuth.OAuthAuthInfo)
+    let seenTokenBodies ← IO.mkRef (#[] : Array String)
+    let runtime :=
+      localAnthropicRuntime
+        port
+        "/anthropic/oauth/token"
+        "anthropic-verifier"
+        "anthropic-challenge"
+        (some fun config => do
+          if config.url.endsWith "/anthropic/oauth/token" then
+            match config.body with
+            | some body => seenTokenBodies.modify (·.push body)
+            | none => pure ()
+          else
+            pure ())
+    let callbacks : LeanAgent.AI.OAuth.OAuthLoginCallbacks :=
+      { onAuth := fun info => seenAuth.set (some info)
+        onDeviceCode := fun _ => fail "unexpected device code callback"
+        onPrompt := fun _ => throw (IO.userError "unexpected prompt fallback")
+        onManualCodeInput := some (fun _ =>
+          pure "http://localhost:53692/callback?code=manual-anthropic-code&state=anthropic-verifier")
+        onSelect := fun _ => pure none
+      }
+    let credential ← LeanAgent.AI.OAuth.Anthropic.loginAnthropicWith runtime callbacks
+    assertTrue (credential.access == "sk-ant-oat-access-token")
+      "expected browser login to exchange Anthropic access token"
+    assertTrue (credential.refresh == "anthropic-browser-refresh")
+      "expected browser login Anthropic refresh token"
+    assertTrue (credential.expires == 3301000)
+      "expected browser login Anthropic expiry from runtime clock with skew"
+    match ← seenAuth.get with
+    | some info =>
+        assertTrue (info.url.contains "response_type=code")
+          "expected Anthropic auth response type"
+        assertTrue
+          (info.url.contains "redirect_uri=http%3A%2F%2Flocalhost%3A53692%2Fcallback")
+          "expected Anthropic auth redirect URI"
+        assertTrue (info.url.contains "state=anthropic-verifier")
+          "expected Anthropic auth state"
+        assertTrue (info.url.contains "code_challenge=anthropic-challenge")
+          "expected Anthropic auth code challenge"
+        assertTrue
+          (info.instructions ==
+            some "Complete login in your browser. If the browser is on another machine, paste the final redirect URL here.")
+          "expected Anthropic auth instructions"
+    | none => fail "expected Anthropic auth callback"
+    let tokenBodies ← seenTokenBodies.get
+    assertTrue (tokenBodies.size == 1) "expected one Anthropic authorization code exchange"
+    assertTrue (tokenBodies.any (·.contains "\"grant_type\":\"authorization_code\""))
+      "expected authorization_code grant request"
+    assertTrue (tokenBodies.any (·.contains "\"code\":\"manual-anthropic-code\""))
+      "expected Anthropic authorization code in request"
+    assertTrue
+      (tokenBodies.any (·.contains "\"redirect_uri\":\"http://localhost:53692/callback\""))
+      "expected Anthropic redirect URI in token request"
+
+def testAnthropicOAuthBrowserLoginUsesLocalCallback : IO Unit := do
+  let port := 18115
+  withHttpServer port do
+    let callbackPort := 19692
+    let seenAuth ← IO.mkRef (none : Option LeanAgent.AI.OAuth.OAuthAuthInfo)
+    let seenTokenBodies ← IO.mkRef (#[] : Array String)
+    let runtime :=
+      { (localAnthropicRuntime
+            port
+            "/anthropic/oauth/token"
+            "anthropic-verifier"
+            "anthropic-challenge"
+            (some fun config => do
+              if config.url.endsWith "/anthropic/oauth/token" then
+                match config.body with
+                | some body => seenTokenBodies.modify (·.push body)
+                | none => pure ()
+              else
+                pure ())) with
+        redirectUri := s!"http://localhost:{callbackPort}/callback"
+      }
+    let callbacks : LeanAgent.AI.OAuth.OAuthLoginCallbacks :=
+      { onAuth := fun info => seenAuth.set (some info)
+        onDeviceCode := fun _ => fail "unexpected device code callback"
+        onPrompt := fun _ => throw (IO.userError "unexpected prompt fallback")
+        onManualCodeInput := some (fun _ => do
+          IO.sleep 300
+          pure "")
+        onSelect := fun _ => pure none
+      }
+    let loginTask ← IO.asTask (LeanAgent.AI.OAuth.Anthropic.loginAnthropicWith runtime callbacks)
+    let info ← waitForSome seenAuth.get "expected Anthropic auth callback"
+    assertTrue
+      (info.instructions ==
+        some "Complete login in your browser. If the browser is on another machine, paste the final redirect URL here.")
+      "expected Anthropic auth instructions"
+    let callbackResponse ← LeanAgent.Http.requestResponse
+      { (localRequestConfig callbackPort "/callback?code=manual-anthropic-code&state=anthropic-verifier") with
+        method := "GET"
+      }
+    assertTrue (callbackResponse.status == 200) "expected Anthropic localhost callback success status"
+    assertTrue
+      (callbackResponse.body.contains "Anthropic authentication completed. You can close this window.")
+      "expected Anthropic localhost callback success page"
+    let credential ←
+      match ← IO.wait loginTask with
+      | .ok credential => pure credential
+      | .error err => throw err
+    assertTrue (credential.access == "sk-ant-oat-access-token")
+      "expected localhost callback Anthropic access token"
+    assertTrue (credential.refresh == "anthropic-browser-refresh")
+      "expected localhost callback Anthropic refresh token"
+    let tokenBodies ← seenTokenBodies.get
+    assertTrue (tokenBodies.size == 1) "expected one Anthropic localhost callback exchange"
+    assertTrue (tokenBodies.any (·.contains "\"code\":\"manual-anthropic-code\""))
+      "expected Anthropic localhost callback authorization code"
+    assertTrue
+      (tokenBodies.any (·.contains s!"\"redirect_uri\":\"http://localhost:{callbackPort}/callback\""))
+      "expected Anthropic localhost callback redirect URI in token request"
+
+def testAnthropicOAuthLocalCallbackAbortsManualCodePrompt : IO Unit := do
+  let port := 18124
+  withHttpServer port do
+    let callbackPort := 19693
+    let seenAuth ← IO.mkRef (none : Option LeanAgent.AI.OAuth.OAuthAuthInfo)
+    let manualPromptAborted ← IO.mkRef false
+    let sawManualSignal ← IO.mkRef false
+    let runtime :=
+      { (localAnthropicRuntime port) with
+        redirectUri := s!"http://localhost:{callbackPort}/callback"
+      }
+    let callbacks : LeanAgent.AI.OAuth.OAuthLoginCallbacks :=
+      { onAuth := fun info => seenAuth.set (some info)
+        onDeviceCode := fun _ => fail "unexpected device code callback"
+        onPrompt := fun _ => throw (IO.userError "unexpected prompt fallback")
+        onManualCodeInput := some (fun prompt => do
+          sawManualSignal.set prompt.signal.isSome
+          match prompt.signal with
+          | some signal =>
+              try
+                LeanAgent.AI.Util.Abort.sleep
+                  (fun ms => IO.sleep (UInt32.ofNat ms))
+                  5000
+                  (some signal)
+                  10
+                  (some LeanAgent.AI.OAuth.cancelMessage)
+                pure ""
+              catch err =>
+                if err.toString.contains LeanAgent.AI.OAuth.cancelMessage then
+                  manualPromptAborted.set true
+                throw err
+          | none =>
+              throw (IO.userError "expected manual-code prompt abort signal"))
+        onSelect := fun _ => pure none
+      }
+    let loginTask ← IO.asTask (LeanAgent.AI.OAuth.Anthropic.loginAnthropicWith runtime callbacks)
+    let _ ← waitForSome seenAuth.get "expected Anthropic auth callback before callback-server test"
+    let callbackResponse ← LeanAgent.Http.requestResponse
+      { (localRequestConfig callbackPort "/callback?code=manual-anthropic-code&state=anthropic-verifier") with
+        method := "GET"
+      }
+    assertTrue (callbackResponse.status == 200) "expected Anthropic localhost callback success status"
+    let _ ←
+      match ← IO.wait loginTask with
+      | .ok credential => pure credential
+      | .error err => throw err
+    assertTrue (← sawManualSignal.get) "expected Anthropic manual-code prompt to receive abort signal"
+    let _ ← waitForSome
+      (do
+        if ← manualPromptAborted.get then
+          pure (some ())
+        else
+          pure none)
+      "expected Anthropic manual-code prompt to abort after callback login settles"
+    pure ()
+
+def testAnthropicOAuthBrowserLoginRejectsStateMismatch : IO Unit := do
+  let port := 18116
+  withHttpServer port do
+    let seenTokenBodies ← IO.mkRef (#[] : Array String)
+    let runtime :=
+      localAnthropicRuntime
+        port
+        "/anthropic/oauth/token"
+        "anthropic-verifier"
+        "anthropic-challenge"
+        (some fun config => do
+          if config.url.endsWith "/anthropic/oauth/token" then
+            match config.body with
+            | some body => seenTokenBodies.modify (·.push body)
+            | none => pure ()
+          else
+            pure ())
+    let failed ←
+      try
+        let callbacks : LeanAgent.AI.OAuth.OAuthLoginCallbacks :=
+          { onAuth := fun _ => pure ()
+            onDeviceCode := fun _ => fail "unexpected device code callback"
+            onPrompt := fun _ => throw (IO.userError "unexpected prompt fallback")
+            onManualCodeInput := some (fun _ =>
+              pure "http://localhost:53692/callback?code=manual-anthropic-code&state=wrong-state")
+            onSelect := fun _ => pure none
+          }
+        let _ ← LeanAgent.AI.OAuth.Anthropic.loginAnthropicWith runtime callbacks
+        pure false
+      catch err =>
+        assertTrue (err.toString.contains "OAuth state mismatch")
+          "expected Anthropic browser login state mismatch rejection"
+        pure true
+    assertTrue failed "expected Anthropic browser login with mismatched state to fail"
+    assertTrue ((← seenTokenBodies.get).isEmpty)
+      "expected Anthropic state mismatch to stop before token exchange"
+
+def testOpenAICodexOAuthRefreshExchangesToken : IO Unit := do
+  let port := 18119
+  withHttpServer port do
+    let seenBodies ← IO.mkRef (#[] : Array String)
+    let runtime :=
+      localOpenAICodexRuntime
+        port
+        "/codex/deviceauth/usercode"
+        "/codex/deviceauth/token"
+        "/codex/oauth/token"
+        "state-123"
+        "browser-verifier"
+        "browser-challenge"
+        "lean-agent"
+        (some fun config => do
+          if config.url.endsWith "/codex/oauth/token" then
+            match config.body with
+            | some body => seenBodies.modify (·.push body)
+            | none => pure ()
+          else
+            pure ())
+    let credential ← LeanAgent.AI.OAuth.OpenAICodex.refreshOpenAICodexTokenWith
+      runtime
+      "codex-refresh-token"
+    assertTrue (credential.access == fakeOpenAICodexJwt)
+      "expected refreshed OpenAI Codex access token"
+    assertTrue (credential.refresh == "codex-refresh-2")
+      "expected refreshed OpenAI Codex refresh token"
+    assertTrue (credential.expires == 1800000 + 1000)
+      "expected refreshed OpenAI Codex expiry from runtime clock"
+    let bodies ← seenBodies.get
+    assertTrue (bodies.any (·.contains "grant_type=refresh_token"))
+      "expected refresh grant request body"
+    assertTrue (bodies.any (·.contains "refresh_token=codex-refresh-token"))
+      "expected refresh token in request body"
+
+def testOpenAICodexOAuthBrowserLoginUsesManualCode : IO Unit := do
+  let port := 18120
+  withHttpServer port do
+    let seenAuth ← IO.mkRef (none : Option LeanAgent.AI.OAuth.OAuthAuthInfo)
+    let seenTokenBodies ← IO.mkRef (#[] : Array String)
+    let runtime :=
+      localOpenAICodexRuntime
+        port
+        "/codex/deviceauth/usercode"
+        "/codex/deviceauth/token"
+        "/codex/oauth/token"
+        "state-123"
+        "browser-verifier"
+        "browser-challenge"
+        "lean-agent"
+        (some fun config => do
+          if config.url.endsWith "/codex/oauth/token" then
+            match config.body with
+            | some body => seenTokenBodies.modify (·.push body)
+            | none => pure ()
+          else
+            pure ())
+    let callbacks : LeanAgent.AI.OAuth.OAuthLoginCallbacks :=
+      { onAuth := fun info => seenAuth.set (some info)
+        onDeviceCode := fun _ => fail "unexpected device code callback"
+        onPrompt := fun _ => throw (IO.userError "unexpected prompt fallback")
+        onManualCodeInput := some (fun _ =>
+          pure "http://localhost:1455/auth/callback?code=oauth-browser-code&state=state-123")
+        onSelect := fun _ => pure (some LeanAgent.AI.OAuth.OpenAICodex.browserLoginMethod)
+      }
+    let credential ← LeanAgent.AI.OAuth.OpenAICodex.loginOpenAICodexWith
+      runtime
+      callbacks
+    assertTrue (credential.access == fakeOpenAICodexJwt)
+      "expected browser login to exchange OpenAI Codex access token"
+    assertTrue (credential.refresh == "codex-browser-refresh")
+      "expected browser login refresh token"
+    assertTrue (credential.expires == 3600000 + 1000)
+      "expected browser login expiry from runtime clock"
+    match ← seenAuth.get with
+    | some info =>
+        assertTrue (info.url.contains "response_type=code")
+          "expected browser auth response type"
+        assertTrue (info.url.contains "code_challenge=browser-challenge")
+          "expected browser auth code challenge"
+        assertTrue (info.url.contains "state=state-123")
+          "expected browser auth state"
+        assertTrue (info.url.contains "originator=lean-agent")
+          "expected browser auth originator"
+        assertTrue
+          (info.instructions == some "A browser window should open. Complete login to finish.")
+          "expected browser auth instructions"
+    | none => fail "expected browser auth callback"
+    let tokenBodies ← seenTokenBodies.get
+    assertTrue (tokenBodies.size == 1) "expected one authorization code exchange"
+    assertTrue (tokenBodies.any (·.contains "grant_type=authorization_code"))
+      "expected authorization_code grant request"
+    assertTrue (tokenBodies.any (·.contains "code=oauth-browser-code"))
+      "expected browser authorization code in request"
+    assertTrue (tokenBodies.any (·.contains "code_verifier=browser-verifier"))
+      "expected browser code verifier in request"
+
+def testOpenAICodexOAuthBrowserLoginUsesLocalCallback : IO Unit := do
+  let port := 18114
+  withHttpServer port do
+    let callbackPort := 21455
+    let seenAuth ← IO.mkRef (none : Option LeanAgent.AI.OAuth.OAuthAuthInfo)
+    let seenTokenBodies ← IO.mkRef (#[] : Array String)
+    let runtime :=
+      { (localOpenAICodexRuntime
+            port
+            "/codex/deviceauth/usercode"
+            "/codex/deviceauth/token"
+            "/codex/oauth/token"
+            "state-123"
+            "browser-verifier"
+            "browser-challenge"
+            "lean-agent"
+            (some fun config => do
+              if config.url.endsWith "/codex/oauth/token" then
+                match config.body with
+                | some body => seenTokenBodies.modify (·.push body)
+                | none => pure ()
+              else
+                pure ())) with
+        urls := { (localOpenAICodexRuntime port).urls with redirectUri := s!"http://localhost:{callbackPort}/auth/callback" }
+      }
+    let callbacks : LeanAgent.AI.OAuth.OAuthLoginCallbacks :=
+      { onAuth := fun info => seenAuth.set (some info)
+        onDeviceCode := fun _ => fail "unexpected device code callback"
+        onPrompt := fun _ => throw (IO.userError "unexpected prompt fallback")
+        onManualCodeInput := some (fun _ => do
+          IO.sleep 300
+          pure "")
+        onSelect := fun _ => pure (some LeanAgent.AI.OAuth.OpenAICodex.browserLoginMethod)
+      }
+    let loginTask ← IO.asTask (LeanAgent.AI.OAuth.OpenAICodex.loginOpenAICodexWith runtime callbacks)
+    let info ← waitForSome seenAuth.get "expected OpenAI Codex auth callback"
+    assertTrue
+      (info.instructions == some "A browser window should open. Complete login to finish.")
+      "expected OpenAI Codex auth instructions"
+    let callbackResponse ← LeanAgent.Http.requestResponse
+      { (localRequestConfig callbackPort "/auth/callback?code=oauth-browser-code&state=state-123") with
+        method := "GET"
+      }
+    assertTrue (callbackResponse.status == 200) "expected OpenAI Codex localhost callback success status"
+    assertTrue
+      (callbackResponse.body.contains "OpenAI authentication completed. You can close this window.")
+      "expected OpenAI Codex localhost callback success page"
+    let credential ←
+      match ← IO.wait loginTask with
+      | .ok credential => pure credential
+      | .error err => throw err
+    assertTrue (credential.access == fakeOpenAICodexJwt)
+      "expected localhost callback OpenAI Codex access token"
+    assertTrue (credential.refresh == "codex-browser-refresh")
+      "expected localhost callback OpenAI Codex refresh token"
+    let tokenBodies ← seenTokenBodies.get
+    assertTrue (tokenBodies.size == 1) "expected one OpenAI Codex localhost callback exchange"
+    assertTrue (tokenBodies.any (·.contains "code=oauth-browser-code"))
+      "expected OpenAI Codex localhost callback authorization code"
+    assertTrue
+      (tokenBodies.any (·.contains s!"redirect_uri=http%3A%2F%2Flocalhost%3A{callbackPort}%2Fauth%2Fcallback"))
+      "expected OpenAI Codex localhost callback redirect URI in token request"
+
+def testOpenAICodexOAuthLocalCallbackAbortsManualCodePrompt : IO Unit := do
+  let port := 18125
+  withHttpServer port do
+    let callbackPort := 21456
+    let seenAuth ← IO.mkRef (none : Option LeanAgent.AI.OAuth.OAuthAuthInfo)
+    let manualPromptAborted ← IO.mkRef false
+    let sawManualSignal ← IO.mkRef false
+    let baseRuntime := localOpenAICodexRuntime port
+    let runtime :=
+      { baseRuntime with
+        urls := { baseRuntime.urls with redirectUri := s!"http://localhost:{callbackPort}/auth/callback" }
+      }
+    let callbacks : LeanAgent.AI.OAuth.OAuthLoginCallbacks :=
+      { onAuth := fun info => seenAuth.set (some info)
+        onDeviceCode := fun _ => fail "unexpected device code callback"
+        onPrompt := fun _ => throw (IO.userError "unexpected prompt fallback")
+        onManualCodeInput := some (fun prompt => do
+          sawManualSignal.set prompt.signal.isSome
+          match prompt.signal with
+          | some signal =>
+              try
+                LeanAgent.AI.Util.Abort.sleep
+                  (fun ms => IO.sleep (UInt32.ofNat ms))
+                  5000
+                  (some signal)
+                  10
+                  (some LeanAgent.AI.OAuth.cancelMessage)
+                pure ""
+              catch err =>
+                if err.toString.contains LeanAgent.AI.OAuth.cancelMessage then
+                  manualPromptAborted.set true
+                throw err
+          | none =>
+              throw (IO.userError "expected manual-code prompt abort signal"))
+        onSelect := fun _ => pure (some LeanAgent.AI.OAuth.OpenAICodex.browserLoginMethod)
+      }
+    let loginTask ← IO.asTask (LeanAgent.AI.OAuth.OpenAICodex.loginOpenAICodexWith runtime callbacks)
+    let _ ← waitForSome seenAuth.get "expected OpenAI Codex auth callback before callback-server test"
+    let callbackResponse ← LeanAgent.Http.requestResponse
+      { (localRequestConfig callbackPort "/auth/callback?code=oauth-browser-code&state=state-123") with
+        method := "GET"
+      }
+    assertTrue (callbackResponse.status == 200) "expected OpenAI Codex localhost callback success status"
+    let _ ←
+      match ← IO.wait loginTask with
+      | .ok credential => pure credential
+      | .error err => throw err
+    assertTrue (← sawManualSignal.get) "expected OpenAI Codex manual-code prompt to receive abort signal"
+    let _ ← waitForSome
+      (do
+        if ← manualPromptAborted.get then
+          pure (some ())
+        else
+          pure none)
+      "expected OpenAI Codex manual-code prompt to abort after callback login settles"
+    pure ()
+
+def testOpenAICodexOAuthBrowserLoginRejectsStateMismatch : IO Unit := do
+  let port := 18121
+  withHttpServer port do
+    let seenTokenBodies ← IO.mkRef (#[] : Array String)
+    let runtime :=
+      localOpenAICodexRuntime
+        port
+        "/codex/deviceauth/usercode"
+        "/codex/deviceauth/token"
+        "/codex/oauth/token"
+        "state-123"
+        "browser-verifier"
+        "browser-challenge"
+        "lean-agent"
+        (some fun config => do
+          if config.url.endsWith "/codex/oauth/token" then
+            match config.body with
+            | some body => seenTokenBodies.modify (·.push body)
+            | none => pure ()
+          else
+            pure ())
+    let failed ←
+      try
+        let callbacks : LeanAgent.AI.OAuth.OAuthLoginCallbacks :=
+          { onAuth := fun _ => pure ()
+            onDeviceCode := fun _ => fail "unexpected device code callback"
+            onPrompt := fun _ => throw (IO.userError "unexpected prompt fallback")
+            onManualCodeInput := some (fun _ =>
+              pure "http://localhost:1455/auth/callback?code=oauth-browser-code&state=wrong-state")
+            onSelect := fun _ => pure (some LeanAgent.AI.OAuth.OpenAICodex.browserLoginMethod)
+          }
+        let _ ← LeanAgent.AI.OAuth.OpenAICodex.loginOpenAICodexWith runtime callbacks
+        pure false
+      catch err =>
+        assertTrue (err.toString.contains "State mismatch")
+          "expected browser login state mismatch rejection"
+        pure true
+    assertTrue failed "expected browser login with mismatched state to fail"
+    assertTrue ((← seenTokenBodies.get).isEmpty)
+      "expected state mismatch to stop before token exchange"
+
+def testOpenAICodexOAuthProviderDeviceCodeLogin : IO Unit := do
+  let port := 18122
+  withHttpServer port do
+    let seenDeviceCode ← IO.mkRef (none : Option LeanAgent.AI.OAuth.OAuthDeviceCodeInfo)
+    let seenTokenBodies ← IO.mkRef (#[] : Array String)
+    let runtime :=
+      localOpenAICodexRuntime
+        port
+        "/codex/deviceauth/usercode"
+        "/codex/deviceauth/token"
+        "/codex/oauth/token"
+        "state-123"
+        "browser-verifier"
+        "browser-challenge"
+        "lean-agent"
+        (some fun config => do
+          if config.url.endsWith "/codex/oauth/token" then
+            match config.body with
+            | some body => seenTokenBodies.modify (·.push body)
+            | none => pure ()
+          else
+            pure ())
+    let callbacks : LeanAgent.AI.OAuth.OAuthLoginCallbacks :=
+      { onAuth := fun _ => fail "unexpected browser auth callback"
+        onDeviceCode := fun info => seenDeviceCode.set (some info)
+        onPrompt := fun _ => throw (IO.userError "unexpected prompt during device-code login")
+        onSelect := fun _ => pure (some LeanAgent.AI.OAuth.OpenAICodex.deviceCodeLoginMethod)
+      }
+    let credential ← (LeanAgent.AI.OAuth.OpenAICodex.oauthProviderWith runtime).login callbacks
+    match ← seenDeviceCode.get with
+    | some info =>
+        assertTrue (info.userCode == "ABCD-1234")
+          "expected OpenAI Codex device user code"
+        assertTrue (info.verificationUri == s!"http://127.0.0.1:{port}/codex/device")
+          "expected OpenAI Codex device verification URI"
+        assertTrue (info.intervalSeconds == some 1)
+          "expected OpenAI Codex device polling interval"
+        assertTrue (info.expiresInSeconds == some (15 * 60))
+          "expected OpenAI Codex device timeout"
+    | none => fail "expected OpenAI Codex device code callback"
+    assertTrue (credential.access == fakeOpenAICodexJwt)
+      "expected device-code login to exchange OpenAI Codex access token"
+    assertTrue (credential.refresh == "codex-device-refresh")
+      "expected device-code login refresh token"
+    let tokenBodies ← seenTokenBodies.get
+    assertTrue (tokenBodies.size == 1) "expected one device authorization exchange"
+    assertTrue (tokenBodies.any (·.contains "code=oauth-device-code"))
+      "expected device authorization code in request"
+    assertTrue (tokenBodies.any (·.contains "code_verifier=device-code-verifier"))
+      "expected device code verifier in request"
+
+def testOpenAICodexOAuthDeviceCodeStart404UsesHelpfulError : IO Unit := do
+  let port := 18123
+  withHttpServer port do
+    let failed ←
+      try
+        let callbacks : LeanAgent.AI.OAuth.OAuthLoginCallbacks :=
+          { onAuth := fun _ => fail "unexpected browser auth callback"
+            onDeviceCode := fun _ => fail "unexpected device code callback"
+            onPrompt := fun _ => throw (IO.userError "unexpected prompt")
+            onSelect := fun _ => pure (some LeanAgent.AI.OAuth.OpenAICodex.deviceCodeLoginMethod)
+          }
+        let _ ← LeanAgent.AI.OAuth.OpenAICodex.loginOpenAICodexWith
+          (localOpenAICodexRuntime port "/codex/deviceauth/usercode-404")
+          callbacks
+        pure false
+      catch err =>
+        assertTrue
+          (err.toString.contains
+            "OpenAI Codex device code login is not enabled for this server")
+          "expected OpenAI Codex 404 device-code hint"
+        pure true
+    assertTrue failed "expected OpenAI Codex device-code 404 to fail with hint"
+
+def testOpenAICodexOAuthDeviceCodeLoginRespectsAbortSignal : IO Unit := do
+  let port := 18126
+  withHttpServer port do
+    let seenDeviceCode ← IO.mkRef (none : Option LeanAgent.AI.OAuth.OAuthDeviceCodeInfo)
+    let abortedRef ← IO.mkRef false
+    let baseRuntime := localOpenAICodexRuntime port
+    let runtime :=
+      { baseRuntime with
+        request := fun config => do
+          if config.url.endsWith "/codex/deviceauth/token" then
+            pure { status := 403, headers := #[], body := "{\"error\":\"deviceauth_authorization_pending\"}" }
+          else
+            baseRuntime.request config
+        sleepMs := fun _ => abortedRef.set true
+      }
+    let failed ←
+      try
+        let callbacks : LeanAgent.AI.OAuth.OAuthLoginCallbacks :=
+          { onAuth := fun _ => fail "unexpected browser auth callback"
+            onDeviceCode := fun info => seenDeviceCode.set (some info)
+            onPrompt := fun _ => throw (IO.userError "unexpected prompt during device-code login")
+            onSelect := fun _ => pure (some LeanAgent.AI.OAuth.OpenAICodex.deviceCodeLoginMethod)
+            signal := some { isAborted := abortedRef.get }
+          }
+        let _ ← LeanAgent.AI.OAuth.OpenAICodex.loginOpenAICodexWith runtime callbacks
+        pure false
+      catch err =>
+        assertTrue (err.toString.contains LeanAgent.AI.OAuth.cancelMessage)
+          "expected OpenAI Codex device-code login cancellation message"
+        pure true
+    assertTrue failed "expected OpenAI Codex device-code login to honor abort signal"
+    match ← seenDeviceCode.get with
+    | some info =>
+        assertTrue (info.userCode == "ABCD-1234")
+          "expected OpenAI Codex aborting device-code login to still surface device code"
+    | none => fail "expected OpenAI Codex aborting device-code login to report device code"
+
+def testGitHubCopilotOAuthRefreshFetchesAvailableModels : IO Unit := do
+  let port := 18114
+  withHttpServer port do
+    let credential ← LeanAgent.AI.OAuth.GitHubCopilot.refreshGitHubCopilotTokenWith
+      (localGitHubCopilotRuntime port)
+      "ghu_refresh_token"
+    assertTrue
+      (credential.access == "tid=test;exp=9999999999;proxy-ep=proxy.individual.githubcopilot.com;")
+      "expected refreshed Copilot access token"
+    assertTrue (credential.refresh == "ghu_refresh_token") "expected Copilot refresh token preservation"
+    match LeanAgent.AI.OAuth.GitHubCopilot.extraStringArray? credential "availableModelIds" with
+    | some ids => assertTrue (ids == #["gpt-4.1"]) "expected filtered selectable Copilot models"
+    | none => fail "expected available Copilot model ids"
+
+def testGitHubCopilotOAuthLoginReportsDeviceCode : IO Unit := do
+  let port := 18115
+  withHttpServer port do
+    let seenDeviceCode ← IO.mkRef (none : Option LeanAgent.AI.OAuth.OAuthDeviceCodeInfo)
+    let callbacks : LeanAgent.AI.OAuth.OAuthLoginCallbacks :=
+      { onAuth := fun _ => pure ()
+        onDeviceCode := fun info => seenDeviceCode.set (some info)
+        onPrompt := fun _ => pure ""
+        onSelect := fun _ => pure none
+      }
+    let credential ← LeanAgent.AI.OAuth.GitHubCopilot.loginGitHubCopilotWith
+      (localGitHubCopilotRuntime port)
+      callbacks
+    match ← seenDeviceCode.get with
+    | some info =>
+        assertTrue (info.userCode == "ABCD-EFGH") "expected Copilot device user code"
+        assertTrue (info.verificationUri == "https://github.com/login/device")
+          "expected normalized Copilot verification URI"
+        assertTrue (info.intervalSeconds == some 1) "expected device polling interval"
+        assertTrue (info.expiresInSeconds == some 900) "expected device code expiration"
+    | none => fail "expected device code callback"
+    assertTrue
+      (credential.access == "tid=test;exp=9999999999;proxy-ep=proxy.individual.githubcopilot.com;")
+      "expected login to exchange Copilot access token"
+    assertTrue (credential.refresh == "ghu_refresh_token") "expected login to keep GitHub refresh token"
+    match LeanAgent.AI.OAuth.GitHubCopilot.extraStringArray? credential "availableModelIds" with
+    | some ids => assertTrue (ids == #["gpt-4.1"]) "expected login to attach available Copilot models"
+    | none => fail "expected login available Copilot model ids"
+
+def testGitHubCopilotOAuthLoginRespectsAbortSignal : IO Unit := do
+  let port := 18127
+  withHttpServer port do
+    let seenDeviceCode ← IO.mkRef (none : Option LeanAgent.AI.OAuth.OAuthDeviceCodeInfo)
+    let abortedRef ← IO.mkRef false
+    let baseRuntime := localGitHubCopilotRuntime port
+    let runtime :=
+      { baseRuntime with
+        request := fun config => do
+          if config.url.endsWith "/copilot/access-token" then
+            pure { status := 200, headers := #[], body := "{\"error\":\"authorization_pending\"}" }
+          else
+            baseRuntime.request config
+        sleepMs := fun _ => abortedRef.set true
+      }
+    let failed ←
+      try
+        let callbacks : LeanAgent.AI.OAuth.OAuthLoginCallbacks :=
+          { onAuth := fun _ => pure ()
+            onDeviceCode := fun info => seenDeviceCode.set (some info)
+            onPrompt := fun _ => pure ""
+            onSelect := fun _ => pure none
+            signal := some { isAborted := abortedRef.get }
+          }
+        let _ ← LeanAgent.AI.OAuth.GitHubCopilot.loginGitHubCopilotWith runtime callbacks
+        pure false
+      catch err =>
+        assertTrue (err.toString.contains LeanAgent.AI.OAuth.cancelMessage)
+          "expected GitHub Copilot device-code login cancellation message"
+        pure true
+    assertTrue failed "expected GitHub Copilot login to honor abort signal"
+    match ← seenDeviceCode.get with
+    | some info =>
+        assertTrue (info.userCode == "ABCD-EFGH")
+          "expected GitHub Copilot aborting login to still surface device code"
+    | none => fail "expected GitHub Copilot aborting login to report device code"
+
+def testGitHubCopilotOAuthRejectsUntrustedVerificationUri : IO Unit := do
+  let port := 18116
+  withHttpServer port do
+    let failed ←
+      try
+        let callbacks : LeanAgent.AI.OAuth.OAuthLoginCallbacks :=
+          { onAuth := fun _ => pure ()
+            onDeviceCode := fun _ => fail "unexpected device code callback"
+            onPrompt := fun _ => pure ""
+            onSelect := fun _ => pure none
+          }
+        let _ ← LeanAgent.AI.OAuth.GitHubCopilot.loginGitHubCopilotWith
+          (localGitHubCopilotRuntime port "/copilot/device-code-invalid-uri")
+          callbacks
+        pure false
+      catch err =>
+        assertTrue (err.toString.contains "Untrusted verification_uri")
+          "expected invalid verification URI rejection"
+        pure true
+    assertTrue failed "expected invalid verification URI to fail"
+
+def testGitHubCopilotOAuthNormalizesVerificationUri : IO Unit := do
+  let port := 18117
+  withHttpServer port do
+    let seenDeviceCode ← IO.mkRef (none : Option LeanAgent.AI.OAuth.OAuthDeviceCodeInfo)
+    let callbacks : LeanAgent.AI.OAuth.OAuthLoginCallbacks :=
+      { onAuth := fun _ => pure ()
+        onDeviceCode := fun info => seenDeviceCode.set (some info)
+        onPrompt := fun _ => pure ""
+        onSelect := fun _ => pure none
+      }
+    let _ ← LeanAgent.AI.OAuth.GitHubCopilot.loginGitHubCopilotWith
+      (localGitHubCopilotRuntime port "/copilot/device-code-escaped-uri")
+      callbacks
+    match ← seenDeviceCode.get with
+    | some info =>
+        assertTrue (info.verificationUri == "https://github.com/login/%1B]8;;evil")
+          "expected escaped verification URI normalization"
+    | none => fail "expected normalized device code callback"
+
+def testGitHubCopilotOAuthLoginEnablesKnownModels : IO Unit := do
+  assertTrue
+    (LeanAgent.AI.OAuth.GitHubCopilot.defaultRuntime.knownModelIds ==
+      LeanAgent.Models.githubCopilotModels.map (·.id))
+    "expected default Copilot runtime known models to come from checked-in catalog"
+  let port := 18118
+  withHttpServer port do
+    let seenPolicyUrls ← IO.mkRef (#[] : Array String)
+    let progressMessages ← IO.mkRef (#[] : Array String)
+    let callbacks : LeanAgent.AI.OAuth.OAuthLoginCallbacks :=
+      { onAuth := fun _ => pure ()
+        onDeviceCode := fun _ => pure ()
+        onPrompt := fun _ => pure ""
+        onProgress := some fun message =>
+          progressMessages.modify (·.push message)
+        onSelect := fun _ => pure none
+      }
+    let _ ← LeanAgent.AI.OAuth.GitHubCopilot.loginGitHubCopilotWith
+      (localGitHubCopilotRuntime
+        port
+        "/copilot/device-code"
+        #["gpt-4.1", "claude-opus-4.7"]
+        (some fun config => do
+          if config.url.endsWith "/policy" then
+            seenPolicyUrls.modify (·.push config.url)
+          else
+            pure ()))
+      callbacks
+    let policyUrls ← seenPolicyUrls.get
+    assertTrue (policyUrls.size == 2) "expected Copilot login to enable configured known models"
+    assertTrue (policyUrls.any (·.endsWith "/models/gpt-4.1/policy"))
+      "expected Copilot login to enable GPT-4.1 policy"
+    assertTrue (policyUrls.any (·.endsWith "/models/claude-opus-4.7/policy"))
+      "expected Copilot login to enable Claude Opus 4.7 policy"
+    let progress ← progressMessages.get
+    assertTrue (progress.contains "Enabling models...")
+      "expected Copilot login progress banner before model enablement"
+    assertTrue (progress.any (·.contains "Enabled GitHub Copilot model gpt-4.1: true"))
+      "expected Copilot login progress for GPT-4.1 enablement"
+    assertTrue (progress.any (·.contains "Enabled GitHub Copilot model claude-opus-4.7: true"))
+      "expected Copilot login progress for Claude Opus 4.7 enablement"
+
+def testAuthOAuthBridgeAnthropicBrowserLogin : IO Unit := do
+  let port := 18128
+  withHttpServer port do
+    let seenAuth ← IO.mkRef (none : Option (String × Option String))
+    let seenManualPrompt ← IO.mkRef false
+    let sawManualSignal ← IO.mkRef false
+    let progressMessages ← IO.mkRef (#[] : Array String)
+    let runtime := localAnthropicRuntime port
+    let credential ←
+      LeanAgent.AI.Auth.OAuthBridge.loginWithOAuthProvider
+        (LeanAgent.AI.OAuth.Anthropic.oauthProviderWith runtime)
+        { prompt := fun prompt =>
+            match prompt with
+            | .manualCode message placeholder signal => do
+                seenManualPrompt.set
+                  (message == "Complete login in your browser, or paste the authorization code / redirect URL here:" &&
+                    placeholder == some runtime.redirectUri)
+                sawManualSignal.set signal.isSome
+                pure
+                  s!"{runtime.redirectUri}?code=manual-anthropic-code&state=anthropic-verifier"
+            | _ => throw (IO.userError "expected Anthropic auth bridge manual-code prompt")
+          notify := fun event =>
+            match event with
+            | .authUrl url instructions =>
+                seenAuth.set (some (url, instructions))
+            | .progress message =>
+                progressMessages.modify (·.push message)
+            | .deviceCode _ _ _ _ =>
+                fail "unexpected device-code event for Anthropic browser login"
+          signal := some { isAborted := pure false }
+        }
+    assertTrue (credential.access == "sk-ant-oat-access-token")
+      "expected Anthropic auth bridge browser login access token"
+    assertTrue (credential.refresh == "anthropic-browser-refresh")
+      "expected Anthropic auth bridge browser login refresh token"
+    match ← seenAuth.get with
+    | some (url, instructions) =>
+        assertTrue (url.contains "response_type=code")
+          "expected Anthropic auth bridge auth URL"
+        assertTrue (url.contains "state=anthropic-verifier")
+          "expected Anthropic auth bridge state"
+        assertTrue
+          (instructions ==
+            some "Complete login in your browser. If the browser is on another machine, paste the final redirect URL here.")
+          "expected Anthropic auth bridge instructions"
+    | none => fail "expected Anthropic auth bridge auth-url notification"
+    assertTrue (← seenManualPrompt.get)
+      "expected Anthropic auth bridge to surface a manual-code prompt"
+    assertTrue (← sawManualSignal.get)
+      "expected Anthropic auth bridge to preserve manual-code abort signal"
+    let progress ← progressMessages.get
+    assertTrue (progress == #["Exchanging authorization code for tokens..."])
+      "expected Anthropic auth bridge progress notification"
+
+def testAuthOAuthBridgeOpenAICodexDeviceCodeLogin : IO Unit := do
+  let port := 18129
+  withHttpServer port do
+    let seenDeviceCode ← IO.mkRef (none : Option (String × String × Option Nat × Option Nat))
+    let sawSelectSignal ← IO.mkRef false
+    let runtime := localOpenAICodexRuntime port
+    let credential ←
+      LeanAgent.AI.Auth.OAuthBridge.loginWithOAuthProvider
+        (LeanAgent.AI.OAuth.OpenAICodex.oauthProviderWith runtime)
+        { prompt := fun prompt =>
+            match prompt with
+            | .select message options signal => do
+                sawSelectSignal.set signal.isSome
+                assertTrue (message == "Select OpenAI Codex login method:")
+                  "expected OpenAI Codex auth bridge select prompt"
+                assertTrue
+                  (options.map (·.id) ==
+                    #[LeanAgent.AI.OAuth.OpenAICodex.browserLoginMethod,
+                      LeanAgent.AI.OAuth.OpenAICodex.deviceCodeLoginMethod])
+                  "expected OpenAI Codex auth bridge login options"
+                pure LeanAgent.AI.OAuth.OpenAICodex.deviceCodeLoginMethod
+            | _ => throw (IO.userError "expected OpenAI Codex auth bridge select prompt")
+          notify := fun event =>
+            match event with
+            | .deviceCode userCode verificationUri intervalSeconds expiresInSeconds =>
+                seenDeviceCode.set (some (userCode, verificationUri, intervalSeconds, expiresInSeconds))
+            | .progress _ => pure ()
+            | .authUrl _ _ =>
+                fail "unexpected auth-url event for OpenAI Codex device-code login"
+          signal := some { isAborted := pure false }
+        }
+    assertTrue (credential.access == fakeOpenAICodexJwt)
+      "expected OpenAI Codex auth bridge device-code access token"
+    assertTrue (credential.refresh == "codex-device-refresh")
+      "expected OpenAI Codex auth bridge device-code refresh token"
+    match ← seenDeviceCode.get with
+    | some (userCode, verificationUri, intervalSeconds, expiresInSeconds) =>
+        assertTrue (userCode == "ABCD-1234")
+          "expected OpenAI Codex auth bridge device user code"
+        assertTrue (verificationUri == s!"http://127.0.0.1:{port}/codex/device")
+          "expected OpenAI Codex auth bridge verification URI"
+        assertTrue (intervalSeconds == some 1)
+          "expected OpenAI Codex auth bridge device polling interval"
+        assertTrue (expiresInSeconds == some (15 * 60))
+          "expected OpenAI Codex auth bridge device-code expiration"
+    | none => fail "expected OpenAI Codex auth bridge device-code notification"
+    assertTrue (← sawSelectSignal.get)
+      "expected OpenAI Codex auth bridge to forward the login abort signal to select prompts"
+
+def testAuthOAuthBridgeGitHubCopilotLogin : IO Unit := do
+  let port := 18130
+  withHttpServer port do
+    let seenDeviceCode ← IO.mkRef (none : Option (String × String × Option Nat × Option Nat))
+    let sawTextPrompt ← IO.mkRef false
+    let sawPromptSignal ← IO.mkRef false
+    let runtime := localGitHubCopilotRuntime port
+    let credential ←
+      LeanAgent.AI.Auth.OAuthBridge.loginWithOAuthProvider
+        (LeanAgent.AI.OAuth.GitHubCopilot.oauthProviderWith runtime)
+        { prompt := fun prompt =>
+            match prompt with
+            | .text message placeholder signal => do
+                sawTextPrompt.set
+                  (message == "GitHub Enterprise URL/domain (blank for github.com)" &&
+                    placeholder == some "company.ghe.com")
+                sawPromptSignal.set signal.isSome
+                pure ""
+            | _ => throw (IO.userError "expected GitHub Copilot auth bridge text prompt")
+          notify := fun event =>
+            match event with
+            | .deviceCode userCode verificationUri intervalSeconds expiresInSeconds =>
+                seenDeviceCode.set (some (userCode, verificationUri, intervalSeconds, expiresInSeconds))
+            | .progress _ => pure ()
+            | .authUrl _ _ =>
+                fail "unexpected auth-url event for GitHub Copilot login"
+          signal := some { isAborted := pure false }
+        }
+    assertTrue
+      (credential.access == "tid=test;exp=9999999999;proxy-ep=proxy.individual.githubcopilot.com;")
+      "expected GitHub Copilot auth bridge access token"
+    assertTrue (credential.refresh == "ghu_refresh_token")
+      "expected GitHub Copilot auth bridge refresh token"
+    match ← seenDeviceCode.get with
+    | some (userCode, verificationUri, intervalSeconds, expiresInSeconds) =>
+        assertTrue (userCode == "ABCD-EFGH")
+          "expected GitHub Copilot auth bridge device user code"
+        assertTrue (verificationUri == "https://github.com/login/device")
+          "expected GitHub Copilot auth bridge verification URI"
+        assertTrue (intervalSeconds == some 1)
+          "expected GitHub Copilot auth bridge device polling interval"
+        assertTrue (expiresInSeconds == some 900)
+          "expected GitHub Copilot auth bridge device-code expiration"
+    | none => fail "expected GitHub Copilot auth bridge device-code notification"
+    assertTrue (← sawTextPrompt.get)
+      "expected GitHub Copilot auth bridge to surface a text prompt"
+    assertTrue (← sawPromptSignal.get)
+      "expected GitHub Copilot auth bridge to forward the login abort signal to text prompts"
 
 def testHttpClientResponseLimit : IO Unit := do
   let port := 18081
@@ -7982,7 +10093,7 @@ def testOpenAICompatibleStreamsUsesStreamingRuntime : IO Unit := do
                 timestamp := 1
               }]
       }
-    let stream ← LeanAgent.Models.openAICompatibleStreams.streamSimple
+    let stream ← LeanAgent.AI.Providers.Streams.openAICompatibleStreams.streamSimple
       model
       context
       { apiKey := some "test-key" }
@@ -8002,7 +10113,7 @@ def testOpenAICompatibleStreamsApplyModelCost : IO Unit := do
       { systemPrompt := some "system"
         messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
       }
-    let stream ← LeanAgent.Models.openAICompatibleStreams.streamSimple
+    let stream ← LeanAgent.AI.Providers.Streams.openAICompatibleStreams.streamSimple
       model
       context
       { apiKey := some "test-key" }
@@ -8032,7 +10143,7 @@ def testOpenAICompatibleStreamsClampMaxTokens : IO Unit := do
       { systemPrompt := some "abcd"
         messages := #[.user { content := #[LeanAgent.AI.text "abcd"], timestamp := 1 }]
       }
-    let stream ← LeanAgent.Models.openAICompatibleStreams.streamSimple
+    let stream ← LeanAgent.AI.Providers.Streams.openAICompatibleStreams.streamSimple
       model
       context
       { apiKey := some "test-key" }
@@ -8057,7 +10168,7 @@ def testCloudflareAIGatewayOpenAICompatibleHeaderAuthLocal : IO Unit := do
         name := some "Cloudflare AI Gateway"
         auth := { apiKey := some LeanAgent.AI.Providers.CloudflareAuth.cloudflareAIGatewayAuth }
         models := #[model]
-        apis := #[{ api := "openai-completions", streams := LeanAgent.Models.openAICompatibleStreams }]
+        apis := #[{ api := "openai-completions", streams := LeanAgent.AI.Providers.Streams.openAICompatibleStreams }]
       }
     collection.setProvider provider
     let message ← collection.completeSimple
@@ -8066,6 +10177,31 @@ def testCloudflareAIGatewayOpenAICompatibleHeaderAuthLocal : IO Unit := do
     assertTrue
       (LeanAgent.AI.contentPlainText message.content == "Bearer cf-env-key||gpt-4o-mini")
       "expected Cloudflare AI Gateway header-only auth through OpenAI-compatible runtime"
+
+def testCompatBuiltinDispatchUsesCloudflareGatewayAuth : IO Unit := do
+  let port := 18096
+  withHttpServer port do
+    LeanAgent.AI.Compat.resetApiProviders
+    let model : LeanAgent.Models.ModelInfo :=
+      { LeanAgent.AI.Providers.CloudflareAIGateway.workersAIKimiK26 with
+        baseUrl :=
+          s!"http://127.0.0.1:{port}/cloudflare-openai/" ++
+            "{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}"
+      }
+    let message ← LeanAgent.AI.Compat.complete
+      model
+      { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }] }
+      { env :=
+          #[ ("CLOUDFLARE_API_KEY", "cf-env-key")
+           , ("CLOUDFLARE_ACCOUNT_ID", "acct-env")
+           , ("CLOUDFLARE_GATEWAY_ID", "gateway-env")
+           ]
+      }
+    assertTrue
+      (LeanAgent.AI.contentPlainText message.content ==
+        "Bearer cf-env-key||workers-ai/@cf/moonshotai/kimi-k2.6")
+      "expected compat builtin dispatch to reuse Cloudflare AI Gateway auth path"
+    LeanAgent.AI.Compat.resetApiProviders
 
 def testOpenRouterImagesRequestPayload : IO Unit := do
   let model :=
@@ -8194,7 +10330,7 @@ def testOpenAIResponsesDispatchesThroughModelsCollection : IO Unit := do
         maxTokens := 4096
         reasoning := true
       }
-    let provider ← LeanAgent.Models.createCatalogProvider
+    let provider ← LeanAgent.AI.Providers.Catalog.createCatalogProvider
       { id := providerId
         name := "Responses Test"
         baseUrl := model.baseUrl
@@ -8540,6 +10676,77 @@ def testCompatOpenAIResponsesTypedLegacyAliasLocal : IO Unit := do
     assertTrue (stream.result.usage.cost.output == 2.0)
       "expected compat OpenAI Responses typed alias flex output cost multiplier"
 
+def testCompatOpenAIResponsesTypedLegacyAliasCompleteLocal : IO Unit := do
+  let port := 18102
+  withHttpServer port do
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := "gpt-5.4"
+        name := "GPT 5.4"
+        provider := LeanAgent.Models.openAIProviderId
+        api := "openai-responses"
+        baseUrl := s!"http://127.0.0.1:{port}/responses-stream"
+        cost := { input := 1000000.0, output := 2000000.0 }
+        contextWindow := 100000
+        maxTokens := 4096
+      }
+    let message ← LeanAgent.AI.Compat.Aliases.completeOpenAIResponses
+      model
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+      { apiKey := some "test-key"
+        serviceTier := some "flex"
+      }
+    assertTrue (LeanAgent.AI.contentPlainText message.content == "streamed")
+      "expected compat OpenAI Responses typed complete alias content"
+    assertTrue (message.usage.cost.input == 2.0)
+      "expected compat OpenAI Responses typed complete alias flex input cost multiplier"
+    assertTrue (message.usage.cost.output == 2.0)
+      "expected compat OpenAI Responses typed complete alias flex output cost multiplier"
+
+def testCompatOpenAIResponsesEarlyEofReturnsErrorStream : IO Unit := do
+  let port := 18112
+  withHttpServer port do
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := "gpt-5.4"
+        name := "GPT 5.4"
+        provider := LeanAgent.Models.openAIProviderId
+        api := "openai-responses"
+        baseUrl := s!"http://127.0.0.1:{port}/responses-stream-early-eof"
+        contextWindow := 100000
+        maxTokens := 4096
+        reasoning := true
+      }
+    let stream ← LeanAgent.AI.Compat.streamSimple
+      model
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+      { apiKey := some "test-key" }
+    assertTrue stream.isComplete "expected compat early EOF error stream to complete"
+    assertTrue (stream.result.stopReason == .error) "expected early EOF compat stop reason"
+    match stream.result.errorMessage with
+    | some message =>
+        assertTrue
+          (message.contains "OpenAI Responses stream ended before a terminal response event")
+          "expected early EOF compat error message"
+    | none => fail "expected compat early EOF error message"
+    match stream.result.diagnostics[0]? with
+    | some diagnostic =>
+        assertTrue (diagnostic.type == "provider_error") "expected provider_error diagnostic"
+        match diagnostic.error with
+        | some err =>
+            assertTrue
+              (err.message.contains "OpenAI Responses stream ended before a terminal response event")
+              "expected early EOF diagnostic detail"
+        | none => fail "expected early EOF diagnostic error payload"
+    | none => fail "expected early EOF diagnostic entry"
+    assertTrue
+      (match stream.events.back? with
+       | some (.error .error _) => true
+       | _ => false)
+      "expected compat early EOF final error event"
+
 def testAzureOpenAIResponsesStreamWithOptionsLocal : IO Unit := do
   let port := 18094
   withHttpServer port do
@@ -8678,6 +10885,74 @@ def testCompatAnthropicTypedLegacyAliasLocal : IO Unit := do
         "claude-sonnet-4-5|True|anthropic-key|enabled|2048|omitted|any|trace-anthropic")
       "expected compat Anthropic typed alias to preserve thinking and tool choice options"
 
+def testCompatAnthropicBuiltinDispatch : IO Unit := do
+  let port := 18094
+  withHttpServer port do
+    LeanAgent.AI.Compat.resetApiProviders
+    match ← LeanAgent.AI.Compat.getApiProvider? LeanAgent.AI.Api.AnthropicMessages.api with
+    | some provider =>
+        assertTrue (provider.api == LeanAgent.AI.Api.AnthropicMessages.api)
+          "expected compat Anthropic builtin provider registration"
+    | none => fail "expected compat Anthropic builtin provider"
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := LeanAgent.Models.anthropicDefaultModel
+        name := "Claude Sonnet"
+        provider := LeanAgent.Models.anthropicProviderId
+        api := LeanAgent.AI.Api.AnthropicMessages.api
+        baseUrl := s!"http://127.0.0.1:{port}/anthropic-typed/v1"
+        contextWindow := 200000
+        maxTokens := 64000
+        reasoning := true
+        input := #["text", "image"]
+      }
+    let stream ← LeanAgent.AI.Compat.Aliases.streamSimpleAnthropic
+      model
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+      { apiKey := some "anthropic-key"
+        headers := #[("X-Trace", some "trace-anthropic")]
+      }
+    assertTrue stream.isComplete "expected compat Anthropic built-in stream"
+    assertTrue (stream.result.responseId == some "msg_anthropic_typed_http")
+      "expected compat Anthropic built-in response id"
+    assertTrue
+      (LeanAgent.AI.contentPlainText stream.result.content ==
+        "claude-sonnet-4-5|True|anthropic-key|disabled||||trace-anthropic")
+      "expected compat Anthropic built-in dispatch"
+    LeanAgent.AI.Compat.resetApiProviders
+
+def testCompatAnthropicCompleteSimpleAliasLocal : IO Unit := do
+  let port := 18094
+  withHttpServer port do
+    LeanAgent.AI.Compat.resetApiProviders
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := LeanAgent.Models.anthropicDefaultModel
+        name := "Claude Sonnet"
+        provider := LeanAgent.Models.anthropicProviderId
+        api := LeanAgent.AI.Api.AnthropicMessages.api
+        baseUrl := s!"http://127.0.0.1:{port}/anthropic-typed/v1"
+        contextWindow := 200000
+        maxTokens := 64000
+        reasoning := true
+        input := #["text", "image"]
+      }
+    let message ← LeanAgent.AI.Compat.Aliases.completeSimpleAnthropic
+      model
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+      { apiKey := some "anthropic-key"
+        headers := #[("X-Trace", some "trace-anthropic")]
+      }
+    assertTrue (message.responseId == some "msg_anthropic_typed_http")
+      "expected compat Anthropic simple complete alias response id"
+    assertTrue
+      (LeanAgent.AI.contentPlainText message.content ==
+        "claude-sonnet-4-5|True|anthropic-key|disabled||||trace-anthropic")
+      "expected compat Anthropic simple complete alias dispatch"
+    LeanAgent.AI.Compat.resetApiProviders
+
 def testGoogleGenerativeAIStreamWithOptionsLocal : IO Unit := do
   let port := 18098
   withHttpServer port do
@@ -8753,6 +11028,31 @@ def testCompatGoogleTypedLegacyAliasLocal : IO Unit := do
       "expected compat Google typed alias to preserve thinking and tool choice options"
     assertTrue (stream.result.usage.reasoning == some 3) "expected Google typed thinking token usage"
 
+def testGoogleVertexResolvedRequestHeadersWithAuthorizedUserAdc : IO Unit := do
+  let port := 18110
+  withHttpServer port do
+    IO.FS.withTempDir fun root => do
+      let credentialsPath := root / "google-authorized-user.json"
+      writeGoogleVertexAuthorizedUserCredentials
+        credentialsPath
+        s!"http://127.0.0.1:{port}/google-oauth-authorized-user"
+      let headers ← LeanAgent.AI.Api.GoogleVertex.resolvedRequestHeaders
+        { apiKey := LeanAgent.AI.Api.GoogleVertex.vertexCredentialsMarker
+          timeoutSeconds := 5
+          connectTimeoutSeconds := 5
+          noProxy := some "*"
+          userAgent := "lean-agent-test/0.1.0"
+        }
+        { env := #[("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath.toString)]
+          headers := #[("X-Trace", some "trace-vertex")]
+        }
+      assertTrue
+        (headerValueCaseInsensitive? headers "authorization" == some "Bearer adc-authorized-user-token")
+        "expected authorized-user ADC bearer token"
+      assertTrue
+        (headerValueCaseInsensitive? headers "x-trace" == some "trace-vertex")
+        "expected ADC-resolved headers to keep caller headers"
+
 def testGoogleVertexStreamWithOptionsLocal : IO Unit := do
   let port := 18099
   withHttpServer port do
@@ -8788,6 +11088,42 @@ def testGoogleVertexStreamWithOptionsLocal : IO Unit := do
         | .textDelta _ "hello|Bearer" _ => true
         | _ => false)
       "expected Vertex local text delta"
+
+def testGoogleVertexStreamWithServiceAccountAdcLocal : IO Unit := do
+  let port := 18111
+  withHttpServer port do
+    IO.FS.withTempDir fun root => do
+      let credentialsPath := root / "google-service-account.json"
+      writeGoogleVertexServiceAccountCredentials
+        credentialsPath
+        s!"http://127.0.0.1:{port}/google-oauth-service-account"
+      let stream ← LeanAgent.AI.Api.GoogleVertex.completeStreamWithOptions
+        { apiKey := LeanAgent.AI.Api.GoogleVertex.vertexCredentialsMarker
+          baseUrl := s!"http://127.0.0.1:{port}/vertex"
+          timeoutSeconds := 5
+          connectTimeoutSeconds := 5
+          noProxy := some "*"
+          userAgent := "lean-agent-test/0.1.0"
+        }
+        googleVertexModelRef
+        #["text", "image"]
+        true
+        { systemPrompt := some "system"
+          messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+        }
+        { project := some "project-1"
+          location := some "us-central1"
+          maxTokens := some 64
+          env := #[("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath.toString)]
+          headers := #[("X-Trace", some "trace-vertex")]
+        }
+      assertTrue stream.isComplete "expected completed Vertex ADC service-account stream"
+      assertTrue (stream.result.responseId == some "resp_vertex_http")
+        "expected Vertex ADC service-account response id"
+      assertTrue
+        (LeanAgent.AI.contentPlainText stream.result.content ==
+          "hello|Bearer adc-service-token||trace-vertex")
+        "expected Vertex service-account ADC bearer auth"
 
 def testCompatGoogleVertexTypedLegacyAliasLocal : IO Unit := do
   let port := 18107
@@ -9003,6 +11339,7 @@ def main : IO UInt32 := do
     testGoogleGenerativeAIParsesStreamingEvents
     testGoogleVertexUrlsAndHeaders
     testGoogleVertexAuthResolution
+    testGoogleVertexResolvedRequestHeadersWithAuthorizedUserAdc
     testMistralConversationsRequestPayloadAndHeaders
     testMistralToolChoiceOptionVariants
     testMistralReasoningAndPromptCacheOptions
@@ -9010,6 +11347,8 @@ def main : IO UInt32 := do
     testMistralConversationsParsesStreamingEvents
     testBedrockConverseRequestPayload
     testBedrockConverseHelpersAndTransportBoundary
+    testBedrockConverseGovCloudThinkingDisplayOmitted
+    testBedrockConversePreparedRequestSigV4
     testCompatBedrockTypedLegacyAliasBoundary
     testGitHubCopilotDynamicHeaders
     testOpenAIResponsesRequestPayload
@@ -9025,6 +11364,8 @@ def main : IO UInt32 := do
     testOpenAIResponsesParsesStreamingTextAndUsage
     testOpenAIResponsesParsesStreamingToolCall
     testOpenAIResponsesStreamingRequiresTerminalEvent
+    testOpenAIResponsesStreamingIncompleteTerminalEvent
+    testOpenAIResponsesStreamingFailedTerminalEvent
     testDiagnosticsExtractsProviderError
     testDiagnosticsFormatsThrownJsonValues
     testDiagnosticsProviderErrorObjectExtraction
@@ -9066,8 +11407,11 @@ def main : IO UInt32 := do
     testOpenAICompatibleProviderFamilyCatalog
     testDefaultModelsRegistersOpenAICompatibleFamily
     testOpenAICompatibleProviderFactoriesMatchCatalog
+    testBuiltinModelsGitHubCopilotOAuthFiltersModelList
+    testDefaultModelsGitHubCopilotOAuthFiltersModelList
     testLegacySelectionRejectsAnthropicProvider
     testAuthDefaultContextEnvAndExpandHomePath
+    testEnvApiKeyAuthLoginPromptsForSecret
     testModelsAuthEnvApiKeyResolution
     testModelsAuthStoredCredentialWins
     testFileCredentialStoreRoundTrip
@@ -9076,10 +11420,15 @@ def main : IO UInt32 := do
     testModelsAuthFileCredentialStore
     testModelsAuthOAuthValidCredential
     testModelsAuthOAuthExpiredCredentialRefreshes
+    testModelsAuthOAuthConcurrentRefreshesSerialize
     testModelsAuthOAuthRefreshFailureUsesModelsErrorOauth
     testModelsAuthOAuthCredentialOwnsProvider
     testLazyOAuthLoadsOnceAndDelegates
     testOAuthProviderRegistryCrud
+    testModelsCollectionAppliesRegisteredOAuthModelHook
+    testOAuthStandaloneModuleImportBootstrapsBuiltIns
+    testCompatStandaloneModuleImportIncludesLegacyAliases
+    testAIStandaloneModuleImportIncludesCoreSurface
     testOAuthRefreshTokenDispatch
     testOAuthGetOAuthApiKey
     testOAuthGetOAuthApiKeyErrors
@@ -9092,10 +11441,34 @@ def main : IO UInt32 := do
     testOAuthSuccessPageOmitsDetails
     testOAuthPKCEChallengeMatchesRfcVector
     testOAuthPKCEGenerateUsesBase64UrlVerifier
+    testAnthropicOAuthRegisterBuiltInProvider
+    testAnthropicOAuthRefreshExchangesToken
+    testAnthropicOAuthBrowserLoginUsesManualCode
+    testAnthropicOAuthBrowserLoginUsesLocalCallback
+    testAnthropicOAuthLocalCallbackAbortsManualCodePrompt
+    testAnthropicOAuthBrowserLoginRejectsStateMismatch
+    testOpenAICodexOAuthRegisterBuiltInProvider
+    testOpenAICodexOAuthRefreshExchangesToken
+    testOpenAICodexOAuthBrowserLoginUsesManualCode
+    testOpenAICodexOAuthBrowserLoginUsesLocalCallback
+    testOpenAICodexOAuthLocalCallbackAbortsManualCodePrompt
+    testOpenAICodexOAuthBrowserLoginRejectsStateMismatch
+    testOpenAICodexOAuthProviderDeviceCodeLogin
+    testOpenAICodexOAuthDeviceCodeStart404UsesHelpfulError
+    testOpenAICodexOAuthDeviceCodeLoginRespectsAbortSignal
     testGitHubCopilotOAuthDomainAndBaseUrlHelpers
     testGitHubCopilotOAuthParsesAvailableModels
     testGitHubCopilotOAuthModifiesModelsFromCredential
     testGitHubCopilotOAuthRegisterBuiltInProvider
+    testGitHubCopilotOAuthRefreshFetchesAvailableModels
+    testGitHubCopilotOAuthLoginReportsDeviceCode
+    testGitHubCopilotOAuthLoginRespectsAbortSignal
+    testGitHubCopilotOAuthRejectsUntrustedVerificationUri
+    testGitHubCopilotOAuthNormalizesVerificationUri
+    testGitHubCopilotOAuthLoginEnablesKnownModels
+    testAuthOAuthBridgeAnthropicBrowserLogin
+    testAuthOAuthBridgeOpenAICodexDeviceCodeLogin
+    testAuthOAuthBridgeGitHubCopilotLogin
     testGitHubCopilotHeadersInference
     testCatalogProviderHeadersApplyThroughAuth
     testCloudflareWorkersAIAuthResolution
@@ -9107,8 +11480,11 @@ def main : IO UInt32 := do
     testEnvApiKeysPrefersAnthropicOAuthToken
     testEnvApiKeysAmbientAuthMarkers
     testModelsCollectionDispatchesWithAuth
+    testModelsCollectionGenericStreamAndCompleteDispatchWithAuth
     testModelsCollectionAppliesCloudflareAIGatewayAuth
     testCompatApiRegistryDispatchesAndUnregisters
+    testCompatGenericStreamAndCompleteDispatch
+    testCompatBuiltinDispatchUsesCloudflareGatewayAuth
     testImagesApiRegistryDispatchesAndUnregisters
     testImagesApiRegistryMissingProviderReturnsError
     testCompatImageEntrypointsDispatchAndCatalog
@@ -9153,6 +11529,7 @@ def main : IO UInt32 := do
     testHttpEnvelopeParsing
     testHttpClientLocalPost
     testHttpClientCustomHeaders
+    testHttpClientGenericRequest
     testHttpClientResponseLimit
     testOpenAICompletionsRetriesTransientHttpFailure
     testOpenAICompletionsSendsCustomHeaders
@@ -9174,13 +11551,18 @@ def main : IO UInt32 := do
     testOpenAIResponsesSendsCopilotDynamicHeaders
     testOpenAIResponsesStreamWithOptionsLocal
     testCompatOpenAIResponsesTypedLegacyAliasLocal
+    testCompatOpenAIResponsesTypedLegacyAliasCompleteLocal
+    testCompatOpenAIResponsesEarlyEofReturnsErrorStream
     testAzureOpenAIResponsesStreamWithOptionsLocal
     testCompatAzureOpenAIResponsesTypedLegacyAliasLocal
     testAnthropicMessagesStreamWithOptionsLocal
+    testCompatAnthropicBuiltinDispatch
     testCompatAnthropicTypedLegacyAliasLocal
+    testCompatAnthropicCompleteSimpleAliasLocal
     testGoogleGenerativeAIStreamWithOptionsLocal
     testCompatGoogleTypedLegacyAliasLocal
     testGoogleVertexStreamWithOptionsLocal
+    testGoogleVertexStreamWithServiceAccountAdcLocal
     testCompatGoogleVertexTypedLegacyAliasLocal
     testMistralConversationsStreamWithOptionsLocal
     testCompatMistralTypedLegacyAliasLocal

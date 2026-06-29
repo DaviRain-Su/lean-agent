@@ -1,4 +1,5 @@
-import LeanAgent.AI.Compat
+import LeanAgent.AI.Compat.Core
+import LeanAgent.AI.Providers.Streams
 
 namespace LeanAgent.AI.Compat.Aliases
 
@@ -6,53 +7,107 @@ abbrev AliasStream :=
   LeanAgent.Models.ModelInfo → LeanAgent.AI.Context → LeanAgent.AI.SimpleStreamOptions →
     IO LeanAgent.AI.AssistantMessageEventStream
 
+abbrev AliasComplete :=
+  LeanAgent.Models.ModelInfo → LeanAgent.AI.Context → LeanAgent.AI.SimpleStreamOptions →
+    IO LeanAgent.AI.AssistantMessage
+
 abbrev MistralStream :=
   LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
     LeanAgent.AI.Api.MistralConversations.MistralOptions →
       IO LeanAgent.AI.AssistantMessageEventStream
+
+abbrev MistralComplete :=
+  LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
+    LeanAgent.AI.Api.MistralConversations.MistralOptions →
+      IO LeanAgent.AI.AssistantMessage
 
 abbrev OpenAIResponsesStream :=
   LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
     LeanAgent.AI.Api.OpenAIResponses.OpenAIResponsesOptions →
       IO LeanAgent.AI.AssistantMessageEventStream
 
+abbrev OpenAIResponsesComplete :=
+  LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
+    LeanAgent.AI.Api.OpenAIResponses.OpenAIResponsesOptions →
+      IO LeanAgent.AI.AssistantMessage
+
 abbrev AzureOpenAIResponsesStream :=
   LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
     LeanAgent.AI.Api.AzureOpenAIResponses.AzureOpenAIResponsesOptions →
       IO LeanAgent.AI.AssistantMessageEventStream
+
+abbrev AzureOpenAIResponsesComplete :=
+  LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
+    LeanAgent.AI.Api.AzureOpenAIResponses.AzureOpenAIResponsesOptions →
+      IO LeanAgent.AI.AssistantMessage
 
 abbrev OpenAICodexResponsesStream :=
   LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
     LeanAgent.AI.Api.OpenAICodexResponses.OpenAICodexResponsesOptions →
       IO LeanAgent.AI.AssistantMessageEventStream
 
+abbrev OpenAICodexResponsesComplete :=
+  LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
+    LeanAgent.AI.Api.OpenAICodexResponses.OpenAICodexResponsesOptions →
+      IO LeanAgent.AI.AssistantMessage
+
 abbrev OpenAICompletionsStream :=
   LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
     LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsOptions →
       IO LeanAgent.AI.AssistantMessageEventStream
+
+abbrev OpenAICompletionsComplete :=
+  LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
+    LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsOptions →
+      IO LeanAgent.AI.AssistantMessage
 
 abbrev AnthropicMessagesStream :=
   LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
     LeanAgent.AI.Api.AnthropicMessages.AnthropicMessagesOptions →
       IO LeanAgent.AI.AssistantMessageEventStream
 
+abbrev AnthropicMessagesComplete :=
+  LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
+    LeanAgent.AI.Api.AnthropicMessages.AnthropicMessagesOptions →
+      IO LeanAgent.AI.AssistantMessage
+
 abbrev GoogleGenerativeAIStream :=
   LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
     LeanAgent.AI.Api.GoogleGenerativeAI.GoogleGenerativeAIOptions →
       IO LeanAgent.AI.AssistantMessageEventStream
+
+abbrev GoogleGenerativeAIComplete :=
+  LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
+    LeanAgent.AI.Api.GoogleGenerativeAI.GoogleGenerativeAIOptions →
+      IO LeanAgent.AI.AssistantMessage
 
 abbrev GoogleVertexStream :=
   LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
     LeanAgent.AI.Api.GoogleVertex.GoogleVertexOptions →
       IO LeanAgent.AI.AssistantMessageEventStream
 
+abbrev GoogleVertexComplete :=
+  LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
+    LeanAgent.AI.Api.GoogleVertex.GoogleVertexOptions →
+      IO LeanAgent.AI.AssistantMessage
+
 abbrev BedrockConverseStream :=
   LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
     LeanAgent.AI.Api.BedrockConverseStream.BedrockOptions →
       IO LeanAgent.AI.AssistantMessageEventStream
 
+abbrev BedrockConverseComplete :=
+  LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
+    LeanAgent.AI.Api.BedrockConverseStream.BedrockOptions →
+      IO LeanAgent.AI.AssistantMessage
+
 def streamForApi (api : String) : AliasStream :=
   fun model context options => LeanAgent.AI.Compat.streamSimpleWithApi api model context options
+
+def completeForApi (api : String) : AliasComplete :=
+  fun model context options => do
+    let stream ← streamForApi api model context options
+    pure stream.result
 
 def withEnvApiKeyForAnthropicMessages
     (model : LeanAgent.Models.ModelInfo)
@@ -79,12 +134,12 @@ def streamAnthropicWithOptions : AnthropicMessagesStream :=
   fun model context options => do
     LeanAgent.AI.Compat.ensureApiMatches
       { api := LeanAgent.AI.Api.AnthropicMessages.api
-        streams := LeanAgent.Models.anthropicMessagesStreams
+        streams := LeanAgent.AI.Providers.Streams.anthropicMessagesStreams
       }
       model
     let options := withModelCompatForAnthropicMessages model options
     let options ← withEnvApiKeyForAnthropicMessages model options
-    let apiKey ← LeanAgent.Models.requireApiKeyOrHeaderAuth model.provider options.toSimpleStreamOptions
+    let apiKey ← LeanAgent.AI.Providers.Streams.requireApiKeyOrHeaderAuth model.provider options.toSimpleStreamOptions
     let config : LeanAgent.AI.Api.AnthropicMessages.AnthropicMessagesConfig :=
       { apiKey := apiKey
         baseUrl := model.baseUrl
@@ -109,11 +164,11 @@ def streamOpenAIResponsesWithOptions : OpenAIResponsesStream :=
   fun model context options => do
     LeanAgent.AI.Compat.ensureApiMatches
       { api := "openai-responses"
-        streams := LeanAgent.Models.openAIResponsesStreams
+        streams := LeanAgent.AI.Providers.Streams.openAIResponsesStreams
       }
       model
     let options ← withEnvApiKeyForOpenAIResponses model options
-    let apiKey ← LeanAgent.Models.requireApiKeyOrHeaderAuth model.provider options.toSimpleStreamOptions
+    let apiKey ← LeanAgent.AI.Providers.Streams.requireApiKeyOrHeaderAuth model.provider options.toSimpleStreamOptions
     let config : LeanAgent.AI.Api.OpenAIResponses.OpenAIResponsesConfig :=
       { apiKey := apiKey
         baseUrl := model.baseUrl
@@ -137,7 +192,7 @@ def streamAzureOpenAIResponsesWithOptions : AzureOpenAIResponsesStream :=
   fun model context options => do
     LeanAgent.AI.Compat.ensureApiMatches
       { api := "azure-openai-responses"
-        streams := LeanAgent.Models.azureOpenAIResponsesStreams
+        streams := LeanAgent.AI.Providers.Streams.azureOpenAIResponsesStreams
       }
       model
     let options ← withEnvApiKeyForAzureOpenAIResponses model options
@@ -165,7 +220,7 @@ def streamOpenAICodexResponsesWithOptions : OpenAICodexResponsesStream :=
   fun model context options => do
     LeanAgent.AI.Compat.ensureApiMatches
       { api := LeanAgent.AI.Api.OpenAICodexResponses.api
-        streams := LeanAgent.Models.openAICodexResponsesStreams
+        streams := LeanAgent.AI.Providers.Streams.openAICodexResponsesStreams
       }
       model
     let options ← withEnvApiKeyForOpenAICodexResponses model options
@@ -226,17 +281,17 @@ def streamOpenAICompletionsWithOptions : OpenAICompletionsStream :=
   fun model context options => do
     LeanAgent.AI.Compat.ensureApiMatches
       { api := "openai-completions"
-        streams := LeanAgent.Models.openAICompatibleStreams
+        streams := LeanAgent.AI.Providers.Streams.openAICompatibleStreams
       }
       model
     let options := withModelCompatForOpenAICompletions model options
     let options ← withEnvApiKeyForOpenAICompletions model options
-    let apiKey ← LeanAgent.Models.requireApiKeyOrHeaderAuth model.provider options.toSimpleStreamOptions
+    let apiKey ← LeanAgent.AI.Providers.Streams.requireApiKeyOrHeaderAuth model.provider options.toSimpleStreamOptions
     let config : LeanAgent.AI.Api.OpenAICompletions.OpenAICompatibleConfig :=
       { apiKey := apiKey
         baseUrl := model.baseUrl
       }
-    let request := LeanAgent.Models.contextToProviderRequest model context
+    let request := LeanAgent.AI.Providers.Streams.contextToProviderRequest model context
     let stream ← LeanAgent.AI.Api.OpenAICompletions.streamWithOptions
       config
       request
@@ -256,11 +311,11 @@ def streamMistralWithOptions : MistralStream :=
   fun model context options => do
     LeanAgent.AI.Compat.ensureApiMatches
       { api := LeanAgent.AI.Api.MistralConversations.api
-        streams := LeanAgent.Models.mistralConversationsStreams
+        streams := LeanAgent.AI.Providers.Streams.mistralConversationsStreams
       }
       model
     let options ← withEnvApiKeyForMistral model options
-    let apiKey ← LeanAgent.Models.requireApiKeyOrHeaderAuth model.provider options.toSimpleStreamOptions
+    let apiKey ← LeanAgent.AI.Providers.Streams.requireApiKeyOrHeaderAuth model.provider options.toSimpleStreamOptions
     let config : LeanAgent.AI.Api.MistralConversations.MistralConversationsConfig :=
       { apiKey := apiKey
         baseUrl := model.baseUrl
@@ -284,11 +339,11 @@ def streamGoogleWithOptions : GoogleGenerativeAIStream :=
   fun model context options => do
     LeanAgent.AI.Compat.ensureApiMatches
       { api := LeanAgent.AI.Api.GoogleGenerativeAI.api
-        streams := LeanAgent.Models.googleGenerativeAIStreams
+        streams := LeanAgent.AI.Providers.Streams.googleGenerativeAIStreams
       }
       model
     let options ← withEnvApiKeyForGoogleGenerativeAI model options
-    let apiKey ← LeanAgent.Models.requireApiKeyOrHeaderAuth model.provider options.toSimpleStreamOptions
+    let apiKey ← LeanAgent.AI.Providers.Streams.requireApiKeyOrHeaderAuth model.provider options.toSimpleStreamOptions
     let config : LeanAgent.AI.Api.GoogleGenerativeAI.GoogleGenerativeAIConfig :=
       { apiKey := apiKey
         baseUrl := model.baseUrl
@@ -313,7 +368,7 @@ def streamGoogleVertexWithOptions : GoogleVertexStream :=
   fun model context options => do
     LeanAgent.AI.Compat.ensureApiMatches
       { api := LeanAgent.AI.Api.GoogleVertex.api
-        streams := LeanAgent.Models.googleVertexStreams
+        streams := LeanAgent.AI.Providers.Streams.googleVertexStreams
       }
       model
     let options ← withEnvApiKeyForGoogleVertex model options
@@ -352,7 +407,7 @@ def streamBedrockConverseStreamWithOptions : BedrockConverseStream :=
   fun model context options => do
     LeanAgent.AI.Compat.ensureApiMatches
       { api := LeanAgent.AI.Api.BedrockConverseStream.api
-        streams := LeanAgent.Models.bedrockConverseStreamStreams
+        streams := LeanAgent.AI.Providers.Streams.bedrockConverseStreamStreams
       }
       model
     let options ← withEnvApiKeyForBedrockConverseStream model options
@@ -372,55 +427,127 @@ def streamBedrockConverseStreamWithOptions : BedrockConverseStream :=
 def streamAnthropic : AnthropicMessagesStream :=
   streamAnthropicWithOptions
 
+def completeAnthropic : AnthropicMessagesComplete :=
+  fun model context options => do
+    let stream ← streamAnthropic model context options
+    pure stream.result
+
 def streamSimpleAnthropic : AliasStream :=
   streamForApi "anthropic-messages"
+
+def completeSimpleAnthropic : AliasComplete :=
+  completeForApi "anthropic-messages"
 
 def streamBedrockConverseStream : BedrockConverseStream :=
   streamBedrockConverseStreamWithOptions
 
+def completeBedrockConverseStream : BedrockConverseComplete :=
+  fun model context options => do
+    let stream ← streamBedrockConverseStream model context options
+    pure stream.result
+
 def streamSimpleBedrockConverseStream : AliasStream :=
   streamForApi "bedrock-converse-stream"
+
+def completeSimpleBedrockConverseStream : AliasComplete :=
+  completeForApi "bedrock-converse-stream"
 
 def streamAzureOpenAIResponses : AzureOpenAIResponsesStream :=
   streamAzureOpenAIResponsesWithOptions
 
+def completeAzureOpenAIResponses : AzureOpenAIResponsesComplete :=
+  fun model context options => do
+    let stream ← streamAzureOpenAIResponses model context options
+    pure stream.result
+
 def streamSimpleAzureOpenAIResponses : AliasStream :=
   streamForApi "azure-openai-responses"
+
+def completeSimpleAzureOpenAIResponses : AliasComplete :=
+  completeForApi "azure-openai-responses"
 
 def streamGoogle : GoogleGenerativeAIStream :=
   streamGoogleWithOptions
 
+def completeGoogle : GoogleGenerativeAIComplete :=
+  fun model context options => do
+    let stream ← streamGoogle model context options
+    pure stream.result
+
 def streamSimpleGoogle : AliasStream :=
   streamForApi "google-generative-ai"
+
+def completeSimpleGoogle : AliasComplete :=
+  completeForApi "google-generative-ai"
 
 def streamGoogleVertex : GoogleVertexStream :=
   streamGoogleVertexWithOptions
 
+def completeGoogleVertex : GoogleVertexComplete :=
+  fun model context options => do
+    let stream ← streamGoogleVertex model context options
+    pure stream.result
+
 def streamSimpleGoogleVertex : AliasStream :=
   streamForApi "google-vertex"
+
+def completeSimpleGoogleVertex : AliasComplete :=
+  completeForApi "google-vertex"
 
 def streamMistral : MistralStream :=
   streamMistralWithOptions
 
+def completeMistral : MistralComplete :=
+  fun model context options => do
+    let stream ← streamMistral model context options
+    pure stream.result
+
 def streamSimpleMistral : AliasStream :=
   streamForApi "mistral-conversations"
+
+def completeSimpleMistral : AliasComplete :=
+  completeForApi "mistral-conversations"
 
 def streamOpenAICodexResponses : OpenAICodexResponsesStream :=
   streamOpenAICodexResponsesWithOptions
 
+def completeOpenAICodexResponses : OpenAICodexResponsesComplete :=
+  fun model context options => do
+    let stream ← streamOpenAICodexResponses model context options
+    pure stream.result
+
 def streamSimpleOpenAICodexResponses : AliasStream :=
   streamForApi "openai-codex-responses"
+
+def completeSimpleOpenAICodexResponses : AliasComplete :=
+  completeForApi "openai-codex-responses"
 
 def streamOpenAICompletions : OpenAICompletionsStream :=
   streamOpenAICompletionsWithOptions
 
+def completeOpenAICompletions : OpenAICompletionsComplete :=
+  fun model context options => do
+    let stream ← streamOpenAICompletions model context options
+    pure stream.result
+
 def streamSimpleOpenAICompletions : AliasStream :=
   streamForApi "openai-completions"
+
+def completeSimpleOpenAICompletions : AliasComplete :=
+  completeForApi "openai-completions"
 
 def streamOpenAIResponses : OpenAIResponsesStream :=
   streamOpenAIResponsesWithOptions
 
+def completeOpenAIResponses : OpenAIResponsesComplete :=
+  fun model context options => do
+    let stream ← streamOpenAIResponses model context options
+    pure stream.result
+
 def streamSimpleOpenAIResponses : AliasStream :=
   streamForApi "openai-responses"
+
+def completeSimpleOpenAIResponses : AliasComplete :=
+  completeForApi "openai-responses"
 
 end LeanAgent.AI.Compat.Aliases

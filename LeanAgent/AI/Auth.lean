@@ -1,6 +1,8 @@
 import Lean
 import LeanAgent.AI.Types
+import LeanAgent.AI.Util.Abort
 import LeanAgent.Json
+import Std.Sync.Mutex
 import Std.Time
 
 namespace LeanAgent.AI.Auth
@@ -12,6 +14,7 @@ structure ModelAuth where
   apiKey : Option String := none
   headers : ProviderHeaders := #[]
   baseUrl : Option String := none
+  allowedModelIds : Option (Array String) := none
 deriving BEq
 
 structure ApiKeyCredential where
@@ -113,6 +116,71 @@ structure AuthResult where
   source : Option String := none
 deriving BEq
 
+structure AuthSelectOption where
+  id : String
+  label : String
+  description : Option String := none
+deriving BEq
+
+inductive AuthPrompt where
+  | text
+      (message : String)
+      (placeholder : Option String := none)
+      (signal : Option LeanAgent.AI.Util.Abort.AbortSignal := none)
+  | secret
+      (message : String)
+      (placeholder : Option String := none)
+      (signal : Option LeanAgent.AI.Util.Abort.AbortSignal := none)
+  | select
+      (message : String)
+      (options : Array AuthSelectOption)
+      (signal : Option LeanAgent.AI.Util.Abort.AbortSignal := none)
+  | manualCode
+      (message : String)
+      (placeholder : Option String := none)
+      (signal : Option LeanAgent.AI.Util.Abort.AbortSignal := none)
+
+namespace AuthPrompt
+
+def message : AuthPrompt → String
+  | .text message _ _ => message
+  | .secret message _ _ => message
+  | .select message _ _ => message
+  | .manualCode message _ _ => message
+
+def placeholder? : AuthPrompt → Option String
+  | .text _ placeholder _ => placeholder
+  | .secret _ placeholder _ => placeholder
+  | .select _ _ _ => none
+  | .manualCode _ placeholder _ => placeholder
+
+def signal? : AuthPrompt → Option LeanAgent.AI.Util.Abort.AbortSignal
+  | .text _ _ signal => signal
+  | .secret _ _ signal => signal
+  | .select _ _ signal => signal
+  | .manualCode _ _ signal => signal
+
+def options : AuthPrompt → Array AuthSelectOption
+  | .select _ options _ => options
+  | _ => #[]
+
+end AuthPrompt
+
+inductive AuthEvent where
+  | authUrl (url : String) (instructions : Option String := none)
+  | deviceCode
+      (userCode : String)
+      (verificationUri : String)
+      (intervalSeconds : Option Nat := none)
+      (expiresInSeconds : Option Nat := none)
+  | progress (message : String)
+deriving BEq
+
+structure AuthLoginCallbacks where
+  prompt : AuthPrompt → IO String
+  notify : AuthEvent → IO Unit
+  signal : Option LeanAgent.AI.Util.Abort.AbortSignal := none
+
 structure CredentialStore where
   read : String → IO (Option Credential)
   modify : String → (Option Credential → IO (Option Credential)) → IO (Option Credential)
@@ -120,11 +188,12 @@ structure CredentialStore where
 
 structure ApiKeyAuth where
   name : String
+  login : Option (AuthLoginCallbacks → IO ApiKeyCredential) := none
   resolve : AuthContext → Option ApiKeyCredential → Option String → IO (Option AuthResult)
 
 structure OAuthAuth where
   name : String
-  login : Option (IO OAuthCredential) := none
+  login : AuthLoginCallbacks → IO OAuthCredential
   refresh : OAuthCredential → IO OAuthCredential
   toAuth : OAuthCredential → IO ModelAuth
 
@@ -143,11 +212,9 @@ def lazyOAuth (input : LazyOAuthOptions) : IO OAuthAuth := do
         pure oauth
   pure
     { name := input.name
-      login := some do
+      login := fun callbacks => do
         let oauth ← loadOnce
-        match oauth.login with
-        | some login => login
-        | none => throw (IO.userError s!"OAuth login is not available for {input.name}")
+        oauth.login callbacks
       refresh := fun credential => do
         let oauth ← loadOnce
         oauth.refresh credential
@@ -220,6 +287,9 @@ def resolveEnvApiKey (ctx : AuthContext) (envVars : Array String) : IO (Option (
 
 def envApiKeyAuth (name : String) (envVars : Array String) : ApiKeyAuth :=
   { name := name
+    login := some fun callbacks => do
+      let key ← callbacks.prompt (.secret s!"Enter {name}" none callbacks.signal)
+      pure { key := some key }
     resolve := fun ctx credential _modelBaseUrl => do
       match credential with
       | some credential =>
@@ -254,12 +324,12 @@ def oauthCredentialIsExpired (ctx : AuthContext) (credential : OAuthCredential) 
   let now ← ctx.nowMs
   pure (now >= credential.expires)
 
-def resolveStoredOAuth
+def refreshStoredOAuthCredential
     (ctx : AuthContext)
     (credentials : CredentialStore)
     (providerId : String)
     (oauth : OAuthAuth)
-    (stored : OAuthCredential) : IO (Option AuthResult) := do
+    (stored : OAuthCredential) : IO (Option OAuthCredential) := do
   let mut credential := stored
   if ← oauthCredentialIsExpired ctx credential then
     let post ←
@@ -277,7 +347,18 @@ def resolveStoredOAuth
     match post with
     | some (.oauth refreshed) => credential := refreshed
     | _ => return none
-  pure (some { auth := (← oauth.toAuth credential), source := some "OAuth" })
+  pure (some credential)
+
+def resolveStoredOAuth
+    (ctx : AuthContext)
+    (credentials : CredentialStore)
+    (providerId : String)
+    (oauth : OAuthAuth)
+    (stored : OAuthCredential) : IO (Option AuthResult) := do
+  match ← refreshStoredOAuthCredential ctx credentials providerId oauth stored with
+  | some credential =>
+      pure (some { auth := (← oauth.toAuth credential), source := some "OAuth" })
+  | none => pure none
 
 def readCredential (credentials : CredentialStore) (providerId : String) : IO (Option Credential) :=
   credentials.read providerId
@@ -319,28 +400,34 @@ def resolveProviderAuth
           | none => pure none
 
 def InMemoryCredentialStore.mk : IO CredentialStore := do
-  let credentials ← IO.mkRef (Array.empty : Array (String × Credential))
-  let readCredential (providerId : String) : IO (Option Credential) := do
-    let entries ← credentials.get
-    pure (entries.findSome? fun (id, credential) => if id == providerId then some credential else none)
-  let writeCredential (providerId : String) (credential : Credential) : IO Unit := do
-    credentials.modify fun entries =>
+  let credentials ← Std.Mutex.new (Array.empty : Array (String × Credential))
+  let readCredential (providerId : String) : IO (Option Credential) :=
+    credentials.atomically fun ref => do
+      let entries ← ref.get
+      pure (entries.findSome? fun (id, credential) => if id == providerId then some credential else none)
+  let writeCredentialLocked
+      (ref : IO.Ref (Array (String × Credential)))
+      (providerId : String)
+      (credential : Credential) : IO Unit := do
+    ref.modify fun entries =>
       let withoutProvider := entries.filter fun (id, _) => id != providerId
       withoutProvider.push (providerId, credential)
-  let deleteCredential (providerId : String) : IO Unit := do
-    credentials.modify fun entries => entries.filter fun (id, _) => id != providerId
   pure
     { read := readCredential
       modify := fun providerId fn => do
-        let current ← readCredential providerId
-        let next ← fn current
-        match next with
-        | some credential => writeCredential providerId credential
-        | none => pure ()
-        match next with
-        | some credential => pure (some credential)
-        | none => pure current
-      delete := deleteCredential
+        credentials.atomically fun ref => do
+          let entries ← ref.get
+          let current := entries.findSome? fun (id, credential) =>
+            if id == providerId then some credential else none
+          let next ← fn current
+          match next with
+          | some credential =>
+              writeCredentialLocked ref providerId credential
+              pure (some credential)
+          | none => pure current
+      delete := fun providerId =>
+        credentials.atomically fun ref => do
+          ref.modify fun entries => entries.filter fun (id, _) => id != providerId
     }
 
 namespace FileCredentialStore
@@ -388,19 +475,26 @@ def deleteProvider (path : System.FilePath) (providerId : String) : IO Unit := d
   writeEntries path (entries.filter fun (id, _) => id != providerId)
 
 def mk (path : System.FilePath) : IO CredentialStore :=
-  pure
-    { read := readProvider path
-      modify := fun providerId fn => do
-        let current ← readProvider path providerId
-        let next ← fn current
-        match next with
-        | some credential => writeProvider path providerId credential
-        | none => pure ()
-        match next with
-        | some credential => pure (some credential)
-        | none => pure current
-      delete := deleteProvider path
-    }
+  do
+    let lock ← Std.Mutex.new ()
+    pure
+      { read := fun providerId =>
+          lock.atomically fun _ =>
+            readProvider path providerId
+        modify := fun providerId fn =>
+          lock.atomically fun _ => do
+            let current ← readProvider path providerId
+            let next ← fn current
+            match next with
+            | some credential => writeProvider path providerId credential
+            | none => pure ()
+            match next with
+            | some credential => pure (some credential)
+            | none => pure current
+        delete := fun providerId =>
+          lock.atomically fun _ =>
+            deleteProvider path providerId
+      }
 
 end FileCredentialStore
 

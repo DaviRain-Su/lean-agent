@@ -1,4 +1,5 @@
 import LeanAgent.AI.Auth
+import LeanAgent.AI.Auth.OAuthBridge
 import LeanAgent.AI.Api.GitHubCopilotHeaders
 import LeanAgent.AI.Api.BedrockConverseStream
 import LeanAgent.AI.Api.GoogleGenerativeAI
@@ -23,7 +24,11 @@ import LeanAgent.AI.Images
 import LeanAgent.AI.Images.Models
 import LeanAgent.AI.Images.Registry
 import LeanAgent.AI.OAuth
+import LeanAgent.AI.OAuth.Anthropic
 import LeanAgent.AI.OAuth.GitHubCopilot
+import LeanAgent.AI.OAuth.GitHubCopilotModels
+import LeanAgent.AI.OAuth.LocalCallback
+import LeanAgent.AI.OAuth.OpenAICodex
 import LeanAgent.AI.OAuth.PKCE
 import LeanAgent.AI.OAuth.Page
 import LeanAgent.AI.Api.AnthropicMessages
@@ -36,6 +41,7 @@ import LeanAgent.AI.Providers.Cerebras
 import LeanAgent.AI.Providers.CloudflareAIGateway
 import LeanAgent.AI.Providers.CloudflareAuth
 import LeanAgent.AI.Providers.CloudflareWorkersAI
+import LeanAgent.AI.Providers.Catalog
 import LeanAgent.AI.Providers.DeepSeek
 import LeanAgent.AI.Providers.Faux
 import LeanAgent.AI.Providers.Fireworks
@@ -57,6 +63,7 @@ import LeanAgent.AI.Providers.OpenAICodex
 import LeanAgent.AI.Providers.OpenRouterImages
 import LeanAgent.AI.Providers.OpenRouter
 import LeanAgent.AI.Providers.Together
+import LeanAgent.AI.Providers.Streams
 import LeanAgent.AI.Providers.VercelAIGateway
 import LeanAgent.AI.Providers.XAI
 import LeanAgent.AI.Providers.Xiaomi
