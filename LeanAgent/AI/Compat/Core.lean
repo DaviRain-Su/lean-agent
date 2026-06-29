@@ -27,12 +27,21 @@ structure ApiProvider where
   api : String
   streams : LeanAgent.Models.ProviderStreams
 
+def ApiProvider.ensureApiMatches
+    (provider : ApiProvider)
+    (model : LeanAgent.Models.ModelInfo) : IO Unit :=
+  if model.api == provider.api then
+    pure ()
+  else
+    throw (IO.userError s!"Mismatched api: {model.api} expected {provider.api}")
+
 def ApiProvider.streamSimple
     (provider : ApiProvider)
     (model : LeanAgent.Models.ModelInfo)
     (context : LeanAgent.AI.Context)
     (options : LeanAgent.AI.SimpleStreamOptions := {}) :
-    IO LeanAgent.AI.AssistantMessageEventStream :=
+    IO LeanAgent.AI.AssistantMessageEventStream := do
+  provider.ensureApiMatches model
   provider.streams.streamSimple model context options
 
 def ApiProvider.stream
@@ -40,7 +49,8 @@ def ApiProvider.stream
     (model : LeanAgent.Models.ModelInfo)
     (context : LeanAgent.AI.Context)
     (options : LeanAgent.AI.StreamOptions := {}) :
-    IO LeanAgent.AI.AssistantMessageEventStream :=
+    IO LeanAgent.AI.AssistantMessageEventStream := do
+  provider.ensureApiMatches model
   provider.streams.stream model context options
 
 structure RegisteredApiProvider where
@@ -292,10 +302,7 @@ def withEnvApiKey
       pure { options with apiKey := key? }
 
 def ensureApiMatches (provider : ApiProvider) (model : LeanAgent.Models.ModelInfo) : IO Unit :=
-  if model.api == provider.api then
-    pure ()
-  else
-    throw (IO.userError s!"Mismatched api: {model.api} expected {provider.api}")
+  provider.ensureApiMatches model
 
 def resolveApiProvider (api : String) : IO ApiProvider := do
   match ← getApiProvider? api with

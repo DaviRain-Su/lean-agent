@@ -7148,6 +7148,19 @@ def testCompatApiRegistryDispatchesAndUnregisters : IO Unit := do
         "expected compat provider lookup to expose direct streamSimple"
       assertTrue ((← seenApiKey.get) == some "provider-method-key")
         "expected compat provider direct streamSimple to pass api key"
+      let mismatchFailed ←
+        try
+          let _ ← provider.streamSimple
+            { fakeRuntimeModel with api := "other-runtime-api" }
+            { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 0 }] }
+            {}
+          pure false
+        catch err =>
+          assertTrue
+            (err.toString.contains "Mismatched api: other-runtime-api expected fake-api")
+            "expected compat provider direct streamSimple api mismatch error"
+          pure true
+      assertTrue mismatchFailed "expected compat provider direct streamSimple mismatch failure"
   | none => fail "expected compat provider"
   let message ← LeanAgent.AI.Compat.completeSimple
     fakeRuntimeModel
