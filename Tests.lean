@@ -2133,13 +2133,23 @@ def testImageModelCatalogOpenRouter : IO Unit := do
     (LeanAgent.AI.Images.Models.getImageProviders == #[LeanAgent.AI.Images.Models.openRouterProviderId])
     "expected OpenRouter image provider catalog"
   let models := LeanAgent.AI.Images.Models.getImageModels "openrouter"
-  assertTrue (models.size >= 4) "expected starter OpenRouter image models"
+  assertTrue (models.size == 37) "expected full OpenRouter image model catalog"
   match LeanAgent.AI.Images.Models.getImageModel? "openrouter" "google/gemini-2.5-flash-image" with
   | some model =>
       assertTrue (model.api == "openrouter-images") "expected OpenRouter Images api"
       assertTrue (model.output == #["image", "text"]) "expected image/text output metadata"
       assertTrue (model.cost.output == 2.5) "expected generated model cost metadata"
   | none => fail "expected Gemini image model"
+  match LeanAgent.AI.Images.Models.getImageModel? "openrouter" "openrouter/auto" with
+  | some model =>
+      assertTrue (model.name == "Auto Router") "expected generated OpenRouter auto name"
+      assertTrue (model.output == #["text", "image"]) "expected generated OpenRouter auto output order"
+      assertTrue (model.cost.input == -1000000.0) "expected generated OpenRouter auto sentinel cost"
+  | none => fail "expected OpenRouter auto image model"
+  match LeanAgent.AI.Images.Models.getImageModel? "openrouter" "sourceful/riverflow-v2.5-pro" with
+  | some model =>
+      assertTrue (model.name == "Sourceful: Riverflow V2.5 Pro") "expected Sourceful generated model"
+  | none => fail "expected Sourceful generated image model"
   assertTrue
     ((LeanAgent.AI.Images.Models.getImageModel? "missing" "google/gemini-2.5-flash-image").isNone)
     "expected missing image provider lookup to be empty"
