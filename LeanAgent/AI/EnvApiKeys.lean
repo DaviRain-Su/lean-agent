@@ -61,6 +61,7 @@ def findEnvKeys (provider : String) (env : LeanAgent.AI.Auth.ProviderEnv := #[])
 
 def hasBedrockAmbientCredentials (env : LeanAgent.AI.Auth.ProviderEnv) : IO Bool := do
   let profile ← envValue? env "AWS_PROFILE"
+  let defaultProfile ← envValue? env "AWS_DEFAULT_PROFILE"
   let accessKey ← envValue? env "AWS_ACCESS_KEY_ID"
   let secretKey ← envValue? env "AWS_SECRET_ACCESS_KEY"
   let bearer ← envValue? env "AWS_BEARER_TOKEN_BEDROCK"
@@ -69,6 +70,7 @@ def hasBedrockAmbientCredentials (env : LeanAgent.AI.Auth.ProviderEnv) : IO Bool
   let webIdentity ← envValue? env "AWS_WEB_IDENTITY_TOKEN_FILE"
   pure
     (profile.isSome ||
+      defaultProfile.isSome ||
       (accessKey.isSome && secretKey.isSome) ||
       bearer.isSome ||
       ecsRelative.isSome ||

@@ -140,6 +140,7 @@ def amazonBedrockBaseUrl : String := LeanAgent.AI.Api.BedrockConverseStream.defa
 def amazonBedrockAuthEnvs : Array String :=
   #[ "AWS_BEARER_TOKEN_BEDROCK"
    , "AWS_PROFILE"
+   , "AWS_DEFAULT_PROFILE"
    , "AWS_ACCESS_KEY_ID"
    , "AWS_SECRET_ACCESS_KEY"
    , "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"

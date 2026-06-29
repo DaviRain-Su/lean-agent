@@ -609,6 +609,133 @@ def envValue? (env : LeanAgent.AI.Auth.ProviderEnv) (name : String) : IO (Option
           pure (if trimmed.isEmpty then none else some trimmed)
       | none => pure none
 
+structure AwsIniSection where
+  name : String
+  fields : Array (String × String) := #[]
+deriving BEq
+
+def defaultSharedCredentialsPath : String := "~/.aws/credentials"
+def defaultSharedConfigPath : String := "~/.aws/config"
+
+def stripTrailingCR (line : String) : String :=
+  match line.toList.reverse with
+  | '\r' :: rest => String.ofList rest.reverse
+  | _ => line
+
+def parseAwsIniKeyValue? (line : String) : Option (String × String) :=
+  match line.splitOn "=" with
+  | [] => none
+  | _ :: [] => none
+  | key :: valueParts =>
+      let key := key.trimAscii.toString.toLower
+      let value := (String.intercalate "=" valueParts).trimAscii.toString
+      if key.isEmpty then none else some (key, value)
+
+def appendAwsIniSection
+    (sections : Array AwsIniSection)
+    (name? : Option String)
+    (fields : Array (String × String)) : Array AwsIniSection :=
+  match name? with
+  | some name => sections.push { name := name, fields := fields }
+  | none => sections
+
+def parseAwsIniSections (text : String) : Array AwsIniSection :=
+  Id.run do
+    let mut sections : Array AwsIniSection := #[]
+    let mut currentName : Option String := none
+    let mut currentFields : Array (String × String) := #[]
+    for rawLine in text.splitOn "\n" do
+      let line := (stripTrailingCR rawLine).trimAscii.toString
+      if line.isEmpty || line.startsWith "#" || line.startsWith ";" then
+        pure ()
+      else if line.startsWith "[" && line.endsWith "]" then
+        sections := appendAwsIniSection sections currentName currentFields
+        currentName := some ((line.drop 1).dropEnd 1 |>.toString |>.trimAscii.toString)
+        currentFields := #[]
+      else
+        match currentName, parseAwsIniKeyValue? line with
+        | some _, some field =>
+            currentFields := currentFields.push field
+        | _, _ => pure ()
+    appendAwsIniSection sections currentName currentFields
+
+def sharedCredentialsFilePath (options : BedrockOptions) : IO String := do
+  pure ((← envValue? options.env "AWS_SHARED_CREDENTIALS_FILE").getD defaultSharedCredentialsPath)
+
+def sharedConfigFilePath (options : BedrockOptions) : IO String := do
+  pure ((← envValue? options.env "AWS_CONFIG_FILE").getD defaultSharedConfigPath)
+
+def readAwsIniFile? (path : String) : IO (Option (Array AwsIniSection)) := do
+  let resolved ← LeanAgent.AI.Auth.expandHomePath path
+  if !(← resolved.pathExists) then
+    pure none
+  else
+    pure (some (parseAwsIniSections (← IO.FS.readFile resolved)))
+
+def awsProfileSectionNames (profile : String) : Array String :=
+  if profile == "default" then
+    #["default"]
+  else
+    #[profile, s!"profile {profile}"]
+
+def awsIniField?
+    (sections : Array AwsIniSection)
+    (sectionNames : Array String)
+    (key : String) : Option String :=
+  sectionNames.findSome? fun sectionName =>
+    (sections.findSome? fun sec =>
+      if sec.name == sectionName then
+        sec.fields.findSome? fun (fieldName, value) =>
+          if fieldName == key then some value else none
+      else
+        none)
+
+structure AwsProfileSettings where
+  accessKeyId : Option String := none
+  secretAccessKey : Option String := none
+  sessionToken : Option String := none
+  region : Option String := none
+deriving BEq
+
+def awsProfileSettings? (options : BedrockOptions) (profile : String) : IO (Option AwsProfileSettings) := do
+  let credentialsSections ← readAwsIniFile? (← sharedCredentialsFilePath options)
+  let configSections ← readAwsIniFile? (← sharedConfigFilePath options)
+  let credentialNames := #[profile]
+  let configNames := awsProfileSectionNames profile
+  let accessKeyId :=
+    credentialsSections.bind (fun sections => awsIniField? sections credentialNames "aws_access_key_id")
+      <|> configSections.bind (fun sections => awsIniField? sections configNames "aws_access_key_id")
+  let secretAccessKey :=
+    credentialsSections.bind (fun sections => awsIniField? sections credentialNames "aws_secret_access_key")
+      <|> configSections.bind (fun sections => awsIniField? sections configNames "aws_secret_access_key")
+  let sessionToken :=
+    credentialsSections.bind (fun sections => awsIniField? sections credentialNames "aws_session_token")
+      <|> configSections.bind (fun sections => awsIniField? sections configNames "aws_session_token")
+  let region :=
+    configSections.bind (fun sections => awsIniField? sections configNames "region")
+      <|> credentialsSections.bind (fun sections => awsIniField? sections credentialNames "region")
+  if accessKeyId.isNone && secretAccessKey.isNone && sessionToken.isNone && region.isNone then
+    pure none
+  else
+    pure
+      (some
+        { accessKeyId := accessKeyId
+          secretAccessKey := secretAccessKey
+          sessionToken := sessionToken
+          region := region
+        })
+
+def configuredProfileSource? (options : BedrockOptions) : IO (Option (String × String)) := do
+  match trimmedNonEmpty? options.profile with
+  | some profile => pure (some ("options.profile", profile))
+  | none =>
+      match ← envValue? options.env "AWS_PROFILE" with
+      | some profile => pure (some ("AWS_PROFILE", profile))
+      | none =>
+          match ← envValue? options.env "AWS_DEFAULT_PROFILE" with
+          | some profile => pure (some ("AWS_DEFAULT_PROFILE", profile))
+          | none => pure none
+
 def configuredRegion? (options : BedrockOptions) : IO (Option String) := do
   match options.region with
   | some region => pure (some region)
@@ -650,41 +777,62 @@ def resolvedAuth (options : BedrockOptions) : IO ResolvedAuth := do
     | some token =>
         pure { mode := .bearer, bearerToken := some token, source := some "options.bearerToken" }
     | none =>
-        match trimmedNonEmpty? options.profile with
-        | some profile =>
-            pure { mode := .profile, profile := some profile, source := some "options.profile" }
+        match ← configuredProfileSource? options with
+        | some (source, profile) =>
+            match ← awsProfileSettings? options profile with
+            | some settings =>
+                match settings.accessKeyId, settings.secretAccessKey with
+                | some accessKeyId, some secretAccessKey =>
+                    pure
+                      { mode := .sigv4
+                        credentials := some
+                          { accessKeyId := accessKeyId
+                            secretAccessKey := secretAccessKey
+                            sessionToken := settings.sessionToken
+                          }
+                        profile := some profile
+                        source := some source
+                      }
+                | _, _ =>
+                    throw
+                      (IO.userError
+                        s!"Bedrock profile \"{profile}\" was found via {source}, but shared credentials/config files do not contain aws_access_key_id and aws_secret_access_key. SSO, credential_process, and role chaining are not implemented yet.")
+            | none =>
+                throw
+                  (IO.userError
+                    s!"Bedrock profile \"{profile}\" was requested via {source}, but no matching shared credentials/config entry was found.")
         | none =>
             match ← envValue? options.env "AWS_BEARER_TOKEN_BEDROCK" with
             | some token =>
                 pure { mode := .bearer, bearerToken := some token, source := some "AWS_BEARER_TOKEN_BEDROCK" }
             | none =>
-                match ← envValue? options.env "AWS_PROFILE" with
-                | some profile =>
-                    pure { mode := .profile, profile := some profile, source := some "AWS_PROFILE" }
+                match ← configuredCredentials? options with
+                | some credentials =>
+                    pure { mode := .sigv4, credentials := some credentials, source := some "AWS access keys" }
                 | none =>
-                    match ← configuredCredentials? options with
-                    | some credentials =>
-                        pure { mode := .sigv4, credentials := some credentials, source := some "AWS access keys" }
-                    | none =>
-                        match ← ambientCredentialChainSource? options with
-                        | some source => pure { mode := .ambientChain, source := some source }
-                        | none => pure { mode := .ambientChain }
+                    match ← ambientCredentialChainSource? options with
+                    | some source => pure { mode := .ambientChain, source := some source }
+                    | none => pure { mode := .ambientChain }
 
 def resolvedRegion
     (baseUrl modelId : String)
-    (options : BedrockOptions)
+    (_options : BedrockOptions)
+    (configuredRegion : Option String)
+    (profileRegion : Option String)
     (hasAmbientProfile : Bool) : IO String := do
   match modelArnRegion? modelId with
   | some region => pure region
   | none =>
-      let configuredRegion ← configuredRegion? options
       match configuredRegion with
       | some region => pure region
       | none =>
-          if shouldUseExplicitEndpoint baseUrl configuredRegion hasAmbientProfile then
-            pure ((standardEndpointRegion? baseUrl).getD defaultRegion)
-          else
-            pure defaultRegion
+          match profileRegion with
+          | some region => pure region
+          | none =>
+              if shouldUseExplicitEndpoint baseUrl configuredRegion hasAmbientProfile then
+                pure ((standardEndpointRegion? baseUrl).getD defaultRegion)
+              else
+                pure defaultRegion
 
 def sdkDefaultBaseUrl (region : String) : String :=
   let suffix :=
@@ -837,8 +985,15 @@ def prepareRequestWithTimestamp
   let payload ← applyPayloadHook options requestModel payload0
   let auth ← resolvedAuth options
   let configuredRegion := ← configuredRegion? options
-  let hasAmbientProfile := auth.mode == .profile
-  let region ← resolvedRegion config.baseUrl requestModel.id options hasAmbientProfile
+  let hasAmbientProfile := auth.profile.isSome
+  let profileRegion ←
+    match auth.profile with
+    | some profile =>
+        match ← awsProfileSettings? options profile with
+        | some settings => pure settings.region
+        | none => pure none
+    | none => pure none
+  let region ← resolvedRegion config.baseUrl requestModel.id options configuredRegion profileRegion hasAmbientProfile
   let baseUrl := resolvedBaseUrl config.baseUrl configuredRegion hasAmbientProfile region
   let requestPath := buildRequestPath requestModel.id
   let url := baseUrl ++ requestPath
@@ -850,6 +1005,12 @@ def prepareRequestWithTimestamp
         signRequestHeaders baseUrl requestPath payload.compress credentials timestamp region baseHeaders
     | .bearer, _, some token =>
         pure (LeanAgent.AI.Util.Headers.insert baseHeaders ("Authorization", "Bearer " ++ token))
+    | .profile, _, _ =>
+        throw (IO.userError "Bedrock profile auth must resolve to SigV4 credentials before request dispatch")
+    | .ambientChain, _, _ =>
+        throw
+          (IO.userError
+            "Bedrock ambient AWS credential-chain dispatch is not implemented yet. Set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, AWS_PROFILE with shared credentials/config files, or AWS_BEARER_TOKEN_BEDROCK.")
     | _, _, _ => pure baseHeaders
   pure
     { url

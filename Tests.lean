@@ -2829,6 +2829,93 @@ def testBedrockConversePreparedRequestSigV4 : IO Unit := do
         "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20250115/us-east-1/bedrock/aws4_request, SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date;x-amz-security-token, Signature=f1b63a6d40b48e8fdb558c9b76d69b24fb8c99cb549e3c54f39bb9f3ed4713ae")
     "expected Bedrock SigV4 authorization header"
 
+def testBedrockConversePreparedRequestAwsProfile : IO Unit := do
+  let model : LeanAgent.AI.ModelRef :=
+    { id := "anthropic.claude-3-7-sonnet-20250219-v1:0"
+      api := LeanAgent.AI.Api.BedrockConverseStream.api
+      provider := LeanAgent.Models.amazonBedrockProviderId
+      baseUrl := some LeanAgent.Models.amazonBedrockBaseUrl
+    }
+  IO.FS.withTempDir fun root => do
+    let credentialsPath := root / "credentials"
+    let configPath := root / "config"
+    IO.FS.writeFile credentialsPath (String.intercalate "\n"
+      [ "[dev]"
+      , "aws_access_key_id = PROFILEKEY"
+      , "aws_secret_access_key = PROFILESECRET"
+      , "aws_session_token = PROFILETOKEN"
+      ])
+    IO.FS.writeFile configPath (String.intercalate "\n"
+      [ "[profile dev]"
+      , "region = us-west-2"
+      ])
+    let prepared ← LeanAgent.AI.Api.BedrockConverseStream.prepareRequestWithTimestamp
+      { baseUrl := LeanAgent.Models.amazonBedrockBaseUrl }
+      model
+      #["text"]
+      "Claude 3.7 Sonnet Bedrock Profile Fixture"
+      #[]
+      true
+      { messages := #[.user { content := #[LeanAgent.AI.text "profile fixture"], timestamp := 1 }] }
+      { amzDate := "20250115T120000Z", dateStamp := "20250115" }
+      { env :=
+          #[ ("AWS_PROFILE", "dev")
+           , ("AWS_SHARED_CREDENTIALS_FILE", credentialsPath.toString)
+           , ("AWS_CONFIG_FILE", configPath.toString)
+           ]
+      }
+    assertTrue (prepared.auth.mode == .sigv4) "expected Bedrock profile auth to resolve to SigV4"
+    assertTrue (prepared.auth.profile == some "dev") "expected Bedrock resolved profile name"
+    assertTrue (prepared.auth.source == some "AWS_PROFILE") "expected Bedrock resolved profile source"
+    assertTrue (prepared.region == "us-west-2") "expected Bedrock profile region from shared config"
+    assertTrue
+      (prepared.url ==
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-3-7-sonnet-20250219-v1%3A0/converse-stream")
+      "expected Bedrock profile URL to use shared-config region"
+    assertTrue
+      (headerValueCaseInsensitive? prepared.headers "x-amz-security-token" == some "PROFILETOKEN")
+      "expected Bedrock profile session token header"
+    match headerValueCaseInsensitive? prepared.headers "authorization" with
+    | some authorization =>
+        assertTrue
+          (authorization.contains "Credential=PROFILEKEY/20250115/us-west-2/bedrock/aws4_request")
+          "expected Bedrock profile authorization scope"
+    | none => fail "expected Bedrock profile authorization header"
+
+def testBedrockConverseProfileWithoutSharedCredentialsFails : IO Unit := do
+  let model : LeanAgent.AI.ModelRef :=
+    { id := "anthropic.claude-3-7-sonnet-20250219-v1:0"
+      api := LeanAgent.AI.Api.BedrockConverseStream.api
+      provider := LeanAgent.Models.amazonBedrockProviderId
+      baseUrl := some LeanAgent.Models.amazonBedrockBaseUrl
+    }
+  IO.FS.withTempDir fun root => do
+    let credentialsPath := root / "credentials"
+    let configPath := root / "config"
+    IO.FS.writeFile credentialsPath "[dev]\n"
+    IO.FS.writeFile configPath "[profile dev]\nregion = us-west-2\n"
+    let failed ←
+      try
+        let _ ← LeanAgent.AI.Api.BedrockConverseStream.prepareRequestWithTimestamp
+          { baseUrl := LeanAgent.Models.amazonBedrockBaseUrl }
+          model
+          #["text"]
+          "Claude 3.7 Sonnet Bedrock Missing Profile Fixture"
+          #[]
+          true
+          { messages := #[.user { content := #[LeanAgent.AI.text "profile failure"], timestamp := 1 }] }
+          { amzDate := "20250115T120000Z", dateStamp := "20250115" }
+          { env :=
+              #[ ("AWS_PROFILE", "dev")
+               , ("AWS_SHARED_CREDENTIALS_FILE", credentialsPath.toString)
+               , ("AWS_CONFIG_FILE", configPath.toString)
+               ]
+          }
+        pure false
+      catch err =>
+        pure (err.toString.contains "aws_access_key_id and aws_secret_access_key")
+    assertTrue failed "expected unresolved Bedrock profile credentials to fail explicitly"
+
 def testGitHubCopilotDynamicHeaders : IO Unit := do
   let userOnly : Array LeanAgent.AI.Message :=
     #[.user { content := #[LeanAgent.AI.text "hi"], timestamp := 1 }]
@@ -6637,6 +6724,10 @@ def testEnvApiKeysAmbientAuthMarkers : IO Unit := do
     "amazon-bedrock"
     #[("AWS_PROFILE", "default")]
   assertTrue (bedrockProfile == some "<authenticated>") "expected AWS profile ambient marker"
+  let bedrockDefaultProfile ← LeanAgent.AI.EnvApiKeys.getEnvApiKey
+    "amazon-bedrock"
+    #[("AWS_DEFAULT_PROFILE", "default")]
+  assertTrue (bedrockDefaultProfile == some "<authenticated>") "expected AWS default profile ambient marker"
   let bedrockPair ← LeanAgent.AI.EnvApiKeys.getEnvApiKey
     "amazon-bedrock"
     #[ ("AWS_ACCESS_KEY_ID", "access")
