@@ -3,6 +3,7 @@ import LeanAgent.AI.Auth
 import LeanAgent.AI.Api.AnthropicMessages
 import LeanAgent.AI.Api.AzureOpenAIResponses
 import LeanAgent.AI.Api.GoogleGenerativeAI
+import LeanAgent.AI.Api.GoogleVertex
 import LeanAgent.AI.Api.Lazy
 import LeanAgent.AI.Api.OpenAICompletions
 import LeanAgent.AI.Api.OpenAIResponses
@@ -64,6 +65,11 @@ def googleProviderId : String := "google"
 def googleApiKeyEnv : String := "GEMINI_API_KEY"
 def googleDefaultModel : String := "gemini-2.5-flash"
 def googleBaseUrl : String := "https://generativelanguage.googleapis.com/v1beta"
+
+def googleVertexProviderId : String := "google-vertex"
+def googleVertexApiKeyEnv : String := "GOOGLE_CLOUD_API_KEY"
+def googleVertexDefaultModel : String := "gemini-2.5-flash"
+def googleVertexBaseUrl : String := "https://{location}-aiplatform.googleapis.com"
 
 structure ModelCompat where
   supportsStore : Bool := true
@@ -416,6 +422,68 @@ def googleModels : Array ModelInfo :=
    , googleGemma431BIt
    ]
 
+def googleVertexModel
+    (id name : String)
+    (inputCost outputCost cacheReadCost cacheWriteCost : Float)
+    (contextWindow maxTokens : Nat)
+    (reasoning : Bool := true)
+    (thinkingLevelMap : Array LeanAgent.AI.ThinkingLevelMapEntry := #[]) : ModelInfo :=
+  { id := id
+    name := name
+    provider := googleVertexProviderId
+    api := LeanAgent.AI.Api.GoogleVertex.api
+    baseUrl := googleVertexBaseUrl
+    reasoning := reasoning
+    thinkingLevelMap := thinkingLevelMap
+    input := #["text", "image"]
+    cost := cost inputCost outputCost cacheReadCost cacheWriteCost
+    contextWindow := contextWindow
+    maxTokens := maxTokens
+  }
+
+def googleVertexGemini25Flash : ModelInfo :=
+  googleVertexModel "gemini-2.5-flash" "Gemini 2.5 Flash" 0.3 2.5 0.03 0.0 1048576 65536
+
+def googleVertexGemini25FlashLite : ModelInfo :=
+  googleVertexModel "gemini-2.5-flash-lite" "Gemini 2.5 Flash-Lite" 0.1 0.4 0.01 0.0 1048576 65536
+
+def googleVertexGemini25Pro : ModelInfo :=
+  googleVertexModel "gemini-2.5-pro" "Gemini 2.5 Pro" 1.25 10.0 0.125 0.0 1048576 65536
+
+def googleVertexGemini3FlashPreview : ModelInfo :=
+  googleVertexModel "gemini-3-flash-preview" "Gemini 3 Flash Preview" 0.5 3.0 0.05 0.0 1048576 65536 true googleThinkingOffOnlyMap
+
+def googleVertexGemini31FlashLite : ModelInfo :=
+  googleVertexModel "gemini-3.1-flash-lite" "Gemini 3.1 Flash Lite" 0.25 1.5 0.025 0.0 1048576 65536 true googleThinkingOffOnlyMap
+
+def googleVertexGemini31ProPreview : ModelInfo :=
+  googleVertexModel "gemini-3.1-pro-preview" "Gemini 3.1 Pro Preview" 2.0 12.0 0.2 0.0 1048576 65536 true googleProThinkingLevelMap
+
+def googleVertexGemini31ProPreviewCustomTools : ModelInfo :=
+  googleVertexModel "gemini-3.1-pro-preview-customtools" "Gemini 3.1 Pro Preview Custom Tools" 2.0 12.0 0.2 0.0 1048576 65536 true googleProThinkingLevelMap
+
+def googleVertexGemini35Flash : ModelInfo :=
+  googleVertexModel "gemini-3.5-flash" "Gemini 3.5 Flash" 1.5 9.0 0.15 0.0 1048576 65536 true googleThinkingOffOnlyMap
+
+def googleVertexGeminiFlashLatest : ModelInfo :=
+  googleVertexModel "gemini-flash-latest" "Gemini Flash Latest" 1.5 9.0 0.15 0.0 1048576 65536 true googleThinkingOffOnlyMap
+
+def googleVertexGeminiFlashLiteLatest : ModelInfo :=
+  googleVertexModel "gemini-flash-lite-latest" "Gemini Flash-Lite Latest" 0.25 1.5 0.025 0.0 1048576 65536 true googleThinkingOffOnlyMap
+
+def googleVertexModels : Array ModelInfo :=
+  #[ googleVertexGemini25Flash
+   , googleVertexGemini25FlashLite
+   , googleVertexGemini25Pro
+   , googleVertexGemini3FlashPreview
+   , googleVertexGemini31FlashLite
+   , googleVertexGemini31ProPreview
+   , googleVertexGemini31ProPreviewCustomTools
+   , googleVertexGemini35Flash
+   , googleVertexGeminiFlashLatest
+   , googleVertexGeminiFlashLiteLatest
+   ]
+
 structure ProviderInfo where
   id : String
   name : String
@@ -529,6 +597,15 @@ def googleProviderInfo : ProviderInfo :=
     models := googleModels
   }
 
+def googleVertexProviderInfo : ProviderInfo :=
+  { id := googleVertexProviderId
+    name := "Google Vertex AI"
+    baseUrl := googleVertexBaseUrl
+    apiKeyEnv := googleVertexApiKeyEnv
+    defaultModel := googleVertexDefaultModel
+    models := googleVertexModels
+  }
+
 structure ProviderCatalog where
   providers : Array ProviderInfo := #[]
 deriving Repr, BEq
@@ -545,6 +622,7 @@ def defaultCatalog : ProviderCatalog :=
        , fireworksProviderInfo
        , anthropicProviderInfo
        , googleProviderInfo
+       , googleVertexProviderInfo
        ]
   }
 
@@ -1123,8 +1201,110 @@ def googleGenerativeAIStreams : ProviderStreams :=
       pure (applyUsageCostToStream model stream)
   }
 
+def googleVertexOptionsFromSimple
+    (model : ModelInfo)
+    (options : LeanAgent.AI.SimpleStreamOptions) :
+    LeanAgent.AI.Api.GoogleVertex.GoogleVertexOptions :=
+  let googleOptions := googleGenerativeAIOptionsFromSimple model options
+  { temperature := googleOptions.temperature
+    maxTokens := googleOptions.maxTokens
+    apiKey := googleOptions.apiKey
+    transport := googleOptions.transport
+    cacheRetention := googleOptions.cacheRetention
+    sessionId := googleOptions.sessionId
+    headers := googleOptions.headers
+    onPayload := googleOptions.onPayload
+    onResponse := googleOptions.onResponse
+    timeoutMs := googleOptions.timeoutMs
+    websocketConnectTimeoutMs := googleOptions.websocketConnectTimeoutMs
+    maxRetries := googleOptions.maxRetries
+    maxRetryDelayMs := googleOptions.maxRetryDelayMs
+    metadata := googleOptions.metadata
+    env := googleOptions.env
+    reasoning := googleOptions.reasoning
+    thinkingBudgets := googleOptions.thinkingBudgets
+    toolChoice :=
+      match googleOptions.toolChoice with
+      | some .auto => some .auto
+      | some .none => some .none
+      | some .any => some .any
+      | none => none
+    thinkingEnabled := googleOptions.thinkingEnabled
+    thinkingBudgetTokens := googleOptions.thinkingBudgetTokens
+    thinkingLevel := googleOptions.thinkingLevel
+  }
+
+def googleVertexStreams : ProviderStreams :=
+  { streamSimple := fun model context options => do
+      let options := clampSimpleOptionsToContext model context options
+      let config : LeanAgent.AI.Api.GoogleVertex.GoogleVertexConfig :=
+        { apiKey := options.apiKey.getD ""
+          baseUrl := model.baseUrl
+        }
+      let stream ← LeanAgent.AI.Api.GoogleVertex.completeStreamWithOptions
+        config
+        model.toModelRef
+        model.input
+        model.reasoning
+        context
+        (googleVertexOptionsFromSimple model options)
+      pure (applyUsageCostToStream model stream)
+  }
+
+def googleVertexAdcPath : String := "~/.config/gcloud/application_default_credentials.json"
+
+def googleVertexHasAdcCredentials
+    (ctx : LeanAgent.AI.Auth.AuthContext) : IO Bool := do
+  let credentialsPath ←
+    match ← ctx.env "GOOGLE_APPLICATION_CREDENTIALS" with
+    | some path => pure path
+    | none => pure googleVertexAdcPath
+  let hasCredentials ← ctx.fileExists credentialsPath
+  let project ←
+    match ← ctx.env "GOOGLE_CLOUD_PROJECT" with
+    | some project => pure (some project)
+    | none => ctx.env "GCLOUD_PROJECT"
+  let location ← ctx.env "GOOGLE_CLOUD_LOCATION"
+  pure (hasCredentials && project.isSome && location.isSome)
+
+def googleVertexApiKeyAuth : LeanAgent.AI.Auth.ApiKeyAuth :=
+  { name := "Google Cloud credentials"
+    resolve := fun ctx credential _modelBaseUrl => do
+      let credentialEnv := credential.map (fun value => value.env) |>.getD #[]
+      match credential.bind (fun value => value.key) with
+      | some key =>
+          if key.trimAscii.toString.isEmpty then
+            pure none
+          else
+            pure (some
+              { auth := { apiKey := some key }
+                env := credentialEnv
+                source := some "stored credential"
+              })
+      | none =>
+          match ← ctx.env googleVertexApiKeyEnv with
+          | some key =>
+              pure (some
+                { auth := { apiKey := some key }
+                  env := credentialEnv
+                  source := some googleVertexApiKeyEnv
+                })
+          | none =>
+              if ← googleVertexHasAdcCredentials ctx then
+                pure (some
+                  { auth := { apiKey := some LeanAgent.AI.Api.GoogleVertex.vertexCredentialsMarker }
+                    env := credentialEnv
+                    source := some "gcloud application default credentials"
+                  })
+              else
+                pure none
+  }
+
 def authForProviderInfo (info : ProviderInfo) : LeanAgent.AI.Auth.ProviderAuth :=
-  { apiKey := some (LeanAgent.AI.Auth.envApiKeyAuth (info.name ++ " API key") info.authEnvs) }
+  if info.id == googleVertexProviderId then
+    { apiKey := some googleVertexApiKeyAuth }
+  else
+    { apiKey := some (LeanAgent.AI.Auth.envApiKeyAuth (info.name ++ " API key") info.authEnvs) }
 
 def createCatalogProvider (info : ProviderInfo) : IO Provider :=
   createProvider
@@ -1138,6 +1318,7 @@ def createCatalogProvider (info : ProviderInfo) : IO Provider :=
          , { api := "openai-responses", streams := openAIResponsesStreams }
          , { api := LeanAgent.AI.Api.AnthropicMessages.api, streams := anthropicMessagesStreams }
          , { api := LeanAgent.AI.Api.GoogleGenerativeAI.api, streams := googleGenerativeAIStreams }
+         , { api := LeanAgent.AI.Api.GoogleVertex.api, streams := googleVertexStreams }
          ]
     }
 

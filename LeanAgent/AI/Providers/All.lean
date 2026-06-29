@@ -6,6 +6,7 @@ import LeanAgent.AI.Providers.CloudflareWorkersAI
 import LeanAgent.AI.Providers.DeepSeek
 import LeanAgent.AI.Providers.Fireworks
 import LeanAgent.AI.Providers.Google
+import LeanAgent.AI.Providers.GoogleVertex
 import LeanAgent.AI.Providers.Groq
 import LeanAgent.AI.Providers.OpenAI
 import LeanAgent.AI.Providers.OpenRouterImages
@@ -48,6 +49,7 @@ def catalogProviders : IO (Array LeanAgent.Models.Provider) := do
      , ← LeanAgent.AI.Providers.Fireworks.provider
      , ← LeanAgent.AI.Providers.Anthropic.provider
      , ← LeanAgent.AI.Providers.Google.provider
+     , ← LeanAgent.AI.Providers.GoogleVertex.provider
      ]
 
 def builtinProviders : IO (Array LeanAgent.Models.Provider) := do

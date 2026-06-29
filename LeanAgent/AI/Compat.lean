@@ -43,6 +43,10 @@ def registerBuiltInApiProviders : IO Unit := do
     registerApiProvider { api := "openai-responses", streams := LeanAgent.Models.openAIResponsesStreams }
   if (← getApiProvider? "azure-openai-responses").isNone then
     registerApiProvider { api := "azure-openai-responses", streams := LeanAgent.Models.azureOpenAIResponsesStreams }
+  if (← getApiProvider? LeanAgent.AI.Api.GoogleGenerativeAI.api).isNone then
+    registerApiProvider { api := LeanAgent.AI.Api.GoogleGenerativeAI.api, streams := LeanAgent.Models.googleGenerativeAIStreams }
+  if (← getApiProvider? LeanAgent.AI.Api.GoogleVertex.api).isNone then
+    registerApiProvider { api := LeanAgent.AI.Api.GoogleVertex.api, streams := LeanAgent.Models.googleVertexStreams }
 
 def resetApiProviders : IO Unit := do
   clearApiProviders

@@ -830,6 +830,13 @@ def googleModelRef : LeanAgent.AI.ModelRef :=
     baseUrl := some LeanAgent.Models.googleBaseUrl
   }
 
+def googleVertexModelRef : LeanAgent.AI.ModelRef :=
+  { id := LeanAgent.Models.googleVertexDefaultModel
+    api := LeanAgent.AI.Api.GoogleVertex.api
+    provider := LeanAgent.Models.googleVertexProviderId
+    baseUrl := some LeanAgent.Models.googleVertexBaseUrl
+  }
+
 def jsonArrayField? (json : Lean.Json) (key : String) : Option (Array Lean.Json) :=
   match LeanAgent.Json.optVal? json key with
   | some value =>
@@ -1370,6 +1377,83 @@ def testGoogleGenerativeAIParsesStreamingEvents : IO Unit := do
           | _ => false)
         "expected Google tool-call end"
   | .error err => fail s!"expected Google streaming parse success: {err}"
+
+def testGoogleVertexUrlsAndHeaders : IO Unit := do
+  let generatedUrl := LeanAgent.AI.Api.GoogleVertex.streamGenerateContentUrl
+    LeanAgent.Models.googleVertexBaseUrl
+    "project-1"
+    "us-central1"
+    LeanAgent.Models.googleVertexDefaultModel
+  assertTrue
+    (generatedUrl ==
+      "https://us-central1-aiplatform.googleapis.com/v1/projects/project-1/locations/us-central1/publishers/google/models/gemini-2.5-flash:streamGenerateContent?alt=sse")
+    "expected generated Vertex collection URL"
+  let customVersioned := LeanAgent.AI.Api.GoogleVertex.generateContentUrl
+    "https://proxy.example.com/v1/projects/project-1/locations/global"
+    "ignored-project"
+    "ignored-location"
+    "gemini-3-flash-preview"
+  assertTrue
+    (customVersioned ==
+      "https://proxy.example.com/v1/projects/project-1/locations/global/publishers/google/models/gemini-3-flash-preview:generateContent")
+    "expected custom versioned Vertex collection URL"
+  let apiKeyHeaders := LeanAgent.AI.Api.GoogleVertex.requestHeaders
+    { apiKey := "AIzaSyExampleRealisticLookingApiKey123456" }
+    { headers := #[("X-Trace", some "trace-vertex")] }
+  assertTrue
+    (headerValueCaseInsensitive? apiKeyHeaders "x-goog-api-key" ==
+      some "AIzaSyExampleRealisticLookingApiKey123456")
+    "expected Vertex API key header"
+  assertTrue (headerValueCaseInsensitive? apiKeyHeaders "X-Trace" == some "trace-vertex")
+    "expected Vertex custom header"
+  let markerHeaders := LeanAgent.AI.Api.GoogleVertex.requestHeaders
+    { apiKey := LeanAgent.AI.Api.GoogleVertex.vertexCredentialsMarker }
+    { headers := #[("Authorization", some "Bearer adc-token")] }
+  assertTrue (headerValueCaseInsensitive? markerHeaders "x-goog-api-key" == none)
+    "expected Vertex ADC marker not to send API key header"
+  assertTrue (headerValueCaseInsensitive? markerHeaders "Authorization" == some "Bearer adc-token")
+    "expected caller-owned Vertex Authorization header"
+
+def testGoogleVertexAuthResolution : IO Unit := do
+  let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+  let auth := LeanAgent.Models.authForProviderInfo LeanAgent.Models.googleVertexProviderInfo
+  let keyCtx : LeanAgent.AI.Auth.AuthContext :=
+    { env := fun name => pure (if name == LeanAgent.Models.googleVertexApiKeyEnv then some "vertex-key" else none)
+      fileExists := fun _ => pure false
+    }
+  match ← LeanAgent.AI.Auth.resolveProviderAuth
+      LeanAgent.Models.googleVertexProviderId
+      auth
+      store
+      keyCtx with
+  | some result =>
+      assertTrue (result.auth.apiKey == some "vertex-key") "expected Vertex API key auth"
+      assertTrue (result.source == some LeanAgent.Models.googleVertexApiKeyEnv)
+        "expected Vertex API key env source"
+  | none => fail "expected Vertex API key auth result"
+  let adcCtx : LeanAgent.AI.Auth.AuthContext :=
+    { env := fun name =>
+        pure
+          (if name == "GOOGLE_CLOUD_PROJECT" then
+            some "project-1"
+          else if name == "GOOGLE_CLOUD_LOCATION" then
+            some "us-central1"
+          else
+            none)
+      fileExists := fun path => pure (path == LeanAgent.Models.googleVertexAdcPath)
+    }
+  match ← LeanAgent.AI.Auth.resolveProviderAuth
+      LeanAgent.Models.googleVertexProviderId
+      auth
+      store
+      adcCtx with
+  | some result =>
+      assertTrue
+        (result.auth.apiKey == some LeanAgent.AI.Api.GoogleVertex.vertexCredentialsMarker)
+        "expected Vertex ADC marker auth"
+      assertTrue (result.source == some "gcloud application default credentials")
+        "expected Vertex ADC source"
+  | none => fail "expected Vertex ADC auth result"
 
 def testGitHubCopilotDynamicHeaders : IO Unit := do
   let userOnly : Array LeanAgent.AI.Message :=
@@ -2262,6 +2346,7 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
      , LeanAgent.Models.fireworksProviderId
      , LeanAgent.Models.anthropicProviderId
      , LeanAgent.Models.googleProviderId
+     , LeanAgent.Models.googleVertexProviderId
      ]
   for providerId in expectedProviders do
     match LeanAgent.Models.ProviderCatalog.provider? catalog providerId with
@@ -2277,6 +2362,7 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
   assertTrue (rendered.contains "fireworks/accounts/fireworks/models/glm-5p2") "expected Fireworks OpenAI-compatible model"
   assertTrue (rendered.contains "anthropic/claude-sonnet-4-5") "expected Anthropic model"
   assertTrue (rendered.contains "google/gemini-2.5-flash") "expected Google Gemini model"
+  assertTrue (rendered.contains "google-vertex/gemini-2.5-flash") "expected Google Vertex model"
   match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.anthropicOAuthTokenEnv with
   | some provider =>
       assertTrue (provider.id == LeanAgent.Models.anthropicProviderId) "expected Anthropic OAuth token env"
@@ -2286,11 +2372,17 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
       assertTrue (provider.id == LeanAgent.Models.googleProviderId) "expected Google provider by env"
       assertTrue (provider.defaultModel == LeanAgent.Models.googleDefaultModel) "expected Google default model"
   | none => fail "expected Google provider by env"
+  match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.googleVertexApiKeyEnv with
+  | some provider =>
+      assertTrue (provider.id == LeanAgent.Models.googleVertexProviderId) "expected Google Vertex provider by env"
+      assertTrue (provider.defaultModel == LeanAgent.Models.googleVertexDefaultModel)
+        "expected Google Vertex default model"
+  | none => fail "expected Google Vertex provider by env"
 
 def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
   let collection ← LeanAgent.Models.createDefaultModels
   let providers ← collection.getProviders
-  assertTrue (providers.size == 10) "expected default provider family"
+  assertTrue (providers.size == 11) "expected default provider family"
   match ← collection.getModel? LeanAgent.Models.openRouterProviderId LeanAgent.Models.openRouterDefaultModel with
   | some model =>
       assertTrue (model.api == "openai-completions") "expected OpenRouter OpenAI-compatible API"
@@ -2311,6 +2403,12 @@ def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
       assertTrue model.reasoning "expected Google reasoning metadata"
       assertTrue (model.input.contains "image") "expected Google image input metadata"
   | none => fail "expected Google model in default runtime collection"
+  match ← collection.getModel? LeanAgent.Models.googleVertexProviderId LeanAgent.Models.googleVertexDefaultModel with
+  | some model =>
+      assertTrue (model.api == LeanAgent.AI.Api.GoogleVertex.api) "expected Google Vertex API"
+      assertTrue model.reasoning "expected Google Vertex reasoning metadata"
+      assertTrue (model.baseUrl == LeanAgent.Models.googleVertexBaseUrl) "expected Google Vertex placeholder base URL"
+  | none => fail "expected Google Vertex model in default runtime collection"
 
 def assertProviderFactoryMatchesInfo (mkProvider : IO LeanAgent.Models.Provider)
     (info : LeanAgent.Models.ProviderInfo) : IO Unit := do
@@ -2345,6 +2443,7 @@ def testOpenAICompatibleProviderFactoriesMatchCatalog : IO Unit := do
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Fireworks.provider LeanAgent.Models.fireworksProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Anthropic.provider LeanAgent.Models.anthropicProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Google.provider LeanAgent.Models.googleProviderInfo
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.GoogleVertex.provider LeanAgent.Models.googleVertexProviderInfo
 
 def testLegacySelectionRejectsAnthropicProvider : IO Unit := do
   match ← LeanAgent.Models.resolveSelection { apiKeyEnv := some LeanAgent.Models.anthropicApiKeyEnv } with
@@ -2357,6 +2456,11 @@ def testLegacySelectionRejectsAnthropicProvider : IO Unit := do
   | .error err =>
       assertTrue (err.contains "legacy CLI path currently supports only openai-completions")
         "expected unsupported Google provider API error"
+  match ← LeanAgent.Models.resolveSelection { apiKeyEnv := some LeanAgent.Models.googleVertexApiKeyEnv } with
+  | .ok _ => fail "expected legacy CLI selection to reject Google Vertex"
+  | .error err =>
+      assertTrue (err.contains "legacy CLI path currently supports only openai-completions")
+        "expected unsupported Google Vertex provider API error"
 
 def fakeAuthContext : LeanAgent.AI.Auth.AuthContext :=
   { env := fun name =>
@@ -3146,6 +3250,8 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
     "expected all providers to include Anthropic catalog provider"
   assertTrue (providerIds.contains LeanAgent.Models.googleProviderId)
     "expected all providers to include Google catalog provider"
+  assertTrue (providerIds.contains LeanAgent.Models.googleVertexProviderId)
+    "expected all providers to include Google Vertex catalog provider"
   assertTrue (providerIds.contains LeanAgent.AI.Providers.CloudflareWorkersAI.providerId)
     "expected all providers to include Cloudflare Workers AI"
   assertTrue (providerIds.contains LeanAgent.AI.Providers.CloudflareAIGateway.providerId)
@@ -3169,6 +3275,12 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
       assertTrue (model.api == LeanAgent.AI.Api.GoogleGenerativeAI.api) "expected Google builtin model"
   | none => fail "expected Google builtin model lookup"
   match LeanAgent.AI.Providers.All.getBuiltinModel?
+    LeanAgent.Models.googleVertexProviderId
+    LeanAgent.Models.googleVertexDefaultModel with
+  | some model =>
+      assertTrue (model.api == LeanAgent.AI.Api.GoogleVertex.api) "expected Google Vertex builtin model"
+  | none => fail "expected Google Vertex builtin model lookup"
+  match LeanAgent.AI.Providers.All.getBuiltinModel?
     LeanAgent.AI.Providers.CloudflareAIGateway.providerId
     "gpt-4o-mini" with
   | some model =>
@@ -3176,7 +3288,7 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
   | none => fail "expected Cloudflare AI Gateway builtin model lookup"
   let collection ← LeanAgent.AI.Providers.All.builtinModels none fakeCloudflareAuthContext
   let providers ← collection.getProviders
-  assertTrue (providers.size == 12) "expected implemented builtin text providers"
+  assertTrue (providers.size == 13) "expected implemented builtin text providers"
   match ← collection.getProvider? LeanAgent.AI.Providers.CloudflareWorkersAI.providerId with
   | some _ => pure ()
   | none => fail "expected Workers AI provider in builtin collection"
@@ -3204,6 +3316,9 @@ def testEnvApiKeysProviderMap : IO Unit := do
   assertTrue
     (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "google" == some #[LeanAgent.Models.googleApiKeyEnv])
     "expected Google Gemini env var"
+  assertTrue
+    (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "google-vertex" == some #[LeanAgent.Models.googleVertexApiKeyEnv])
+    "expected Google Vertex env var"
   assertTrue
     (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "unknown-provider" == none)
     "expected unknown provider to have no env vars"
@@ -4428,6 +4543,22 @@ def httpServerScript : String :=
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
     , "            return"
+    , "        if self.path == '/vertex/v1/projects/project-1/locations/us-central1/publishers/google/models/gemini-2.5-flash:streamGenerateContent?alt=sse':"
+    , "            request = json.loads(body)"
+    , "            contents = request.get('contents') or []"
+    , "            first_parts = contents[0].get('parts') if contents else []"
+    , "            first_text = first_parts[0].get('text') if first_parts else ''"
+    , "            text = '|'.join([first_text or '', self.headers.get('Authorization') or '', self.headers.get('x-goog-api-key') or '', self.headers.get('X-Trace') or ''])"
+    , "            payload = ("
+    , "                'data: ' + json.dumps({'responseId': 'resp_vertex_http', 'modelVersion': 'gemini-2.5-flash', 'candidates': [{'content': {'parts': [{'text': text[:12]}]}}], 'usageMetadata': {'promptTokenCount': 5, 'cachedContentTokenCount': 2}}) + '\\n\\n' +"
+    , "                'data: ' + json.dumps({'candidates': [{'content': {'parts': [{'text': text[12:]}]}, 'finishReason': 'STOP'}], 'usageMetadata': {'promptTokenCount': 5, 'cachedContentTokenCount': 2, 'candidatesTokenCount': 3, 'thoughtsTokenCount': 0, 'totalTokenCount': 8}}) + '\\n\\n'"
+    , "            ).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'text/event-stream')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/anthropic-stream/v1/messages':"
     , "            request = json.loads(body)"
     , "            text = '|'.join([request.get('model') or '', str(request.get('stream')), self.headers.get('x-api-key') or '', self.headers.get('anthropic-version') or '', self.headers.get('X-Trace') or ''])"
@@ -5181,6 +5312,42 @@ def testGoogleGenerativeAIStreamWithOptionsLocal : IO Unit := do
         | _ => false)
       "expected Google local text delta"
 
+def testGoogleVertexStreamWithOptionsLocal : IO Unit := do
+  let port := 18099
+  withHttpServer port do
+    let stream ← LeanAgent.AI.Api.GoogleVertex.completeStreamWithOptions
+      { apiKey := LeanAgent.AI.Api.GoogleVertex.vertexCredentialsMarker
+        baseUrl := s!"http://127.0.0.1:{port}/vertex"
+        timeoutSeconds := 5
+        connectTimeoutSeconds := 5
+        noProxy := some "*"
+        userAgent := "lean-agent-test/0.1.0"
+      }
+      googleVertexModelRef
+      #["text", "image"]
+      true
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+      { project := some "project-1"
+        location := some "us-central1"
+        maxTokens := some 64
+        headers := #[("Authorization", some "Bearer adc-token"), ("X-Trace", some "trace-vertex")]
+      }
+    assertTrue stream.isComplete "expected completed Vertex stream"
+    assertTrue (stream.result.responseId == some "resp_vertex_http") "expected Vertex response id"
+    assertTrue
+      (LeanAgent.AI.contentPlainText stream.result.content == "hello|Bearer adc-token||trace-vertex")
+      "expected Vertex user text, bearer auth, omitted API key header, and custom header"
+    assertTrue (stream.result.usage.input == 3) "expected Vertex local cached input subtraction"
+    assertTrue (stream.result.usage.output == 3) "expected Vertex local output usage"
+    assertTrue (stream.result.usage.cacheRead == 2) "expected Vertex local cache read"
+    assertTrue
+      (stream.events.any fun
+        | .textDelta _ "hello|Bearer" _ => true
+        | _ => false)
+      "expected Vertex local text delta"
+
 def testCompatAzureOpenAIResponsesBuiltinDispatch : IO Unit := do
   let port := 18095
   withHttpServer port do
@@ -5275,6 +5442,8 @@ def main : IO UInt32 := do
     testGoogleGenerativeAIRequestPayload
     testGoogleGenerativeAIParsesResponse
     testGoogleGenerativeAIParsesStreamingEvents
+    testGoogleVertexUrlsAndHeaders
+    testGoogleVertexAuthResolution
     testGitHubCopilotDynamicHeaders
     testOpenAIResponsesRequestPayload
     testOpenAIResponsesRequestUsesThinkingLevelMap
@@ -5410,6 +5579,7 @@ def main : IO UInt32 := do
     testAzureOpenAIResponsesStreamWithOptionsLocal
     testAnthropicMessagesStreamWithOptionsLocal
     testGoogleGenerativeAIStreamWithOptionsLocal
+    testGoogleVertexStreamWithOptionsLocal
     testCompatAzureOpenAIResponsesBuiltinDispatch
     testOpenAICompletionsProviderErrorDiagnostics
     IO.println "lean-agent tests passed"
