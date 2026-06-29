@@ -751,6 +751,33 @@ def testValidationToolLookupAndRequired : IO Unit := do
   | .ok _ => fail "expected unknown tool failure"
   | .error err => assertTrue (err.contains "Tool \"write\" not found") "expected unknown tool message"
 
+def testSanitizeUnicodeSurrogates : IO Unit := do
+  let text := "Hello 🙈 World"
+  assertTrue
+    (LeanAgent.AI.Util.SanitizeUnicode.sanitizeSurrogates text == text)
+    "expected valid emoji string to be preserved"
+  let high := UInt32.ofNat 0xd83d
+  let low := UInt32.ofNat 0xde48
+  let units :=
+    [ UInt32.ofNat (Char.toNat 'A')
+    , high
+    , UInt32.ofNat (Char.toNat 'B')
+    , low
+    , high
+    , low
+    , UInt32.ofNat (Char.toNat 'C')
+    ]
+  let sanitized := LeanAgent.AI.Util.SanitizeUnicode.sanitizeSurrogateCodeUnits units
+  assertTrue
+    (sanitized ==
+      [ UInt32.ofNat (Char.toNat 'A')
+      , UInt32.ofNat (Char.toNat 'B')
+      , high
+      , low
+      , UInt32.ofNat (Char.toNat 'C')
+      ])
+    "expected unpaired surrogate code units to be removed and valid pair preserved"
+
 def overflowAssistantMessage
     (stopReason : LeanAgent.AI.StopReason)
     (errorMessage : Option String := none)
@@ -1564,6 +1591,7 @@ def main : IO UInt32 := do
     testValidationCoercesPlainJsonSchemas
     testValidationRejectsInvalidCoercions
     testValidationToolLookupAndRequired
+    testSanitizeUnicodeSurrogates
     testOverflowClassifiesProviderErrors
     testOverflowClassifiesContextWindowSignals
     testRetryClassifiesAssistantErrors
