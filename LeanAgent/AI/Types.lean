@@ -160,6 +160,20 @@ structure ToolCall where
   thoughtSignature : Option String := none
 deriving BEq
 
+structure DiagnosticErrorInfo where
+  name : Option String := none
+  message : String
+  stack : Option String := none
+  code : Option Lean.Json := none
+deriving BEq
+
+structure AssistantMessageDiagnostic where
+  type : String
+  timestamp : Nat
+  error : Option DiagnosticErrorInfo := none
+  details : Option Lean.Json := none
+deriving BEq
+
 inductive ContentBlock where
   | text (content : TextContent)
   | thinking (content : ThinkingContent)
@@ -203,6 +217,7 @@ structure AssistantMessage where
   usage : Usage := Usage.empty
   stopReason : StopReason := .stop
   errorMessage : Option String := none
+  diagnostics : Array AssistantMessageDiagnostic := #[]
   timestamp : Nat
 deriving BEq
 
@@ -280,6 +295,54 @@ def optNatField (key : String) : Option Nat → List (String × Lean.Json)
 def optJsonField (key : String) : Option Lean.Json → List (String × Lean.Json)
   | some value => [(key, value)]
   | none => []
+
+def optJsonArrayField (key : String) (items : Array Lean.Json) : List (String × Lean.Json) :=
+  if items.isEmpty then
+    []
+  else
+    [(key, LeanAgent.Json.arr items)]
+
+def diagnosticErrorInfoToJson (info : DiagnosticErrorInfo) : Lean.Json :=
+  LeanAgent.Json.obj
+    ([("message", LeanAgent.Json.str info.message)]
+      ++ optStringField "name" info.name
+      ++ optStringField "stack" info.stack
+      ++ optJsonField "code" info.code)
+
+def diagnosticErrorInfoFromJson (json : Lean.Json) : Except String DiagnosticErrorInfo := do
+  pure
+    { name := (← LeanAgent.Json.optionalString json "name")
+      message := (← (← json.getObjVal? "message").getStr?)
+      stack := (← LeanAgent.Json.optionalString json "stack")
+      code := LeanAgent.Json.optVal? json "code"
+    }
+
+def assistantMessageDiagnosticToJson (diagnostic : AssistantMessageDiagnostic) : Lean.Json :=
+  LeanAgent.Json.obj
+    ([ ("type", LeanAgent.Json.str diagnostic.type)
+     , ("timestamp", LeanAgent.Json.nat diagnostic.timestamp)
+     ] ++ optJsonField "error" (diagnostic.error.map diagnosticErrorInfoToJson)
+       ++ optJsonField "details" diagnostic.details)
+
+def assistantMessageDiagnosticFromJson (json : Lean.Json) : Except String AssistantMessageDiagnostic := do
+  let error ←
+    match LeanAgent.Json.optVal? json "error" with
+    | none => pure none
+    | some value =>
+        let parsed ← diagnosticErrorInfoFromJson value
+        pure (some parsed)
+  pure
+    { type := (← (← json.getObjVal? "type").getStr?)
+      timestamp := (← (← json.getObjVal? "timestamp").getNat?)
+      error := error
+      details := LeanAgent.Json.optVal? json "details"
+    }
+
+def assistantMessageDiagnosticsFromJson? (json : Lean.Json) :
+    Except String (Array AssistantMessageDiagnostic) := do
+  match LeanAgent.Json.optVal? json "diagnostics" with
+  | none => pure #[]
+  | some value => (← value.getArr?).mapM assistantMessageDiagnosticFromJson
 
 def textContentToJson (content : TextContent) : Lean.Json :=
   LeanAgent.Json.obj
@@ -419,7 +482,8 @@ def assistantMessageToJson (message : AssistantMessage) : Lean.Json :=
      , ("timestamp", LeanAgent.Json.nat message.timestamp)
      ] ++ optStringField "responseModel" message.responseModel
        ++ optStringField "responseId" message.responseId
-       ++ optStringField "errorMessage" message.errorMessage)
+       ++ optStringField "errorMessage" message.errorMessage
+       ++ optJsonArrayField "diagnostics" (message.diagnostics.map assistantMessageDiagnosticToJson))
 
 def toolResultMessageToJson (message : ToolResultMessage) : Lean.Json :=
   LeanAgent.Json.obj
@@ -469,6 +533,7 @@ def messageFromJson (json : Lean.Json) : Except String Message := do
           usage := (← usageFromJson (← json.getObjVal? "usage"))
           stopReason := stopReason
           errorMessage := (← LeanAgent.Json.optionalString json "errorMessage")
+          diagnostics := (← assistantMessageDiagnosticsFromJson? json)
           timestamp := (← (← json.getObjVal? "timestamp").getNat?)
         })
   | other => throw s!"unknown message role: {other}"

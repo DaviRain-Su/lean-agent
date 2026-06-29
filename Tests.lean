@@ -344,6 +344,17 @@ def testOpenAICompletionsPromptCacheEnvLongRetention : IO Unit := do
     (LeanAgent.Json.optVal? json "prompt_cache_retention" == some (LeanAgent.Json.str "24h"))
     "expected env 24h prompt cache retention"
 
+def testDiagnosticsExtractsProviderError : IO Unit := do
+  let body := "{\"error\":{\"message\":\"rate limit exceeded\",\"type\":\"rate_limit_error\",\"code\":\"rate_limit\"}}"
+  let info := LeanAgent.AI.Util.Diagnostics.providerErrorInfoFromBody body
+  assertTrue (info.message == "rate limit exceeded") "expected provider error message"
+  assertTrue (info.name == some "rate_limit_error") "expected provider error type"
+  assertTrue (info.code == some (LeanAgent.Json.str "rate_limit")) "expected provider error code"
+  let rendered := LeanAgent.AI.Util.Diagnostics.providerHttpErrorMessage 429 body
+  assertTrue (rendered.contains "provider HTTP 429") "expected provider HTTP status"
+  assertTrue (rendered.contains "rate limit exceeded") "expected extracted provider message"
+  assertTrue (rendered.contains "type=rate_limit_error") "expected extracted provider type"
+
 def retryAssistantMessage (errorMessage : Option String) : LeanAgent.AI.AssistantMessage :=
   { content := #[]
     api := "fake"
@@ -577,6 +588,17 @@ def testAIMessageJsonRoundTrip : IO Unit := do
       totalTokens := 20
       cost := { input := 0.1, output := 0.2, cacheRead := 0.03, cacheWrite := 0.04, total := 0.37 }
     }
+  let diagnostic : LeanAgent.AI.AssistantMessageDiagnostic :=
+    { type := "provider_error"
+      timestamp := 122
+      error :=
+        some
+          { name := some "RateLimitError"
+            message := "rate limit exceeded"
+            code := some (LeanAgent.Json.str "rate_limit")
+          }
+      details := some (LeanAgent.Json.obj [("status", LeanAgent.Json.nat 429)])
+    }
   let message : LeanAgent.AI.Message :=
     .assistant
       { content := #[LeanAgent.AI.text "hello", LeanAgent.AI.thinking "scratch"]
@@ -585,6 +607,7 @@ def testAIMessageJsonRoundTrip : IO Unit := do
         model := "deepseek-v4-flash"
         usage := usage
         stopReason := .stop
+        diagnostics := #[diagnostic]
         timestamp := 123
       }
   match LeanAgent.AI.messageFromJson (LeanAgent.AI.messageToJson message) with
@@ -592,6 +615,7 @@ def testAIMessageJsonRoundTrip : IO Unit := do
       assertTrue (parsed.provider == "deepseek") "expected provider to round-trip"
       assertTrue (parsed.usage.totalTokens == 20) "expected usage to round-trip"
       assertTrue (LeanAgent.AI.contentPlainText parsed.content == "hello\nscratch") "expected text content"
+      assertTrue (parsed.diagnostics.size == 1) "expected diagnostics to round-trip"
   | .ok _ => fail "expected assistant message"
   | .error err => fail s!"message round-trip failed: {err}"
 
@@ -775,6 +799,14 @@ def httpServerScript : String :=
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
     , "            return"
+    , "        if self.path == '/diagnostic-openai/chat/completions':"
+    , "            payload = json.dumps({'error': {'message': 'rate limit exceeded', 'type': 'rate_limit_error', 'code': 'rate_limit'}}).encode('utf-8')"
+    , "            self.send_response(429)"
+    , "            self.send_header('Content-Type', 'application/json')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/large':"
     , "            payload = b'x' * 1024"
     , "            self.send_response(200)"
@@ -905,6 +937,29 @@ def testOpenAICompletionsRetriesTransientHttpFailure : IO Unit := do
       }
     assertTrue (response.content == "retried") "expected retried provider response"
 
+def testOpenAICompletionsProviderErrorDiagnostics : IO Unit := do
+  let port := 18083
+  withHttpServer port do
+    let failed ←
+      try
+        let _ ← LeanAgent.AI.Api.OpenAICompletions.completeWithOptions
+          { apiKey := "test-key"
+            baseUrl := s!"http://127.0.0.1:{port}/diagnostic-openai"
+            timeoutSeconds := 5
+            connectTimeoutSeconds := 5
+            noProxy := some "*"
+            userAgent := "lean-agent-test/0.1.0"
+          }
+          (basicProviderRequest)
+        pure false
+      catch err =>
+        let message := err.toString
+        assertTrue (message.contains "provider HTTP 429") "expected provider status in error"
+        assertTrue (message.contains "rate limit exceeded") "expected provider message in error"
+        assertTrue (message.contains "type=rate_limit_error") "expected provider type in error"
+        pure true
+    assertTrue failed "expected provider diagnostic error"
+
 def main : IO UInt32 := do
   try
     testAgentLoopReadsFile
@@ -926,6 +981,7 @@ def main : IO UInt32 := do
     testOpenAICompletionsPromptCacheClampsKey
     testOpenAICompletionsPromptCacheNoneOmitsFields
     testOpenAICompletionsPromptCacheEnvLongRetention
+    testDiagnosticsExtractsProviderError
     testRetryClassifiesAssistantErrors
     testRetryWithRetriesSucceedsAfterTransientFailures
     testRetryWithRetriesStopsOnNonRetryableFailure
@@ -949,6 +1005,7 @@ def main : IO UInt32 := do
     testHttpClientLocalPost
     testHttpClientResponseLimit
     testOpenAICompletionsRetriesTransientHttpFailure
+    testOpenAICompletionsProviderErrorDiagnostics
     IO.println "lean-agent tests passed"
     pure 0
   catch err =>

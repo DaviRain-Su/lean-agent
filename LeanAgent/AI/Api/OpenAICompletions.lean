@@ -1,6 +1,7 @@
 import Lean
 import LeanAgent.AI.Api.OpenAIPromptCache
 import LeanAgent.AI.Types
+import LeanAgent.AI.Util.Diagnostics
 import LeanAgent.AI.Util.Retry
 import LeanAgent.Core
 import LeanAgent.Http
@@ -210,7 +211,7 @@ def runHttpJson (config : OpenAICompatibleConfig) (payload : Lean.Json) : IO Str
     }
     payload.compress
   if response.status < 200 || response.status >= 300 then
-    throw (IO.userError s!"provider HTTP {response.status}: {response.body}")
+    throw (IO.userError (LeanAgent.AI.Util.Diagnostics.providerHttpErrorMessage response.status response.body))
   pure response.body
 
 def parseMaybeContent (message : Lean.Json) : String :=
@@ -245,12 +246,8 @@ def parseToolCalls (message : Lean.Json) : Except String (Array LeanAgent.ToolCa
 
 def parseChatCompletion (raw : String) : Except String LeanAgent.ProviderResponse := do
   let json ← Lean.Json.parse raw
-  if let some err := LeanAgent.Json.optVal? json "error" then
-    let message :=
-      match LeanAgent.Json.optVal? err "message" with
-      | some (Lean.Json.str text) => text
-      | _ => err.compress
-    throw message
+  if (LeanAgent.Json.optVal? json "error").isSome then
+    throw (LeanAgent.AI.Util.Diagnostics.providerParseErrorMessage json.compress)
   let choices ← (← json.getObjVal? "choices").getArr?
   let choice ←
     match choices[0]? with
