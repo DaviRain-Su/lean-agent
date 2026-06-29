@@ -1984,6 +1984,24 @@ def testMistralConversationsRequestPayloadAndHeaders : IO Unit := do
   assertTrue (headerValueCaseInsensitive? overrideHeaders "x-affinity" == some "caller-session")
     "expected caller-owned x-affinity"
 
+def testMistralToolChoiceOptionVariants : IO Unit := do
+  let context : LeanAgent.AI.Context :=
+    { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }] }
+  let assertScalarChoice
+      (choice : LeanAgent.AI.Api.MistralConversations.ToolChoice)
+      (expected : String) : IO Unit := do
+    let payload := LeanAgent.AI.Api.MistralConversations.requestToJsonWithOptions
+      mistralModelRef
+      #["text"]
+      context
+      { toolChoice := some choice }
+    assertTrue (jsonStringField? payload "tool_choice" == some expected)
+      s!"expected Mistral scalar tool_choice {expected}"
+  assertScalarChoice .auto "auto"
+  assertScalarChoice .none "none"
+  assertScalarChoice .any "any"
+  assertScalarChoice .required "required"
+
 def testMistralReasoningAndPromptCacheOptions : IO Unit := do
   let small2603 ←
     match LeanAgent.Models.mistralModels.find? (fun model => model.id == "mistral-small-2603") with
@@ -2028,6 +2046,13 @@ def testMistralReasoningAndPromptCacheOptions : IO Unit := do
     }
   assertTrue (jsonStringField? noCachePayload "prompt_cache_key" == none)
     "expected disabled Mistral prompt cache"
+  let noCacheHeaders := LeanAgent.AI.Api.MistralConversations.requestHeaders
+    { apiKey := "mistral-key" }
+    { sessionId := some "session-123"
+      cacheRetention := some .none
+    }
+  assertTrue (headerValueCaseInsensitive? noCacheHeaders "x-affinity" == none)
+    "expected disabled Mistral prompt cache affinity header"
 
 def testMistralConversationsParsesResponse : IO Unit := do
   let raw :=
@@ -7254,6 +7279,7 @@ def main : IO UInt32 := do
     testGoogleVertexUrlsAndHeaders
     testGoogleVertexAuthResolution
     testMistralConversationsRequestPayloadAndHeaders
+    testMistralToolChoiceOptionVariants
     testMistralReasoningAndPromptCacheOptions
     testMistralConversationsParsesResponse
     testMistralConversationsParsesStreamingEvents
