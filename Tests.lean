@@ -6832,6 +6832,30 @@ def testCompatOpenAICodexResponsesBuiltinDispatch : IO Unit := do
     assertTrue (stream.result.api == LeanAgent.AI.Api.OpenAICodexResponses.api)
       "expected compat Codex runtime api"
 
+def testCompatOpenAICodexResponsesTypedLegacyAliasLocal : IO Unit := do
+  let port := 18104
+  withHttpServer port do
+    let model :=
+      { LeanAgent.Models.openAICodexModel "gpt-5.5" "GPT-5.5" 5.0 30.0 0.5 0.0 272000 128000 with
+        baseUrl := s!"http://127.0.0.1:{port}/codex-provider"
+      }
+    let context : LeanAgent.AI.Context :=
+      { systemPrompt := some "codex system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+    let stream ← LeanAgent.AI.Compat.Aliases.streamOpenAICodexResponses
+      model
+      context
+      { apiKey := some fakeOpenAICodexJwt
+        sessionId := some "codex-session"
+        reasoningEffort := some (.level .minimal)
+        textVerbosity := some "low"
+      }
+    assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "codex-ok")
+      "expected compat OpenAI Codex Responses typed alias to preserve provider-specific options"
+    assertTrue (stream.result.api == LeanAgent.AI.Api.OpenAICodexResponses.api)
+      "expected typed compat Codex runtime api"
+
 def testOpenAIResponsesCompleteWithOptionsLocal : IO Unit := do
   let port := 18088
   withHttpServer port do
@@ -7513,6 +7537,7 @@ def main : IO UInt32 := do
     testCompatMistralTypedLegacyAliasLocal
     testCompatAzureOpenAIResponsesBuiltinDispatch
     testCompatOpenAICodexResponsesBuiltinDispatch
+    testCompatOpenAICodexResponsesTypedLegacyAliasLocal
     testOpenAICompletionsProviderErrorDiagnostics
     IO.println "lean-agent tests passed"
     pure 0

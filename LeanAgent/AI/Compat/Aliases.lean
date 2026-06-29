@@ -21,6 +21,11 @@ abbrev AzureOpenAIResponsesStream :=
     LeanAgent.AI.Api.AzureOpenAIResponses.AzureOpenAIResponsesOptions →
       IO LeanAgent.AI.AssistantMessageEventStream
 
+abbrev OpenAICodexResponsesStream :=
+  LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
+    LeanAgent.AI.Api.OpenAICodexResponses.OpenAICodexResponsesOptions →
+      IO LeanAgent.AI.AssistantMessageEventStream
+
 def streamForApi (api : String) : AliasStream :=
   fun model context options => LeanAgent.AI.Compat.streamSimpleWithApi api model context options
 
@@ -75,6 +80,34 @@ def streamAzureOpenAIResponsesWithOptions : AzureOpenAIResponsesStream :=
             baseUrl := model.baseUrl
           }
         LeanAgent.AI.Api.AzureOpenAIResponses.completeStreamWithOptions
+          config
+          model.toResponsesModel
+          context
+          options
+
+def withEnvApiKeyForOpenAICodexResponses
+    (model : LeanAgent.Models.ModelInfo)
+    (options : LeanAgent.AI.Api.OpenAICodexResponses.OpenAICodexResponsesOptions) :
+    IO LeanAgent.AI.Api.OpenAICodexResponses.OpenAICodexResponsesOptions := do
+  let simple ← LeanAgent.AI.Compat.withEnvApiKey model options.toSimpleStreamOptions
+  pure { options with apiKey := simple.apiKey }
+
+def streamOpenAICodexResponsesWithOptions : OpenAICodexResponsesStream :=
+  fun model context options => do
+    LeanAgent.AI.Compat.ensureApiMatches
+      { api := LeanAgent.AI.Api.OpenAICodexResponses.api
+        streams := LeanAgent.Models.openAICodexResponsesStreams
+      }
+      model
+    let options ← withEnvApiKeyForOpenAICodexResponses model options
+    match options.apiKey with
+    | none => throw (LeanAgent.Models.modelsError .auth s!"missing OAuth access token for provider {model.provider}")
+    | some apiKey =>
+        let config : LeanAgent.AI.Api.OpenAICodexResponses.OpenAICodexResponsesConfig :=
+          { apiKey := apiKey
+            baseUrl := model.baseUrl
+          }
+        LeanAgent.AI.Api.OpenAICodexResponses.completeStreamWithOptions
           config
           model.toResponsesModel
           context
@@ -144,11 +177,11 @@ def streamMistral : MistralStream :=
 def streamSimpleMistral : AliasStream :=
   streamForApi "mistral-conversations"
 
-def streamOpenAICodexResponses : AliasStream :=
-  streamForApi "openai-codex-responses"
+def streamOpenAICodexResponses : OpenAICodexResponsesStream :=
+  streamOpenAICodexResponsesWithOptions
 
 def streamSimpleOpenAICodexResponses : AliasStream :=
-  streamOpenAICodexResponses
+  streamForApi "openai-codex-responses"
 
 def streamOpenAICompletions : AliasStream :=
   streamForApi "openai-completions"
