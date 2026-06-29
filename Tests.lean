@@ -2432,6 +2432,32 @@ def testOpenAICompatibleStreamsUsesStreamingRuntime : IO Unit := do
     assertTrue (stream.result.api == "openai-completions") "expected runtime api"
     assertTrue (stream.result.provider == LeanAgent.Models.deepSeekProviderId) "expected runtime provider"
 
+def testOpenAICompatibleStreamsApplyModelCost : IO Unit := do
+  let port := 18094
+  withHttpServer port do
+    let model :=
+      { LeanAgent.Models.deepSeekV4Flash with
+        baseUrl := s!"http://127.0.0.1:{port}/runtime-stream-openai"
+        cost := { input := 1000000.0, output := 2000000.0, cacheRead := 500000.0, cacheWrite := 3000000.0 }
+      }
+    let context : LeanAgent.AI.Context :=
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+    let stream ← LeanAgent.Models.openAICompatibleStreams.streamSimple
+      model
+      context
+      { apiKey := some "test-key" }
+    assertTrue (stream.result.usage.input == 4) "expected OpenAI-compatible input usage"
+    assertTrue (stream.result.usage.output == 2) "expected OpenAI-compatible output usage"
+    assertTrue (stream.result.usage.cost.input == 4.0) "expected input cost from model rate"
+    assertTrue (stream.result.usage.cost.output == 4.0) "expected output cost from model rate"
+    assertTrue (stream.result.usage.cost.total == 8.0) "expected total cost from model rates"
+    match stream.events.back? with
+    | some (.done _ message) =>
+        assertTrue (message.usage.cost.total == 8.0) "expected final event cost"
+    | _ => fail "expected final done event"
+
 def testOpenAICompatibleStreamsClampMaxTokens : IO Unit := do
   let port := 18091
   withHttpServer port do
@@ -2736,6 +2762,7 @@ def main : IO UInt32 := do
     testOpenAICompletionsPayloadAndResponseHooks
     testOpenAICompletionsStreamWithOptionsLocal
     testOpenAICompatibleStreamsUsesStreamingRuntime
+    testOpenAICompatibleStreamsApplyModelCost
     testOpenAICompatibleStreamsClampMaxTokens
     testOpenAIResponsesCompleteWithOptionsLocal
     testOpenAIResponsesPayloadAndResponseHooks

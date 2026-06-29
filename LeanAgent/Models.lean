@@ -549,6 +549,38 @@ def calculateCost (model : ModelInfo) (usage : LeanAgent.AI.Usage) : LeanAgent.A
     total := input + output + cacheRead + cacheWrite
   }
 
+def applyUsageCost (model : ModelInfo) (usage : LeanAgent.AI.Usage) : LeanAgent.AI.Usage :=
+  { usage with cost := calculateCost model usage }
+
+def applyUsageCostToMessage (model : ModelInfo) (message : LeanAgent.AI.AssistantMessage) :
+    LeanAgent.AI.AssistantMessage :=
+  { message with usage := applyUsageCost model message.usage }
+
+def mapEventMessage
+    (f : LeanAgent.AI.AssistantMessage → LeanAgent.AI.AssistantMessage) :
+    LeanAgent.AI.AssistantMessageEvent → LeanAgent.AI.AssistantMessageEvent
+  | .start snapshot => .start (f snapshot)
+  | .textStart index snapshot => .textStart index (f snapshot)
+  | .textDelta index delta snapshot => .textDelta index delta (f snapshot)
+  | .textEnd index content snapshot => .textEnd index content (f snapshot)
+  | .thinkingStart index snapshot => .thinkingStart index (f snapshot)
+  | .thinkingDelta index delta snapshot => .thinkingDelta index delta (f snapshot)
+  | .thinkingEnd index content snapshot => .thinkingEnd index content (f snapshot)
+  | .toolCallStart index snapshot => .toolCallStart index (f snapshot)
+  | .toolCallDelta index delta snapshot => .toolCallDelta index delta (f snapshot)
+  | .toolCallEnd index call snapshot => .toolCallEnd index call (f snapshot)
+  | .done reason message => .done reason (f message)
+  | .error reason message => .error reason (f message)
+
+def applyUsageCostToStream
+    (model : ModelInfo)
+    (stream : LeanAgent.AI.AssistantMessageEventStream) :
+    LeanAgent.AI.AssistantMessageEventStream :=
+  let update := applyUsageCostToMessage model
+  { events := stream.events.map (mapEventMessage update)
+    finalResult := update stream.finalResult
+  }
+
 def legacyToolFromAITool (tool : LeanAgent.AI.Tool) : AgentTool :=
   { name := tool.name
     description := tool.description
@@ -594,12 +626,13 @@ def openAICompatibleStreams : ProviderStreams :=
               baseUrl := model.baseUrl
             }
           let request := contextToProviderRequest model context
-          LeanAgent.AI.Api.OpenAICompletions.streamWithOptions
+          let stream ← LeanAgent.AI.Api.OpenAICompletions.streamWithOptions
             config
             request
             model.api
             model.provider
             (LeanAgent.AI.Api.OpenAICompletions.optionsFromSimple options)
+          pure (applyUsageCostToStream model stream)
   }
 
 def authForProviderInfo (info : ProviderInfo) : LeanAgent.AI.Auth.ProviderAuth :=
