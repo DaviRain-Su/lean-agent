@@ -2640,6 +2640,7 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
   let expectedProviders :=
     #[ LeanAgent.Models.deepSeekProviderId
      , LeanAgent.Models.openAIProviderId
+     , LeanAgent.Models.azureOpenAIResponsesProviderId
      , LeanAgent.Models.openRouterProviderId
      , LeanAgent.Models.groqProviderId
      , LeanAgent.Models.xaiProviderId
@@ -2661,6 +2662,8 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
       assertTrue (provider.defaultModel == LeanAgent.Models.groqDefaultModel) "expected Groq default model"
   | none => fail "expected Groq provider by env"
   let rendered := LeanAgent.Models.renderCatalog catalog
+  assertTrue (rendered.contains "azure-openai-responses/gpt-4o-mini")
+    "expected Azure OpenAI Responses model"
   assertTrue (rendered.contains "openrouter/openai/gpt-oss-120b") "expected OpenRouter model"
   assertTrue (rendered.contains "fireworks/accounts/fireworks/models/glm-5p2") "expected Fireworks OpenAI-compatible model"
   assertTrue (rendered.contains "anthropic/claude-sonnet-4-5") "expected Anthropic model"
@@ -2682,6 +2685,13 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
       assertTrue (provider.defaultModel == LeanAgent.Models.googleVertexDefaultModel)
         "expected Google Vertex default model"
   | none => fail "expected Google Vertex provider by env"
+  match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.azureOpenAIResponsesApiKeyEnv with
+  | some provider =>
+      assertTrue (provider.id == LeanAgent.Models.azureOpenAIResponsesProviderId)
+        "expected Azure OpenAI Responses provider by env"
+      assertTrue (provider.defaultModel == LeanAgent.Models.azureOpenAIResponsesDefaultModel)
+        "expected Azure OpenAI Responses default model"
+  | none => fail "expected Azure OpenAI Responses provider by env"
   match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.mistralApiKeyEnv with
   | some provider =>
       assertTrue (provider.id == LeanAgent.Models.mistralProviderId) "expected Mistral provider by env"
@@ -2692,7 +2702,17 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
 def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
   let collection ← LeanAgent.Models.createDefaultModels
   let providers ← collection.getProviders
-  assertTrue (providers.size == 12) "expected default provider family"
+  assertTrue (providers.size == 13) "expected default provider family"
+  match ← collection.getModel?
+      LeanAgent.Models.azureOpenAIResponsesProviderId
+      LeanAgent.Models.azureOpenAIResponsesDefaultModel with
+  | some model =>
+      assertTrue (model.api == "azure-openai-responses")
+        "expected Azure OpenAI Responses API"
+      assertTrue (model.baseUrl == LeanAgent.Models.azureOpenAIResponsesBaseUrl)
+        "expected empty Azure base URL for env/resource resolution"
+      assertTrue (model.input.contains "image") "expected Azure default model image metadata"
+  | none => fail "expected Azure OpenAI Responses model in default runtime collection"
   match ← collection.getModel? LeanAgent.Models.openRouterProviderId LeanAgent.Models.openRouterDefaultModel with
   | some model =>
       assertTrue (model.api == "openai-completions") "expected OpenRouter OpenAI-compatible API"
@@ -2751,6 +2771,7 @@ def assertProviderFactoryMatchesInfo (mkProvider : IO LeanAgent.Models.Provider)
 def testOpenAICompatibleProviderFactoriesMatchCatalog : IO Unit := do
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.DeepSeek.provider LeanAgent.Models.deepSeekProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.OpenAI.provider LeanAgent.Models.openAIProviderInfo
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.AzureOpenAIResponses.provider LeanAgent.Models.azureOpenAIResponsesProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.OpenRouter.provider LeanAgent.Models.openRouterProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Groq.provider LeanAgent.Models.groqProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.XAI.provider LeanAgent.Models.xaiProviderInfo
@@ -2773,6 +2794,11 @@ def testLegacySelectionRejectsAnthropicProvider : IO Unit := do
   | .error err =>
       assertTrue (err.contains "legacy CLI path currently supports only openai-completions")
         "expected unsupported Google provider API error"
+  match ← LeanAgent.Models.resolveSelection { apiKeyEnv := some LeanAgent.Models.azureOpenAIResponsesApiKeyEnv } with
+  | .ok _ => fail "expected legacy CLI selection to reject Azure OpenAI Responses"
+  | .error err =>
+      assertTrue (err.contains "legacy CLI path currently supports only openai-completions")
+        "expected unsupported Azure OpenAI Responses provider API error"
   match ← LeanAgent.Models.resolveSelection { apiKeyEnv := some LeanAgent.Models.googleVertexApiKeyEnv } with
   | .ok _ => fail "expected legacy CLI selection to reject Google Vertex"
   | .error err =>
@@ -3570,6 +3596,8 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
     "expected all providers to include DeepSeek catalog provider"
   assertTrue (providerIds.contains LeanAgent.Models.anthropicProviderId)
     "expected all providers to include Anthropic catalog provider"
+  assertTrue (providerIds.contains LeanAgent.Models.azureOpenAIResponsesProviderId)
+    "expected all providers to include Azure OpenAI Responses catalog provider"
   assertTrue (providerIds.contains LeanAgent.Models.googleProviderId)
     "expected all providers to include Google catalog provider"
   assertTrue (providerIds.contains LeanAgent.Models.googleVertexProviderId)
@@ -3592,6 +3620,12 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
   | some model =>
       assertTrue (model.api == LeanAgent.AI.Api.AnthropicMessages.api) "expected Anthropic builtin model"
   | none => fail "expected Anthropic builtin model lookup"
+  match LeanAgent.AI.Providers.All.getBuiltinModel?
+    LeanAgent.Models.azureOpenAIResponsesProviderId
+    LeanAgent.Models.azureOpenAIResponsesDefaultModel with
+  | some model =>
+      assertTrue (model.api == "azure-openai-responses") "expected Azure OpenAI Responses builtin model"
+  | none => fail "expected Azure OpenAI Responses builtin model lookup"
   match LeanAgent.AI.Providers.All.getBuiltinModel?
     LeanAgent.Models.googleProviderId
     LeanAgent.Models.googleDefaultModel with
@@ -3618,7 +3652,7 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
   | none => fail "expected Cloudflare AI Gateway builtin model lookup"
   let collection ← LeanAgent.AI.Providers.All.builtinModels none fakeCloudflareAuthContext
   let providers ← collection.getProviders
-  assertTrue (providers.size == 14) "expected implemented builtin text providers"
+  assertTrue (providers.size == 15) "expected implemented builtin text providers"
   match ← collection.getProvider? LeanAgent.AI.Providers.CloudflareWorkersAI.providerId with
   | some _ => pure ()
   | none => fail "expected Workers AI provider in builtin collection"
@@ -3640,6 +3674,10 @@ def testEnvApiKeysProviderMap : IO Unit := do
   assertTrue
     (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "github-copilot" == some #["COPILOT_GITHUB_TOKEN"])
     "expected GitHub Copilot env var"
+  assertTrue
+    (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "azure-openai-responses" ==
+      some #[LeanAgent.Models.azureOpenAIResponsesApiKeyEnv])
+    "expected Azure OpenAI Responses env var"
   assertTrue
     (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "zai-coding-cn" == some #["ZAI_CODING_CN_API_KEY"])
     "expected ZAI Coding CN env var"

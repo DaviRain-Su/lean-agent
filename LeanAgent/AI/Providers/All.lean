@@ -1,5 +1,6 @@
 import LeanAgent.AI.Images
 import LeanAgent.AI.Providers.Anthropic
+import LeanAgent.AI.Providers.AzureOpenAIResponses
 import LeanAgent.AI.Providers.Cerebras
 import LeanAgent.AI.Providers.CloudflareAIGateway
 import LeanAgent.AI.Providers.CloudflareWorkersAI
@@ -52,6 +53,7 @@ def catalogProviders : IO (Array LeanAgent.Models.Provider) := do
      , ← LeanAgent.AI.Providers.Google.provider
      , ← LeanAgent.AI.Providers.GoogleVertex.provider
      , ← LeanAgent.AI.Providers.Mistral.provider
+     , ← LeanAgent.AI.Providers.AzureOpenAIResponses.provider
      ]
 
 def builtinProviders : IO (Array LeanAgent.Models.Provider) := do

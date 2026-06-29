@@ -26,6 +26,11 @@ def openAIModelEnv : String := "OPENAI_MODEL"
 def openAIDefaultModel : String := "gpt-4.1-mini"
 def openAIBaseUrl : String := "https://api.openai.com/v1"
 
+def azureOpenAIResponsesProviderId : String := "azure-openai-responses"
+def azureOpenAIResponsesApiKeyEnv : String := "AZURE_OPENAI_API_KEY"
+def azureOpenAIResponsesDefaultModel : String := "gpt-4o-mini"
+def azureOpenAIResponsesBaseUrl : String := ""
+
 def openRouterProviderId : String := "openrouter"
 def openRouterApiKeyEnv : String := "OPENROUTER_API_KEY"
 def openRouterDefaultModel : String := "openai/gpt-oss-120b"
@@ -543,6 +548,86 @@ def mistralModels : Array ModelInfo :=
    , mistralModel "pixtral-large-latest" "Pixtral Large (latest)" 2.0 6.0 0.2 0.0 128000 128000 false textImageInput
    ]
 
+def azureModel
+    (id name : String)
+    (inputCost outputCost cacheReadCost cacheWriteCost : Float)
+    (contextWindow maxTokens : Nat)
+    (reasoning : Bool := false)
+    (thinkingLevelMap : Array LeanAgent.AI.ThinkingLevelMapEntry := #[])
+    (input : Array String := #["text"]) : ModelInfo :=
+  { id := id
+    name := name
+    provider := azureOpenAIResponsesProviderId
+    api := "azure-openai-responses"
+    baseUrl := azureOpenAIResponsesBaseUrl
+    reasoning := reasoning
+    thinkingLevelMap := thinkingLevelMap
+    input := input
+    cost := cost inputCost outputCost cacheReadCost cacheWriteCost
+    contextWindow := contextWindow
+    maxTokens := maxTokens
+  }
+
+def azureThinkingOffMap : Array LeanAgent.AI.ThinkingLevelMapEntry :=
+  #[{ level := .off, mapped := none }]
+
+def azureThinkingOffXHighMap : Array LeanAgent.AI.ThinkingLevelMapEntry :=
+  #[ { level := .off, mapped := none }
+   , { level := .level .xhigh, mapped := some "xhigh" }
+   ]
+
+def azureGpt55ProThinkingMap : Array LeanAgent.AI.ThinkingLevelMapEntry :=
+  #[ { level := .off, mapped := none }
+   , { level := .level .xhigh, mapped := some "xhigh" }
+   , { level := .level .minimal, mapped := none }
+   , { level := .level .low, mapped := none }
+   ]
+
+def azureOpenAIResponsesModels : Array ModelInfo :=
+  #[ azureModel "gpt-4" "GPT-4" 30.0 60.0 0.0 0.0 8192 8192
+   , azureModel "gpt-4-turbo" "GPT-4 Turbo" 10.0 30.0 0.0 0.0 128000 4096 false #[] textImageInput
+   , azureModel "gpt-4.1" "GPT-4.1" 2.0 8.0 0.5 0.0 1047576 32768 false #[] textImageInput
+   , azureModel "gpt-4.1-mini" "GPT-4.1 mini" 0.4 1.6 0.1 0.0 1047576 32768 false #[] textImageInput
+   , azureModel "gpt-4.1-nano" "GPT-4.1 nano" 0.1 0.4 0.025 0.0 1047576 32768 false #[] textImageInput
+   , azureModel "gpt-4o" "GPT-4o" 2.5 10.0 1.25 0.0 128000 16384 false #[] textImageInput
+   , azureModel "gpt-4o-2024-05-13" "GPT-4o (2024-05-13)" 5.0 15.0 0.0 0.0 128000 4096 false #[] textImageInput
+   , azureModel "gpt-4o-2024-08-06" "GPT-4o (2024-08-06)" 2.5 10.0 1.25 0.0 128000 16384 false #[] textImageInput
+   , azureModel "gpt-4o-2024-11-20" "GPT-4o (2024-11-20)" 2.5 10.0 1.25 0.0 128000 16384 false #[] textImageInput
+   , azureModel "gpt-4o-mini" "GPT-4o mini" 0.15 0.6 0.075 0.0 128000 16384 false #[] textImageInput
+   , azureModel "gpt-5" "GPT-5" 1.25 10.0 0.125 0.0 400000 128000 true azureThinkingOffMap textImageInput
+   , azureModel "gpt-5-chat-latest" "GPT-5 Chat Latest" 1.25 10.0 0.125 0.0 128000 16384 false azureThinkingOffMap textImageInput
+   , azureModel "gpt-5-codex" "GPT-5-Codex" 1.25 10.0 0.125 0.0 400000 128000 true azureThinkingOffMap textImageInput
+   , azureModel "gpt-5-mini" "GPT-5 Mini" 0.25 2.0 0.025 0.0 400000 128000 true azureThinkingOffMap textImageInput
+   , azureModel "gpt-5-nano" "GPT-5 Nano" 0.05 0.4 0.005 0.0 400000 128000 true azureThinkingOffMap textImageInput
+   , azureModel "gpt-5-pro" "GPT-5 Pro" 15.0 120.0 0.0 0.0 400000 128000 true azureThinkingOffMap textImageInput
+   , azureModel "gpt-5.1" "GPT-5.1" 1.25 10.0 0.125 0.0 400000 128000 true azureThinkingOffMap textImageInput
+   , azureModel "gpt-5.1-chat-latest" "GPT-5.1 Chat" 1.25 10.0 0.125 0.0 128000 16384 true azureThinkingOffMap textImageInput
+   , azureModel "gpt-5.1-codex" "GPT-5.1 Codex" 1.25 10.0 0.125 0.0 400000 128000 true azureThinkingOffMap textImageInput
+   , azureModel "gpt-5.1-codex-max" "GPT-5.1 Codex Max" 1.25 10.0 0.125 0.0 400000 128000 true azureThinkingOffMap textImageInput
+   , azureModel "gpt-5.1-codex-mini" "GPT-5.1 Codex mini" 0.25 2.0 0.025 0.0 400000 128000 true azureThinkingOffMap textImageInput
+   , azureModel "gpt-5.2" "GPT-5.2" 1.75 14.0 0.175 0.0 400000 128000 true azureThinkingOffXHighMap textImageInput
+   , azureModel "gpt-5.2-chat-latest" "GPT-5.2 Chat" 1.75 14.0 0.175 0.0 128000 16384 true azureThinkingOffXHighMap textImageInput
+   , azureModel "gpt-5.2-codex" "GPT-5.2 Codex" 1.75 14.0 0.175 0.0 400000 128000 true azureThinkingOffXHighMap textImageInput
+   , azureModel "gpt-5.2-pro" "GPT-5.2 Pro" 21.0 168.0 0.0 0.0 400000 128000 true azureThinkingOffXHighMap textImageInput
+   , azureModel "gpt-5.3-chat-latest" "GPT-5.3 Chat (latest)" 1.75 14.0 0.175 0.0 128000 16384 false azureThinkingOffXHighMap textImageInput
+   , azureModel "gpt-5.3-codex" "GPT-5.3 Codex" 1.75 14.0 0.175 0.0 400000 128000 true azureThinkingOffXHighMap textImageInput
+   , azureModel "gpt-5.3-codex-spark" "GPT-5.3 Codex Spark" 1.75 14.0 0.175 0.0 128000 32000 true azureThinkingOffXHighMap textImageInput
+   , azureModel "gpt-5.4" "GPT-5.4" 2.5 15.0 0.25 0.0 1050000 128000 true azureThinkingOffXHighMap textImageInput
+   , azureModel "gpt-5.4-mini" "GPT-5.4 mini" 0.75 4.5 0.075 0.0 400000 128000 true azureThinkingOffXHighMap textImageInput
+   , azureModel "gpt-5.4-nano" "GPT-5.4 nano" 0.2 1.25 0.02 0.0 400000 128000 true azureThinkingOffXHighMap textImageInput
+   , azureModel "gpt-5.4-pro" "GPT-5.4 Pro" 30.0 180.0 0.0 0.0 1050000 128000 true azureThinkingOffXHighMap textImageInput
+   , azureModel "gpt-5.5" "GPT-5.5" 5.0 30.0 0.5 0.0 1050000 128000 true azureThinkingOffXHighMap textImageInput
+   , azureModel "gpt-5.5-pro" "GPT-5.5 Pro" 30.0 180.0 0.0 0.0 1050000 128000 true azureGpt55ProThinkingMap textImageInput
+   , azureModel "o1" "o1" 15.0 60.0 7.5 0.0 200000 100000 true #[] textImageInput
+   , azureModel "o1-pro" "o1-pro" 150.0 600.0 0.0 0.0 200000 100000 true #[] textImageInput
+   , azureModel "o3" "o3" 2.0 8.0 0.5 0.0 200000 100000 true #[] textImageInput
+   , azureModel "o3-deep-research" "o3-deep-research" 10.0 40.0 2.5 0.0 200000 100000 true #[] textImageInput
+   , azureModel "o3-mini" "o3-mini" 1.1 4.4 0.55 0.0 200000 100000 true
+   , azureModel "o3-pro" "o3-pro" 20.0 80.0 0.0 0.0 200000 100000 true #[] textImageInput
+   , azureModel "o4-mini" "o4-mini" 1.1 4.4 0.275 0.0 200000 100000 true #[] textImageInput
+   , azureModel "o4-mini-deep-research" "o4-mini-deep-research" 2.0 8.0 0.5 0.0 200000 100000 true #[] textImageInput
+   ]
+
 structure ProviderInfo where
   id : String
   name : String
@@ -581,6 +666,15 @@ def openAIProviderInfo : ProviderInfo :=
     modelEnv := some openAIModelEnv
     defaultModel := openAIDefaultModel
     models := #[openAIGpt41Mini]
+  }
+
+def azureOpenAIResponsesProviderInfo : ProviderInfo :=
+  { id := azureOpenAIResponsesProviderId
+    name := "Azure OpenAI"
+    baseUrl := azureOpenAIResponsesBaseUrl
+    apiKeyEnv := azureOpenAIResponsesApiKeyEnv
+    defaultModel := azureOpenAIResponsesDefaultModel
+    models := azureOpenAIResponsesModels
   }
 
 def openRouterProviderInfo : ProviderInfo :=
@@ -680,10 +774,11 @@ deriving Repr, BEq
 
 def defaultCatalog : ProviderCatalog :=
   { providers :=
-      #[ deepSeekProviderInfo
-       , openAIProviderInfo
-       , openRouterProviderInfo
-       , groqProviderInfo
+    #[ deepSeekProviderInfo
+     , openAIProviderInfo
+     , azureOpenAIResponsesProviderInfo
+     , openRouterProviderInfo
+     , groqProviderInfo
        , xaiProviderInfo
        , cerebrasProviderInfo
        , togetherProviderInfo

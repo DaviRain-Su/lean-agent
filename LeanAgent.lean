@@ -27,6 +27,7 @@ import LeanAgent.AI.OAuth.Page
 import LeanAgent.AI.Api.AnthropicMessages
 import LeanAgent.AI.Providers.All
 import LeanAgent.AI.Providers.Anthropic
+import LeanAgent.AI.Providers.AzureOpenAIResponses
 import LeanAgent.AI.Providers.Cerebras
 import LeanAgent.AI.Providers.CloudflareAIGateway
 import LeanAgent.AI.Providers.CloudflareAuth
