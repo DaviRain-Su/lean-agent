@@ -3325,6 +3325,65 @@ def testValidationChecksSchemaCombinatorsAndConst : IO Unit := do
       ]
   assertValidationFails ambiguousOneOfSchema (LeanAgent.Json.str "x")
 
+def testValidationChecksObjectAndArrayKeywords : IO Unit := do
+  let objectSchema :=
+    LeanAgent.Json.obj
+      [ ("type", LeanAgent.Json.str "object")
+      , ("minProperties", LeanAgent.Json.nat 1)
+      , ("maxProperties", LeanAgent.Json.nat 2)
+      ]
+  assertValidationValue objectSchema
+    (LeanAgent.Json.obj [("name", LeanAgent.Json.str "lean")])
+    (LeanAgent.Json.obj [("name", LeanAgent.Json.str "lean")])
+  assertValidationFails objectSchema (LeanAgent.Json.obj [])
+  assertValidationFails objectSchema
+    (LeanAgent.Json.obj
+      [ ("a", LeanAgent.Json.nat 1)
+      , ("b", LeanAgent.Json.nat 2)
+      , ("c", LeanAgent.Json.nat 3)
+      ])
+
+  let uniqueArraySchema :=
+    LeanAgent.Json.obj
+      [ ("type", LeanAgent.Json.str "array")
+      , ("uniqueItems", Lean.Json.bool true)
+      ]
+  assertValidationValue uniqueArraySchema
+    (LeanAgent.Json.arr #[LeanAgent.Json.str "a", LeanAgent.Json.str "b"])
+    (LeanAgent.Json.arr #[LeanAgent.Json.str "a", LeanAgent.Json.str "b"])
+  assertValidationFails uniqueArraySchema
+    (LeanAgent.Json.arr #[LeanAgent.Json.str "a", LeanAgent.Json.str "a"])
+
+  let containsSchema :=
+    LeanAgent.Json.obj
+      [ ("type", LeanAgent.Json.str "array")
+      , ("contains"
+        , LeanAgent.Json.obj
+            [ ("type", LeanAgent.Json.str "integer")
+            , ("minimum", LeanAgent.Json.nat 2)
+            ])
+      , ("minContains", LeanAgent.Json.nat 2)
+      , ("maxContains", LeanAgent.Json.nat 2)
+      ]
+  assertValidationValue containsSchema
+    (LeanAgent.Json.arr #[LeanAgent.Json.nat 1, LeanAgent.Json.nat 2, LeanAgent.Json.nat 3])
+    (LeanAgent.Json.arr #[LeanAgent.Json.nat 1, LeanAgent.Json.nat 2, LeanAgent.Json.nat 3])
+  assertValidationFails containsSchema
+    (LeanAgent.Json.arr #[LeanAgent.Json.nat 1, LeanAgent.Json.nat 2])
+  assertValidationFails containsSchema
+    (LeanAgent.Json.arr #[LeanAgent.Json.nat 2, LeanAgent.Json.nat 3, LeanAgent.Json.nat 4])
+  assertValidationFails
+    (LeanAgent.Json.obj
+      [ ("type", LeanAgent.Json.str "array")
+      , ("contains", LeanAgent.Json.obj [("const", LeanAgent.Json.str "hit")])
+      ])
+    (LeanAgent.Json.arr #[LeanAgent.Json.str "miss"])
+
+  let notSchema :=
+    LeanAgent.Json.obj [("not", LeanAgent.Json.obj [("const", LeanAgent.Json.str "forbidden")])]
+  assertValidationValue notSchema (LeanAgent.Json.str "ok") (LeanAgent.Json.str "ok")
+  assertValidationFails notSchema (LeanAgent.Json.str "forbidden")
+
 def testValidationToolLookupAndRequired : IO Unit := do
   let tool : LeanAgent.AI.Tool :=
     { name := "read"
@@ -7995,6 +8054,7 @@ def main : IO UInt32 := do
     testValidationRejectsInvalidCoercions
     testValidationChecksSchemaBounds
     testValidationChecksSchemaCombinatorsAndConst
+    testValidationChecksObjectAndArrayKeywords
     testValidationToolLookupAndRequired
     testSanitizeUnicodeSurrogates
     testOverflowClassifiesProviderErrors
