@@ -820,6 +820,21 @@ def testOpenAIResponsesRequestPayload : IO Unit := do
       | .error _ => fail "expected tools array"
   | none => fail "expected tools"
 
+def testOpenAIResponsesRequestClampsMaxTokens : IO Unit := do
+  let model :=
+    { responsesCodexModel with
+      contextWindow := 5000
+      maxTokens := 4000
+    }
+  let context : LeanAgent.AI.Context :=
+    { systemPrompt := some "abcd"
+      messages := #[.user { content := #[LeanAgent.AI.text "abcd"], timestamp := 1 }]
+    }
+  let payload := LeanAgent.AI.Api.OpenAIResponses.requestToJsonWithOptions model context {}
+  assertTrue
+    (LeanAgent.Json.optVal? payload "max_output_tokens" == some (LeanAgent.Json.nat 902))
+    "expected Responses max_output_tokens to be context-clamped"
+
 def testOpenAIResponsesParsesResponse : IO Unit := do
   let raw :=
     "{ \"id\":\"resp_1\", \"status\":\"completed\", \"output\":[" ++
@@ -1019,6 +1034,31 @@ def testEstimateContextUsesRecentAssistantUsage : IO Unit := do
   assertTrue (estimate.usageTokens == 100) "expected usage tokens"
   assertTrue (estimate.trailingTokens == 2) "expected trailing tokens"
   assertTrue (estimate.lastUsageIndex == some 1) "expected assistant usage index"
+
+def testModelsClampMaxTokensToContext : IO Unit := do
+  let model : LeanAgent.Models.ModelInfo :=
+    { id := "tiny"
+      name := "Tiny"
+      provider := "test"
+      api := "openai-completions"
+      baseUrl := "http://example.invalid"
+      contextWindow := 5000
+      maxTokens := 4000
+    }
+  let context : LeanAgent.AI.Context :=
+    { systemPrompt := some "abcd"
+      messages := #[.user { content := #[LeanAgent.AI.text "abcd"], timestamp := 1 }]
+    }
+  assertTrue
+    (LeanAgent.Models.clampMaxTokensToContext model context 4000 == 902)
+    "expected max tokens to fit context minus estimate and safety"
+  assertTrue
+    (LeanAgent.Models.clampMaxTokensToContext { model with contextWindow := 0 } context 0 == 1)
+    "expected unknown context window to preserve minimum"
+  let unknownMax := LeanAgent.Models.clampSimpleOptionsToContext { model with maxTokens := 0 } context {}
+  assertTrue unknownMax.maxTokens.isNone "expected unknown model maxTokens to stay unset"
+  let defaulted := LeanAgent.Models.clampSimpleOptionsToContext model context {}
+  assertTrue (defaulted.maxTokens == some 902) "expected model maxTokens default to be clamped"
 
 def testProviderEnvValueResolution : IO Unit := do
   let ambient : String → IO (Option String) := fun name =>
@@ -1993,6 +2033,19 @@ def httpServerScript : String :=
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
     , "            return"
+    , "        if self.path == '/clamp-openai/chat/completions':"
+    , "            request = json.loads(body)"
+    , "            text = str(request.get('max_tokens'))"
+    , "            payload = ("
+    , "                'data: ' + json.dumps({'choices': [{'delta': {'content': text}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 4, 'completion_tokens': 2}}) + '\\n\\n' +"
+    , "                'data: [DONE]\\n\\n'"
+    , "            ).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'text/event-stream')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/responses-copilot/responses':"
     , "            request = json.loads(body)"
     , "            text = '|'.join([self.headers.get('X-Initiator') or '', self.headers.get('Openai-Intent') or '', self.headers.get('Copilot-Vision-Request') or '', self.headers.get('session_id') or ''])"
@@ -2235,6 +2288,29 @@ def testOpenAICompatibleStreamsUsesStreamingRuntime : IO Unit := do
     assertTrue (stream.result.api == "openai-completions") "expected runtime api"
     assertTrue (stream.result.provider == LeanAgent.Models.deepSeekProviderId) "expected runtime provider"
 
+def testOpenAICompatibleStreamsClampMaxTokens : IO Unit := do
+  let port := 18091
+  withHttpServer port do
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := "tiny"
+        name := "Tiny"
+        provider := "test"
+        api := "openai-completions"
+        baseUrl := s!"http://127.0.0.1:{port}/clamp-openai"
+        contextWindow := 5000
+        maxTokens := 4000
+      }
+    let context : LeanAgent.AI.Context :=
+      { systemPrompt := some "abcd"
+        messages := #[.user { content := #[LeanAgent.AI.text "abcd"], timestamp := 1 }]
+      }
+    let stream ← LeanAgent.Models.openAICompatibleStreams.streamSimple
+      model
+      context
+      { apiKey := some "test-key" }
+    assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "902")
+      "expected OpenAI-compatible runtime max_tokens to be context-clamped"
+
 def testOpenAIResponsesCompleteWithOptionsLocal : IO Unit := do
   let port := 18088
   withHttpServer port do
@@ -2392,6 +2468,7 @@ def main : IO UInt32 := do
     testOpenAIResponsesSharedConvertsTools
     testGitHubCopilotDynamicHeaders
     testOpenAIResponsesRequestPayload
+    testOpenAIResponsesRequestClampsMaxTokens
     testOpenAIResponsesParsesResponse
     testOpenAIResponsesParsesStreamingTextAndUsage
     testOpenAIResponsesParsesStreamingToolCall
@@ -2401,6 +2478,7 @@ def main : IO UInt32 := do
     testShortHashMatchesPi
     testEstimateUtilities
     testEstimateContextUsesRecentAssistantUsage
+    testModelsClampMaxTokensToContext
     testProviderEnvValueResolution
     testProxyEnvResolution
     testProxyNoProxyMatching
@@ -2448,6 +2526,7 @@ def main : IO UInt32 := do
     testOpenAICompletionsSendsCustomHeaders
     testOpenAICompletionsStreamWithOptionsLocal
     testOpenAICompatibleStreamsUsesStreamingRuntime
+    testOpenAICompatibleStreamsClampMaxTokens
     testOpenAIResponsesCompleteWithOptionsLocal
     testOpenAIResponsesSendsCopilotDynamicHeaders
     testOpenAIResponsesStreamWithOptionsLocal

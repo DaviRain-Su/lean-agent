@@ -5,6 +5,7 @@ import LeanAgent.AI.EventStream
 import LeanAgent.AI.Types
 import LeanAgent.AI.Util.Diagnostics
 import LeanAgent.AI.Util.Headers
+import LeanAgent.AI.Util.Estimate
 import LeanAgent.AI.Util.JsonParse
 import LeanAgent.AI.Util.Retry
 import LeanAgent.AI.Util.SSE
@@ -56,9 +57,36 @@ def reasoningEffortString : LeanAgent.AI.ThinkingLevel → String
   | .xhigh => "high"
   | level => level.toString
 
-def requestOptionFields (options : OpenAIResponsesOptions) : List (String × Lean.Json) :=
+def contextSafetyTokens : Nat := 4096
+def minMaxTokens : Nat := 1
+
+def clampMaxTokensToContext
+    (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
+    (context : LeanAgent.AI.Context)
+    (maxTokens : Nat) : Nat :=
+  if model.contextWindow == 0 then
+    Nat.max minMaxTokens maxTokens
+  else
+    let estimate := LeanAgent.AI.Util.Estimate.estimateContextTokens context
+    let reserved := estimate.tokens + contextSafetyTokens
+    let available := if model.contextWindow > reserved then model.contextWindow - reserved else 0
+    Nat.min maxTokens (Nat.max minMaxTokens available)
+
+def resolvedMaxTokens?
+    (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
+    (context : LeanAgent.AI.Context)
+    (options : OpenAIResponsesOptions) : Option Nat :=
+  match options.maxTokens with
+  | some maxTokens => some (clampMaxTokensToContext model context maxTokens)
+  | none =>
+      if model.maxTokens == 0 then none else some (clampMaxTokensToContext model context model.maxTokens)
+
+def requestOptionFields
+    (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
+    (context : LeanAgent.AI.Context)
+    (options : OpenAIResponsesOptions) : List (String × Lean.Json) :=
   let maxTokenFields :=
-    match options.maxTokens with
+    match resolvedMaxTokens? model context options with
     | some maxTokens => [("max_output_tokens", LeanAgent.Json.nat maxTokens)]
     | none => []
   let temperatureFields :=
@@ -132,7 +160,7 @@ def requestToJsonWithOptions
      , ("stream", LeanAgent.Json.bool stream)
      , ("store", LeanAgent.Json.bool false)
      ] ++ promptCacheFields options
-       ++ requestOptionFields options
+       ++ requestOptionFields model context options
        ++ toolFields
        ++ reasoningFields model options)
 

@@ -3,6 +3,7 @@ import LeanAgent.AI.Auth
 import LeanAgent.AI.Api.OpenAICompletions
 import LeanAgent.AI.EventStream
 import LeanAgent.AI.Types
+import LeanAgent.AI.Util.Estimate
 
 namespace LeanAgent.Models
 
@@ -553,8 +554,37 @@ def contextToProviderRequest (model : ModelInfo) (context : LeanAgent.AI.Context
     tools := context.tools.map legacyToolFromAITool
   }
 
+def contextSafetyTokens : Nat := 4096
+def minMaxTokens : Nat := 1
+
+def clampMaxTokensToContext (model : ModelInfo) (context : LeanAgent.AI.Context) (maxTokens : Nat) : Nat :=
+  if model.contextWindow == 0 then
+    Nat.max minMaxTokens maxTokens
+  else
+    let estimate := LeanAgent.AI.Util.Estimate.estimateContextTokens context
+    let reserved := estimate.tokens + contextSafetyTokens
+    let available := if model.contextWindow > reserved then model.contextWindow - reserved else 0
+    Nat.min maxTokens (Nat.max minMaxTokens available)
+
+def resolvedMaxTokens? (model : ModelInfo) (context : LeanAgent.AI.Context) (options : LeanAgent.AI.SimpleStreamOptions) :
+    Option Nat :=
+  match options.maxTokens with
+  | some maxTokens => some (clampMaxTokensToContext model context maxTokens)
+  | none =>
+      if model.maxTokens == 0 then
+        none
+      else
+        some (clampMaxTokensToContext model context model.maxTokens)
+
+def clampSimpleOptionsToContext
+    (model : ModelInfo)
+    (context : LeanAgent.AI.Context)
+    (options : LeanAgent.AI.SimpleStreamOptions) : LeanAgent.AI.SimpleStreamOptions :=
+  { options with maxTokens := resolvedMaxTokens? model context options }
+
 def openAICompatibleStreams : ProviderStreams :=
   { streamSimple := fun model context options => do
+      let options := clampSimpleOptionsToContext model context options
       match options.apiKey with
       | none => throw (modelsError .auth s!"missing API key for provider {model.provider}")
       | some apiKey =>

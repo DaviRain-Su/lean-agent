@@ -9,6 +9,8 @@ namespace LeanAgent.AI.Api.OpenAIResponsesShared
 structure ResponsesModel extends TransformMessages.TargetModel where
   reasoning : Bool := false
   supportsDeveloperRole : Bool := true
+  contextWindow : Nat := 0
+  maxTokens : Nat := 0
 deriving BEq
 
 structure ConvertResponsesMessagesOptions where
