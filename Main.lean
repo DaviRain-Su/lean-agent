@@ -112,6 +112,38 @@ structure Runtime where
   session : LeanAgent.Session.AgentSession
   jsonEvents : Bool
 
+def selectedModelInfo (selection : LeanAgent.Models.ProviderSelection) : LeanAgent.Models.ModelInfo :=
+  match selection.providerInfo.model? selection.model with
+  | some model => { model with baseUrl := selection.baseUrl }
+  | none =>
+      { id := selection.model
+        name := selection.model
+        provider := selection.providerInfo.id
+        api := "openai-completions"
+        baseUrl := selection.baseUrl
+      }
+
+def createSessionWithAgent
+    (agent : LeanAgent.Agent.Agent)
+    (cwd : System.FilePath)
+    (model : String)
+    (persistence : LeanAgent.Session.Persistence := .ephemeral) :
+    IO LeanAgent.Session.AgentSession := do
+  match persistence with
+  | .ephemeral =>
+      pure { agent := agent }
+  | .create path =>
+      LeanAgent.Session.ensureSessionFile path cwd model
+      let (messages, lastId) ← LeanAgent.Session.loadMessagesWithLastId agent.state.model path
+      let agent := { agent with state := { agent.state with messages := messages } }
+      pure { agent := agent, store := some { path := path, lastEntryId := lastId } }
+  | .resume path =>
+      if !(← path.pathExists) then
+        throw (IO.userError s!"session file not found: {path}")
+      let (messages, lastId) ← LeanAgent.Session.loadMessagesWithLastId agent.state.model path
+      let agent := { agent with state := { agent.state with messages := messages } }
+      pure { agent := agent, store := some { path := path, lastEntryId := lastId } }
+
 def runtimeFromOptions (opts : CliOptions) : IO (Except String Runtime) := do
   if opts.noSession && (opts.session.isSome || opts.resume.isSome) then
     return .error "--no-session cannot be combined with --session or --resume"
@@ -132,16 +164,20 @@ def runtimeFromOptions (opts : CliOptions) : IO (Except String Runtime) := do
   | .error err => pure (.error err)
   | .ok selection =>
     let extensions ← LeanAgent.Project.loadExtensions cwd
-    let provider := LeanAgent.Models.legacyProviderFromSelection selection
-    let tools := LeanAgent.CodingTools.defaultTools cwd
     let system := LeanAgent.Project.applySystemAppendix defaultSystemPrompt extensions
-    let agentConfig : AgentLoopConfig :=
-      { provider := provider
-        model := selection.model
-        system := system
-        tools := tools
-        maxTurns := opts.maxTurns
+    let modelInfo := selectedModelInfo selection
+    let tools := LeanAgent.CodingTools.defaultAgentTools cwd
+    let options : LeanAgent.Agent.AgentOptions :=
+      { initialState :=
+          { systemPrompt := system
+            model := modelInfo
+            tools := tools
+          }
+        streamFn := LeanAgent.Agent.defaultStreamFn
+        convertToLlm := LeanAgent.Agent.defaultConvertToLlm
+        getApiKey := some (fun _ => pure (some selection.apiKey))
       }
+    let agent := LeanAgent.Agent.Agent.create options
     let persistence :=
       match opts.resume with
       | some path => LeanAgent.Session.Persistence.resume path
@@ -149,7 +185,7 @@ def runtimeFromOptions (opts : CliOptions) : IO (Except String Runtime) := do
           match opts.session with
           | some path => LeanAgent.Session.Persistence.create path
           | none => LeanAgent.Session.Persistence.ephemeral
-    let session ← LeanAgent.Session.create agentConfig cwd selection.model persistence
+    let session ← createSessionWithAgent agent cwd selection.model persistence
     pure
       (.ok
         { cwd := cwd
@@ -159,54 +195,76 @@ def runtimeFromOptions (opts : CliOptions) : IO (Except String Runtime) := do
           jsonEvents := opts.jsonEvents
         })
 
-def renderToolCall (call : ToolCall) : String :=
+def renderToolCall (call : LeanAgent.AI.ToolCall) : String :=
   "-> " ++ call.name ++ " " ++ call.arguments.compress
 
-def renderEvent : EventSink
-  | .agentStart => IO.println "agent:start"
-  | .agentEnd => IO.println "agent:end"
-  | .turnStart turn => IO.println s!"turn:{turn}:start"
-  | .turnEnd turn => IO.println s!"turn:{turn}:end"
-  | .messageStart role => IO.println s!"message:{role}:start"
-  | .messageDelta delta => IO.println delta
-  | .messageEnd (.assistant _ calls) => do
-      for call in calls do
-        IO.println (renderToolCall call)
-      IO.println "message:assistant:end"
-  | .messageEnd _ => IO.println "message:end"
-  | .toolExecutionStart call => IO.println s!"tool:{call.name}:start"
-  | .toolExecutionEnd result => do
-      IO.println s!"tool:{result.name}:{resultStatus result}"
-      if !result.content.trimAscii.isEmpty then
-        IO.println result.content
-  | .error message => IO.eprintln s!"error: {message}"
+def assistantToolCalls (message : LeanAgent.Agent.AgentMessage) : Array LeanAgent.AI.ToolCall :=
+  match message with
+  | .ofMessage (.assistant assistant) => LeanAgent.AI.contentToolCalls assistant.content
+  | _ => #[]
 
-def renderReplEvent : EventSink
+def eventDelta? : LeanAgent.AI.AssistantMessageEvent → Option String
+  | .textDelta _ delta _ => some delta
+  | .thinkingDelta _ delta _ => some delta
+  | .toolCallDelta _ delta _ => some delta
+  | _ => none
+
+def toolResultStatus (isError : Bool) : String :=
+  if isError then "error" else "ok"
+
+def toolResultText (result : LeanAgent.Agent.AgentToolResult) : String :=
+  LeanAgent.Agent.AgentToolResult.text result
+
+def renderEvent : LeanAgent.Agent.AgentEventSink
+  | .agentStart => IO.println "agent:start"
+  | .agentEnd _ => IO.println "agent:end"
+  | .turnStart => IO.println "turn:start"
+  | .turnEnd _ _ => IO.println "turn:end"
+  | .messageStart msg => IO.println s!"message:{LeanAgent.Agent.AgentMessage.role msg}:start"
+  | .messageUpdate _ event =>
+      match eventDelta? event with
+      | some delta => IO.println delta
+      | none => pure ()
+  | .messageEnd msg => do
+      for call in assistantToolCalls msg do
+        IO.println (renderToolCall call)
+      IO.println "message:end"
+  | .toolExecutionStart _ toolName _ => IO.println s!"tool:{toolName}:start"
+  | .toolExecutionUpdate _ _ _ _ => pure ()
+  | .toolExecutionEnd _ toolName result isError => do
+      IO.println s!"tool:{toolName}:{toolResultStatus isError}"
+      let text := toolResultText result
+      if !text.trimAscii.isEmpty then
+        IO.println text
+
+def renderReplEvent : LeanAgent.Agent.AgentEventSink
   | .agentStart => pure ()
-  | .agentEnd => pure ()
-  | .turnStart turn =>
-      if turn > 1 then
-        IO.println s!"[agent turn {turn}]"
+  | .agentEnd _ => pure ()
+  | .turnStart => pure ()
+  | .turnEnd _ _ => pure ()
+  | .messageStart msg =>
+      if LeanAgent.Agent.AgentMessage.role msg == "assistant" then
+        IO.println "assistant:"
       else
         pure ()
-  | .turnEnd _ => pure ()
-  | .messageStart "assistant" => IO.println "assistant:"
-  | .messageStart _ => pure ()
-  | .messageDelta delta =>
-      if !delta.trimAscii.isEmpty then
-        IO.println delta
-      else
-        pure ()
-  | .messageEnd (.assistant _ calls) => do
-      for call in calls do
+  | .messageUpdate _ event =>
+      match eventDelta? event with
+      | some delta =>
+          if !delta.trimAscii.isEmpty then
+            IO.println delta
+          else
+            pure ()
+      | none => pure ()
+  | .messageEnd msg => do
+      for call in assistantToolCalls msg do
         IO.println s!"[tool request] {renderToolCall call}"
-  | .messageEnd _ => pure ()
-  | .toolExecutionStart call => IO.println s!"[tool] {call.name}:start"
-  | .toolExecutionEnd result => do
-      IO.println s!"[tool] {result.name}:{resultStatus result}"
-      if !result.content.trimAscii.isEmpty then
-        IO.println result.content
-  | .error message => IO.eprintln s!"error: {message}"
+  | .toolExecutionStart _ toolName _ => IO.println s!"[tool] {toolName}:start"
+  | .toolExecutionUpdate _ _ _ _ => pure ()
+  | .toolExecutionEnd _ toolName result isError => do
+      IO.println s!"[tool] {toolName}:{toolResultStatus isError}"
+      let text := toolResultText result
+      if !text.trimAscii.isEmpty then
+        IO.println text
 
 def replHelp : String :=
   String.intercalate "\n"
@@ -224,22 +282,22 @@ def replHelp : String :=
 def isExitCommand (input : String) : Bool :=
   input == "/exit" || input == "/quit" || input == ":q"
 
-def printReplContext (runtime : Runtime) (messages : Array AgentMessage) : IO Unit := do
+def printReplContext (runtime : Runtime) (session : LeanAgent.Session.AgentSession) : IO Unit := do
   IO.println s!"model: {runtime.model}"
   IO.println s!"cwd: {runtime.cwd}"
-  IO.println s!"messages: {messages.size}"
+  IO.println s!"messages: {session.agent.state.messages.size}"
   IO.println s!"commands: {runtime.extensions.commands.size}"
   IO.println s!"skills: {runtime.extensions.skills.size}"
 
 def printSessionInfo (runtime : Runtime) (session : LeanAgent.Session.AgentSession) : IO Unit := do
   IO.println s!"model: {runtime.model}"
   IO.println s!"cwd: {runtime.cwd}"
-  IO.println s!"messages: {session.messages.size}"
+  IO.println s!"messages: {session.agent.state.messages.size}"
   match session.sessionPath? with
   | some path => IO.println s!"session: {path}"
   | none => IO.println "session: ephemeral"
 
-def sinkForRuntime (runtime : Runtime) (repl : Bool) : EventSink :=
+def sinkForRuntime (runtime : Runtime) (repl : Bool) : LeanAgent.Agent.AgentEventSink :=
   if runtime.jsonEvents then
     LeanAgent.Session.jsonEventSink
   else if repl then
@@ -247,10 +305,26 @@ def sinkForRuntime (runtime : Runtime) (repl : Bool) : EventSink :=
   else
     renderEvent
 
+def runtimeWithEventSink (runtime : Runtime) (repl : Bool) : Runtime :=
+  let sink := sinkForRuntime runtime repl
+  let agent := runtime.session.agent.subscribe (fun event _ => sink event)
+  { runtime with session := { runtime.session with agent := agent } }
+
+def persistSessionAgent
+    (session : LeanAgent.Session.AgentSession)
+    (beforeCount : Nat)
+    (agent : LeanAgent.Agent.Agent) : IO LeanAgent.Session.AgentSession := do
+  let messages := agent.state.messages
+  let newMessages := messages.extract beforeCount messages.size
+  let store ← LeanAgent.Session.persistMessages session.store newMessages
+  pure { session with agent := agent, store := store }
+
 def runReplTurn (runtime : Runtime) (session : LeanAgent.Session.AgentSession) (input : String) :
     IO LeanAgent.Session.AgentSession := do
   let expanded := LeanAgent.Project.expandPrompt runtime.extensions input
-  LeanAgent.Session.prompt session expanded (sinkForRuntime runtime true)
+  let beforeCount := session.agent.state.messages.size
+  let agent ← session.agent.prompt expanded
+  persistSessionAgent session beforeCount agent
 
 partial def replLoop (runtime : Runtime) (session : LeanAgent.Session.AgentSession) : IO UInt32 := do
   let stdout ← IO.getStdout
@@ -271,7 +345,7 @@ partial def replLoop (runtime : Runtime) (session : LeanAgent.Session.AgentSessi
       IO.println replHelp
       replLoop runtime session
     else if input == "/context" then
-      printReplContext runtime session.messages
+      printReplContext runtime session
       replLoop runtime session
     else if input == "/session" then
       printSessionInfo runtime session
@@ -304,17 +378,21 @@ def runRepl (runtime : Runtime) (initialPrompt? : Option String) : IO UInt32 := 
 
 def runOneShot (opts : CliOptions) (runtime : Runtime) : IO UInt32 := do
   if opts.continueRun then
-    if runtime.session.messages.isEmpty then
+    if runtime.session.agent.state.messages.isEmpty then
       IO.eprintln "--continue requires a non-empty --resume or --session file"
       return 2
-    let _ ← LeanAgent.Session.continueSession runtime.session (sinkForRuntime runtime false)
+    let beforeCount := runtime.session.agent.state.messages.size
+    let agent ← runtime.session.agent.continue
+    let _ ← persistSessionAgent runtime.session beforeCount agent
     return 0
   let prompt ← promptFromOptions opts
   if prompt.trimAscii.isEmpty then
     IO.eprintln "prompt must not be empty"
     return 2
   let expanded := LeanAgent.Project.expandPrompt runtime.extensions prompt
-  let _ ← LeanAgent.Session.prompt runtime.session expanded (sinkForRuntime runtime false)
+  let beforeCount := runtime.session.agent.state.messages.size
+  let agent ← runtime.session.agent.prompt expanded
+  let _ ← persistSessionAgent runtime.session beforeCount agent
   pure 0
 
 def run (opts : CliOptions) : IO UInt32 := do
@@ -329,6 +407,7 @@ def run (opts : CliOptions) : IO UInt32 := do
       IO.eprintln message
       pure 2
   | .ok runtime =>
+      let runtime := runtimeWithEventSink runtime opts.repl
       if opts.repl then
         runRepl runtime opts.prompt
       else

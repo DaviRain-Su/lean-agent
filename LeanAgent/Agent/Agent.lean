@@ -282,19 +282,21 @@ def Agent.finishRun (agent : Agent) : Agent :=
   { agent with activeRun := none }
 
 /-- Run with lifecycle management: create abort ref, set activeRun, execute, clean up. -/
-def Agent.runWithLifecycle (agent : Agent) (executor : Option AbortSignal → IO Agent) : IO Agent := do
+def Agent.runWithLifecycle
+    (agent : Agent)
+    (executor : Agent → Option AbortSignal → IO Agent) : IO Agent := do
   let abortRef ← IO.mkRef false
   let signal : AbortSignal :=
     { isAborted := abortRef.get
       message := "Run was aborted"
     }
-  let agent := { agent with activeRun := some { abortRef := abortRef } }
+  let runningAgent := { agent with activeRun := some { abortRef := abortRef } }
   try
-    let agent ← executor (some signal)
+    let agent ← executor runningAgent (some signal)
     pure (agent.finishRun)
   catch err =>
     let isAborted ← abortRef.get
-    agent.handleRunFailure err.toString isAborted
+    runningAgent.handleRunFailure err.toString isAborted
 
 ----------------------------------------------------------------------------
 -- Agent.promptMessages (defined before prompt to avoid forward reference)
@@ -304,17 +306,17 @@ def Agent.runWithLifecycle (agent : Agent) (executor : Option AbortSignal → IO
 Send an array of AgentMessages as prompts to the agent.
 -/
 def Agent.promptMessages (agent : Agent) (messages : Array AgentMessage) : IO Agent :=
-  agent.runWithLifecycle fun signal => do
-    let context := agent.createContextSnapshot
-    let config := agent.createLoopConfig false
-    let emit : AgentEventSink := fun _ => pure ()
-    -- Run the loop
-    let finalMessages ← runAgentLoop messages context config emit signal agent.streamFn
-    -- Update agent state with final messages
-    let agent := { agent with
-      state := { agent.state with messages := finalMessages }
-    }
-    pure agent
+  agent.runWithLifecycle fun runningAgent signal => do
+    let context := runningAgent.createContextSnapshot
+    let config := runningAgent.createLoopConfig false
+    let agentRef ← IO.mkRef runningAgent
+    let emit : AgentEventSink := fun event => do
+      let current ← agentRef.get
+      let updated ← current.processEvents event
+      agentRef.set updated
+    let finalMessages ← runAgentLoop messages context config emit signal runningAgent.streamFn
+    let current ← agentRef.get
+    pure { current with state := { current.state with messages := finalMessages } }
 
 /--
 Send a text prompt to the agent. Normalizes the input to an AgentMessage
@@ -342,14 +344,16 @@ def Agent.continue (agent : Agent) : IO Agent := do
       | .ofMessage (.assistant _) =>
           throw (IO.userError "cannot continue after an assistant message; add a new prompt first")
       | _ => pure ()
-  agent.runWithLifecycle fun signal => do
-    let context := agent.createContextSnapshot
-    let config := agent.createLoopConfig true
-    let emit : AgentEventSink := fun _ => pure ()
-    let finalMessages ← runAgentLoopContinue context config emit signal agent.streamFn
-    let agent := { agent with
-      state := { agent.state with messages := finalMessages }
-    }
-    pure agent
+  agent.runWithLifecycle fun runningAgent signal => do
+    let context := runningAgent.createContextSnapshot
+    let config := runningAgent.createLoopConfig true
+    let agentRef ← IO.mkRef runningAgent
+    let emit : AgentEventSink := fun event => do
+      let current ← agentRef.get
+      let updated ← current.processEvents event
+      agentRef.set updated
+    let finalMessages ← runAgentLoopContinue context config emit signal runningAgent.streamFn
+    let current ← agentRef.get
+    pure { current with state := { current.state with messages := finalMessages } }
 
 end LeanAgent.Agent

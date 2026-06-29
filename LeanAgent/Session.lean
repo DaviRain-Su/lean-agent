@@ -1,8 +1,21 @@
+import LeanAgent.Agent
+import LeanAgent.Agent.Types
+import LeanAgent.Agent.Loop
+import LeanAgent.Agent.Agent
+import LeanAgent.AI.Types
 import LeanAgent.Core
 import LeanAgent.Json
 import LeanAgent.Loop
+import LeanAgent.Models
 
 namespace LeanAgent.Session
+
+abbrev RuntimeAgent := LeanAgent.Agent.Agent
+abbrev RuntimeAgentMessage := LeanAgent.Agent.AgentMessage
+abbrev RuntimeAgentEvent := LeanAgent.Agent.AgentEvent
+abbrev RuntimeAgentEventSink := LeanAgent.Agent.AgentEventSink
+abbrev RuntimeAgentLoopConfig := LeanAgent.Agent.AgentLoopConfig
+
 
 def currentTimestamp : IO String := do
   let output ← IO.Process.output
@@ -17,8 +30,10 @@ def currentTimestamp : IO String := do
   else
     pure s!"mono:{← IO.monoMsNow}"
 
+
 def newId (idPrefix : String) : IO String := do
   pure s!"{idPrefix}-{← IO.monoNanosNow}"
+
 
 def toolCallToJson (call : ToolCall) : Lean.Json :=
   LeanAgent.Json.obj
@@ -27,11 +42,13 @@ def toolCallToJson (call : ToolCall) : Lean.Json :=
     , ("arguments", call.arguments)
     ]
 
+
 def toolCallFromJson (json : Lean.Json) : Except String ToolCall := do
   let id ← (← json.getObjVal? "id").getStr?
   let name ← (← json.getObjVal? "name").getStr?
   let arguments ← json.getObjVal? "arguments"
   pure { id := id, name := name, arguments := arguments }
+
 
 def messageToJson : AgentMessage → Lean.Json
   | .user content =>
@@ -53,6 +70,7 @@ def messageToJson : AgentMessage → Lean.Json
         , ("content", LeanAgent.Json.str content)
         , ("ok", LeanAgent.Json.bool ok)
         ]
+
 
 def messageFromJson (json : Lean.Json) : Except String AgentMessage := do
   let role ← (← json.getObjVal? "role").getStr?
@@ -82,6 +100,7 @@ def messageFromJson (json : Lean.Json) : Except String AgentMessage := do
       pure (.toolResult toolCallId name content ok)
   | other => throw s!"unknown message role: {other}"
 
+
 def headerJson (id timestamp cwd model : String) : Lean.Json :=
   LeanAgent.Json.obj
     [ ("type", LeanAgent.Json.str "session")
@@ -92,6 +111,7 @@ def headerJson (id timestamp cwd model : String) : Lean.Json :=
     , ("model", LeanAgent.Json.str model)
     ]
 
+
 def messageEntryJson (id parentId timestamp : String) (message : AgentMessage) : Lean.Json :=
   LeanAgent.Json.obj
     [ ("type", LeanAgent.Json.str "message")
@@ -101,12 +121,68 @@ def messageEntryJson (id parentId timestamp : String) (message : AgentMessage) :
     , ("message", messageToJson message)
     ]
 
+
+def messageEntryJsonFromJson (id parentId timestamp : String) (message : Lean.Json) : Lean.Json :=
+  LeanAgent.Json.obj
+    [ ("type", LeanAgent.Json.str "message")
+    , ("id", LeanAgent.Json.str id)
+    , ("parentId", if parentId.isEmpty then LeanAgent.Json.null else LeanAgent.Json.str parentId)
+    , ("timestamp", LeanAgent.Json.str timestamp)
+    , ("message", message)
+    ]
+
+
+def customMessageToJson
+    (customType : String)
+    (content : Array LeanAgent.AI.ContentBlock)
+    (display : Bool)
+    (timestamp : Nat) : Lean.Json :=
+  LeanAgent.Json.obj
+    [ ("role", LeanAgent.Json.str "custom")
+    , ("customType", LeanAgent.Json.str customType)
+    , ("content", LeanAgent.AI.contentArrayToJson content)
+    , ("display", LeanAgent.Json.bool display)
+    , ("timestamp", LeanAgent.Json.nat timestamp)
+    ]
+
+
+def runtimeMessageToJson : RuntimeAgentMessage → Lean.Json
+  | .ofMessage message => messageToJson (LeanAgent.AI.toLegacyMessage message)
+  | .custom customType content display timestamp =>
+      customMessageToJson customType content display timestamp
+
+
+def runtimeMessageFromJson
+    (modelInfo : LeanAgent.Models.ModelInfo)
+    (json : Lean.Json) : Except String RuntimeAgentMessage := do
+  let role ← (← json.getObjVal? "role").getStr?
+  match role with
+  | "custom" =>
+      pure
+        (.custom
+          (← (← json.getObjVal? "customType").getStr?)
+          (← LeanAgent.AI.contentArrayFromJson (← json.getObjVal? "content"))
+          ((← LeanAgent.Json.optionalBool json "display").getD true)
+          ((← LeanAgent.Json.optionalNat json "timestamp").getD 0))
+  | _ =>
+      let legacyMessage ← messageFromJson json
+      pure
+        (.ofMessage
+          (LeanAgent.AI.fromLegacyMessage
+            modelInfo.api
+            modelInfo.provider
+            modelInfo.id
+            0
+            legacyMessage))
+
+
 def appendLine (path : System.FilePath) (line : String) : IO Unit := do
   match path.parent with
   | some parent => IO.FS.createDirAll parent
   | none => pure ()
   IO.FS.withFile path .append fun handle => do
     handle.putStrLn line
+
 
 def ensureSessionFile (path : System.FilePath) (cwd : System.FilePath) (model : String) : IO Unit := do
   if ← path.pathExists then
@@ -116,7 +192,10 @@ def ensureSessionFile (path : System.FilePath) (cwd : System.FilePath) (model : 
     let id ← newId "session"
     appendLine path (headerJson id timestamp cwd.toString model).compress
 
-def parseSessionLine? (line : String) : Except String (Option (String × AgentMessage)) := do
+
+def parseSessionLine?
+    (modelInfo : LeanAgent.Models.ModelInfo)
+    (line : String) : Except String (Option (String × RuntimeAgentMessage)) := do
   let trimmed := line.trimAscii.toString
   if trimmed.isEmpty then
     pure none
@@ -126,12 +205,15 @@ def parseSessionLine? (line : String) : Except String (Option (String × AgentMe
     if entryType == "message" then
       let id ← (← json.getObjVal? "id").getStr?
       let message ← json.getObjVal? "message"
-      let message ← messageFromJson message
+      let message ← runtimeMessageFromJson modelInfo message
       pure (some (id, message))
     else
       pure none
 
-def loadMessagesWithLastId (path : System.FilePath) : IO (Array AgentMessage × Option String) := do
+
+def loadMessagesWithLastId
+    (modelInfo : LeanAgent.Models.ModelInfo)
+    (path : System.FilePath) : IO (Array RuntimeAgentMessage × Option String) := do
   if !(← path.pathExists) then
     pure (#[], none)
   else
@@ -139,7 +221,7 @@ def loadMessagesWithLastId (path : System.FilePath) : IO (Array AgentMessage × 
     let mut messages := #[]
     let mut lastId := none
     for line in content.splitOn "\n" do
-      match parseSessionLine? line with
+      match parseSessionLine? modelInfo line with
       | .ok (some (id, message)) =>
           messages := messages.push message
           lastId := some id
@@ -147,48 +229,101 @@ def loadMessagesWithLastId (path : System.FilePath) : IO (Array AgentMessage × 
       | .error err => throw (IO.userError s!"invalid session line in {path}: {err}")
     pure (messages, lastId)
 
-def loadMessages (path : System.FilePath) : IO (Array AgentMessage) := do
-  pure (← loadMessagesWithLastId path).fst
+
+def loadMessages
+    (modelInfo : LeanAgent.Models.ModelInfo)
+    (path : System.FilePath) : IO (Array RuntimeAgentMessage) := do
+  pure (← loadMessagesWithLastId modelInfo path).fst
+
 
 structure SessionStore where
   path : System.FilePath
   lastEntryId : Option String := none
+
 
 inductive Persistence where
   | ephemeral
   | create (path : System.FilePath)
   | resume (path : System.FilePath)
 
+
 structure AgentSession where
-  config : AgentLoopConfig
-  messages : Array AgentMessage := #[]
+  agent : LeanAgent.Agent.Agent
   store : Option SessionStore := none
 
-def AgentSession.withMessages (session : AgentSession) (messages : Array AgentMessage) : AgentSession :=
-  { session with messages := messages }
+
+def AgentSession.messages (session : AgentSession) : Array RuntimeAgentMessage :=
+  session.agent.state.messages
+
+
+def AgentSession.withMessages
+    (session : AgentSession)
+    (messages : Array RuntimeAgentMessage) : AgentSession :=
+  { session with
+    agent := { session.agent with state := { session.agent.state with messages := messages } }
+  }
+
 
 def AgentSession.sessionPath? (session : AgentSession) : Option System.FilePath :=
   session.store.map (fun store => store.path)
 
+
+def reasoningToThinkingLevel : Option LeanAgent.AI.ThinkingLevel → LeanAgent.AI.ModelThinkingLevel
+  | some level => .level level
+  | none => .off
+
+
+def agentOptionsFromConfig
+    (config : RuntimeAgentLoopConfig)
+    (messages : Array RuntimeAgentMessage) : LeanAgent.Agent.AgentOptions :=
+  { initialState :=
+      { systemPrompt := ""
+        model := config.model
+        thinkingLevel := reasoningToThinkingLevel config.reasoning
+        messages := messages
+      }
+    convertToLlm := config.convertToLlm
+    transformContext := config.transformContext
+    getApiKey := config.getApiKey
+    onPayload := config.onPayload
+    onResponse := config.onResponse
+    beforeToolCall := config.beforeToolCall
+    afterToolCall := config.afterToolCall
+    prepareNextTurn := config.prepareNextTurn
+    sessionId := config.sessionId
+    thinkingBudgets := config.thinkingBudgets
+    transport := config.transport.getD .auto
+    maxRetryDelayMs := config.maxRetryDelayMs
+    toolExecution := config.toolExecution
+  }
+
+
 def create
-    (config : AgentLoopConfig)
+    (config : RuntimeAgentLoopConfig)
     (cwd : System.FilePath)
     (model : String)
     (persistence : Persistence := .ephemeral) : IO AgentSession := do
+  let mkSession (messages : Array RuntimeAgentMessage) (store : Option SessionStore) : AgentSession :=
+    { agent := LeanAgent.Agent.Agent.create (agentOptionsFromConfig config messages)
+      store := store
+    }
   match persistence with
   | .ephemeral =>
-      pure { config := config }
+      pure (mkSession #[] none)
   | .create path =>
       ensureSessionFile path cwd model
-      let (messages, lastId) ← loadMessagesWithLastId path
-      pure { config := config, messages := messages, store := some { path := path, lastEntryId := lastId } }
+      let (messages, lastId) ← loadMessagesWithLastId config.model path
+      pure (mkSession messages (some { path := path, lastEntryId := lastId }))
   | .resume path =>
       if !(← path.pathExists) then
         throw (IO.userError s!"session file not found: {path}")
-      let (messages, lastId) ← loadMessagesWithLastId path
-      pure { config := config, messages := messages, store := some { path := path, lastEntryId := lastId } }
+      let (messages, lastId) ← loadMessagesWithLastId config.model path
+      pure (mkSession messages (some { path := path, lastEntryId := lastId }))
 
-def persistMessages (store : Option SessionStore) (messages : Array AgentMessage) : IO (Option SessionStore) := do
+
+def persistMessages
+    (store : Option SessionStore)
+    (messages : Array RuntimeAgentMessage) : IO (Option SessionStore) := do
   match store with
   | none => pure none
   | some store =>
@@ -196,73 +331,127 @@ def persistMessages (store : Option SessionStore) (messages : Array AgentMessage
       for message in messages do
         let timestamp ← currentTimestamp
         let id ← newId "entry"
-        appendLine store.path (messageEntryJson id (lastId.getD "") timestamp message).compress
+        let json := runtimeMessageToJson message
+        appendLine store.path (messageEntryJsonFromJson id (lastId.getD "") timestamp json).compress
         lastId := some id
       pure (some { store with lastEntryId := lastId })
 
-def prompt (session : AgentSession) (content : String) (sink : EventSink) : IO AgentSession := do
-  let before := session.messages.size
-  let initial := session.messages.push (.user content)
-  let updated ← runAgentLoop session.config initial sink
-  let newMessages := updated.extract before updated.size
-  let store ← persistMessages session.store newMessages
-  pure { session with messages := updated, store := store }
 
-def canContinueFrom? : AgentMessage → Bool
-  | .user _ => true
-  | .toolResult _ _ _ _ => true
-  | .assistant _ _ => false
+def assistantToolCalls : RuntimeAgentMessage → Array LeanAgent.AI.ToolCall
+  | .ofMessage (.assistant message) => LeanAgent.AI.contentToolCalls message.content
+  | _ => #[]
 
-def continueSession (session : AgentSession) (sink : EventSink) : IO AgentSession := do
-  match session.messages.back? with
-  | none => throw (IO.userError "cannot continue an empty session")
-  | some message =>
-      if canContinueFrom? message then
-        pure ()
-      else
-        throw (IO.userError "cannot continue after an assistant message; add a new prompt or resume a session ending in user/tool output")
+
+def emitToolExecutionEvents
+    (assistantMessage : RuntimeAgentMessage)
+    (toolResultMessage : RuntimeAgentMessage)
+    (sink : RuntimeAgentEventSink) : IO Unit := do
+  match toolResultMessage with
+  | .ofMessage (.toolResult result) =>
+      let args :=
+        match (assistantToolCalls assistantMessage).find? (fun call => call.id == result.toolCallId) with
+        | some call => call.arguments
+        | none => Lean.Json.null
+      let toolResult : LeanAgent.Agent.AgentToolResult :=
+        { content := result.content
+          details := result.details
+          terminate := false
+        }
+      sink (.toolExecutionStart result.toolCallId result.toolName args)
+      sink (.toolExecutionEnd result.toolCallId result.toolName toolResult result.isError)
+  | _ => pure ()
+
+
+def emitSessionEvents
+    (newMessages : Array RuntimeAgentMessage)
+    (allMessages : Array RuntimeAgentMessage)
+    (sink : RuntimeAgentEventSink) : IO Unit := do
+  sink .agentStart
+  if !newMessages.isEmpty then
+    sink .turnStart
+  let mut index := 0
+  while index < newMessages.size do
+    let message := newMessages[index]!
+    sink (.messageStart message)
+    sink (.messageEnd message)
+    match message with
+    | .ofMessage (.assistant _) =>
+        let mut toolResults := #[]
+        index := index + 1
+        while index < newMessages.size do
+          let candidate := newMessages[index]!
+          match candidate with
+          | .ofMessage (.toolResult _) =>
+              toolResults := toolResults.push candidate
+              emitToolExecutionEvents message candidate sink
+              index := index + 1
+          | _ =>
+              break
+        sink (.turnEnd message toolResults)
+        if index < newMessages.size then
+          sink .turnStart
+    | _ =>
+        index := index + 1
+  sink (.agentEnd allMessages)
+
+
+def prompt
+    (session : AgentSession)
+    (content : String)
+    (sink : RuntimeAgentEventSink) : IO AgentSession := do
   let before := session.messages.size
-  let updated ← runAgentLoop session.config session.messages sink
-  let newMessages := updated.extract before updated.size
+  let agent ← session.agent.prompt content
+  let newMessages := agent.state.messages.extract before agent.state.messages.size
+  emitSessionEvents newMessages agent.state.messages sink
   let store ← persistMessages session.store newMessages
-  pure { session with messages := updated, store := store }
+  pure { session with agent := agent, store := store }
+
+
+def continueSession
+    (session : AgentSession)
+    (sink : RuntimeAgentEventSink) : IO AgentSession := do
+  let before := session.messages.size
+  let agent ← session.agent.continue
+  let newMessages := agent.state.messages.extract before agent.state.messages.size
+  emitSessionEvents newMessages agent.state.messages sink
+  let store ← persistMessages session.store newMessages
+  pure { session with agent := agent, store := store }
+
 
 def clear (session : AgentSession) : AgentSession :=
-  { session with messages := #[] }
+  { session with agent := session.agent.reset }
 
-def jsonEvent (event : AgentEvent) : IO Lean.Json := do
+
+def runtimeMessagesToJson (messages : Array RuntimeAgentMessage) : Lean.Json :=
+  LeanAgent.Json.arr (messages.map runtimeMessageToJson)
+
+
+def jsonEvent (event : RuntimeAgentEvent) : IO Lean.Json := do
   let timestamp ← currentTimestamp
   let base (fields : List (String × Lean.Json)) :=
     LeanAgent.Json.obj (("timestamp", LeanAgent.Json.str timestamp) :: fields)
   match event with
   | .agentStart => pure (base [("type", LeanAgent.Json.str "agent_start")])
-  | .agentEnd => pure (base [("type", LeanAgent.Json.str "agent_end")])
-  | .turnStart turn =>
-      pure (base [("type", LeanAgent.Json.str "turn_start"), ("turn", LeanAgent.Json.nat turn)])
-  | .turnEnd turn =>
-      pure (base [("type", LeanAgent.Json.str "turn_end"), ("turn", LeanAgent.Json.nat turn)])
-  | .messageStart role =>
-      pure (base [("type", LeanAgent.Json.str "message_start"), ("role", LeanAgent.Json.str role)])
-  | .messageDelta delta =>
-      pure (base [("type", LeanAgent.Json.str "message_delta"), ("delta", LeanAgent.Json.str delta)])
-  | .messageEnd message =>
-      pure (base [("type", LeanAgent.Json.str "message_end"), ("message", messageToJson message)])
-  | .toolExecutionStart call =>
-      pure (base [("type", LeanAgent.Json.str "tool_execution_start"), ("tool_call", toolCallToJson call)])
-  | .toolExecutionEnd result =>
+  | .agentEnd messages =>
       pure
         (base
-          [ ("type", LeanAgent.Json.str "tool_execution_end")
-          , ("tool_call_id", LeanAgent.Json.str result.toolCallId)
-          , ("name", LeanAgent.Json.str result.name)
-          , ("ok", LeanAgent.Json.bool result.ok)
-          , ("content", LeanAgent.Json.str result.content)
-          , ("error", match result.error with | some err => LeanAgent.Json.str err | none => LeanAgent.Json.null)
+          [ ("type", LeanAgent.Json.str "agent_end")
+          , ("messages", runtimeMessagesToJson messages)
           ])
-  | .error message =>
-      pure (base [("type", LeanAgent.Json.str "error"), ("message", LeanAgent.Json.str message)])
+  | .turnStart => pure (base [("type", LeanAgent.Json.str "turn_start")])
+  | .turnEnd _ _ => pure (base [("type", LeanAgent.Json.str "turn_end")])
+  | .messageStart _ => pure (base [("type", LeanAgent.Json.str "message_start")])
+  | .messageUpdate _ _ => pure (base [("type", LeanAgent.Json.str "message_update")])
+  | .messageEnd _ => pure (base [("type", LeanAgent.Json.str "message_end")])
+  | .toolExecutionStart _ _ _ =>
+      pure (base [("type", LeanAgent.Json.str "tool_execution_start")])
+  | .toolExecutionUpdate _ _ _ _ =>
+      pure (base [("type", LeanAgent.Json.str "tool_execution_update")])
+  | .toolExecutionEnd _ _ _ _ =>
+      pure (base [("type", LeanAgent.Json.str "tool_execution_end")])
 
-def jsonEventSink : EventSink :=
+
+def jsonEventSink : RuntimeAgentEventSink :=
   fun event => do
     let json ← jsonEvent event
     IO.println json.compress

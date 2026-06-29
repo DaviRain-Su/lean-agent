@@ -1,7 +1,7 @@
 import Lean
 import LeanAgent.Core
+import LeanAgent.Agent.Types
 import LeanAgent.Json
-
 namespace LeanAgent.CodingTools
 
 open LeanAgent
@@ -431,5 +431,31 @@ def makeBashTool (root : System.FilePath) : AgentTool :=
 
 def defaultTools (root : System.FilePath) : Array AgentTool :=
   #[makeReadTool root, makeListTool root, makeWriteTool root, makeEditTool root, makeBashTool root]
+
+def defaultAgentTools (root : System.FilePath) : Array LeanAgent.Agent.AgentTool :=
+  let wrap (legacyTool : AgentTool) : LeanAgent.Agent.AgentTool :=
+    { name := legacyTool.name
+      description := legacyTool.description
+      parameters := legacyTool.inputSchema
+      label := legacyTool.name
+      execute := fun toolCallId args signal updateCallback => do
+        let call : ToolCall := { id := toolCallId, name := legacyTool.name, arguments := args }
+        let result ← legacyTool.execute call
+        let content : Array LeanAgent.AI.ContentBlock :=
+          if result.content.isEmpty then
+            #[]
+          else
+            #[.text { text := result.content }]
+        let newResult : LeanAgent.Agent.AgentToolResult :=
+          { content := content
+            details := result.data
+            terminate := false
+          }
+        match updateCallback with
+        | some cb => cb newResult
+        | none => pure ()
+        pure newResult
+    }
+  defaultTools root |>.map wrap
 
 end LeanAgent.CodingTools
