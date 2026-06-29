@@ -57,6 +57,7 @@ structure BedrockOptions extends LeanAgent.AI.SimpleStreamOptions where
 def optionsFromSimple (options : LeanAgent.AI.SimpleStreamOptions) : BedrockOptions :=
   { temperature := options.temperature
     maxTokens := options.maxTokens
+    signal := options.signal
     apiKey := options.apiKey
     transport := options.transport
     cacheRetention := options.cacheRetention

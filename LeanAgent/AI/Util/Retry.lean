@@ -93,15 +93,20 @@ def isRetryableAssistantError (message : AssistantMessage) : Bool :=
 def retryDelayMs (policy : Policy) (attempt : Nat) : Nat :=
   min policy.maxRetryDelayMs (250 * attempt)
 
-partial def withRetries {α : Type} (policy : Policy) (action : IO α) : IO α := do
+partial def withRetries {α : Type}
+    (policy : Policy)
+    (action : IO α)
+    (signal? : Option LeanAgent.AI.Util.Abort.AbortSignal := none)
+    (sleepMs : Nat → IO Unit := fun ms => IO.sleep (UInt32.ofNat ms)) : IO α := do
   let rec loop (attempt : Nat) : IO α := do
+    LeanAgent.AI.Util.Abort.throwIfAborted signal?
     try
       action
     catch err =>
       if attempt < policy.maxRetries && isRetryableErrorMessage err.toString then
         let delay := retryDelayMs policy (attempt + 1)
         if delay > 0 then
-          IO.sleep (UInt32.ofNat delay)
+          LeanAgent.AI.Util.Abort.sleep sleepMs delay signal?
         loop (attempt + 1)
       else
         throw err

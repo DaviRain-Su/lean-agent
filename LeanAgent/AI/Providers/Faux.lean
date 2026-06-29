@@ -263,32 +263,45 @@ def createStream
     (model : LeanAgent.Models.ModelInfo)
     (context : Context)
     (options : SimpleStreamOptions) : IO AssistantMessageEventStream := do
-  let step ← popResponse? responsesRef
-  let currentState ← stateRef.get
-  let nextState := { currentState with callCount := currentState.callCount + 1 }
-  stateRef.set nextState
-  let timestamp ← IO.monoMsNow
-  match step with
-  | none =>
-      let message ← withUsageEstimate
-        (errorMessage "No more faux responses queued" api providerId model.id timestamp)
-        context
-        options
-        promptCacheRef
-      pure (errorStream message)
-  | some (.message message) =>
-      let message := rewriteMessage message api providerId model.id timestamp
-      let message ← withUsageEstimate message context options promptCacheRef
-      pure (fromMessage message)
-  | some (.factory factory) =>
-      try
-        let resolved ← factory context options nextState model
-        let message := rewriteMessage resolved api providerId model.id timestamp
+  if ← LeanAgent.AI.Util.Abort.isAborted options.signal then
+    let timestamp ← IO.monoMsNow
+    pure <| fromMessage
+      { content := #[]
+        api := api
+        provider := providerId
+        model := model.id
+        usage := defaultUsage
+        stopReason := .aborted
+        errorMessage := some LeanAgent.AI.Util.Abort.requestAbortedMessage
+        timestamp := timestamp
+      }
+  else
+    let step ← popResponse? responsesRef
+    let currentState ← stateRef.get
+    let nextState := { currentState with callCount := currentState.callCount + 1 }
+    stateRef.set nextState
+    let timestamp ← IO.monoMsNow
+    match step with
+    | none =>
+        let message ← withUsageEstimate
+          (errorMessage "No more faux responses queued" api providerId model.id timestamp)
+          context
+          options
+          promptCacheRef
+        pure (errorStream message)
+    | some (.message message) =>
+        let message := rewriteMessage message api providerId model.id timestamp
         let message ← withUsageEstimate message context options promptCacheRef
         pure (fromMessage message)
-      catch err =>
-        let message := errorMessage err.toString api providerId model.id timestamp
-        pure (errorStream message)
+    | some (.factory factory) =>
+        try
+          let resolved ← factory context options nextState model
+          let message := rewriteMessage resolved api providerId model.id timestamp
+          let message ← withUsageEstimate message context options promptCacheRef
+          pure (fromMessage message)
+        catch err =>
+          let message := errorMessage err.toString api providerId model.id timestamp
+          pure (errorStream message)
 
 def fauxProvider (options : FauxOptions := {}) : IO FauxProviderHandle := do
   let api := options.api.getD defaultApi

@@ -36,6 +36,7 @@ structure AzureOpenAIResponsesOptions extends LeanAgent.AI.Api.OpenAIResponses.O
 def optionsFromSimple (options : LeanAgent.AI.SimpleStreamOptions) : AzureOpenAIResponsesOptions :=
   { temperature := options.temperature
     maxTokens := options.maxTokens
+    signal := options.signal
     apiKey := options.apiKey
     transport := options.transport
     cacheRetention := options.cacheRetention
@@ -309,6 +310,7 @@ def completeWithOptions
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
   let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
     (runHttpJson config resolved model payload options)
+    options.signal
   let timestamp ← IO.monoMsNow
   match LeanAgent.AI.Api.OpenAIResponses.parseResponse model.api model.provider model.id timestamp raw with
   | .ok response =>
@@ -331,6 +333,7 @@ def completeStreamWithOptions
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
   let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
     (runHttpJson config resolved model payload options)
+    options.signal
   let timestamp ← IO.monoMsNow
   match LeanAgent.AI.Api.OpenAIResponses.parseStreamingEventStream model.api model.provider model.id timestamp raw with
   | .ok stream =>

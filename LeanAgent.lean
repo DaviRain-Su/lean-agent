@@ -69,6 +69,7 @@ import LeanAgent.AI.Schema
 import LeanAgent.AI.SessionResources
 import LeanAgent.AI.Types
 import LeanAgent.AI.Validation
+import LeanAgent.AI.Util.Abort
 import LeanAgent.AI.Util.Diagnostics
 import LeanAgent.AI.Util.Estimate
 import LeanAgent.AI.Util.Hash

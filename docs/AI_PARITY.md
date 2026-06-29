@@ -51,18 +51,18 @@ Before starting OMP advanced work:
 
 | Group | Pi files | Lean target | Current status |
 | --- | ---: | --- | --- |
-| Root entrypoints and package API | 16 | `LeanAgent.AI`, `LeanAgent.Models`, `LeanAgent.AI.Providers.All`, `LeanAgent.Compat`, docs | partial |
+| Root entrypoints and package API | 16 | `LeanAgent.lean`, `LeanAgent.Models`, `LeanAgent.AI.Compat`, `LeanAgent.AI.Providers.All`, docs | partial |
 | API protocol implementations | 28 | `LeanAgent.AI.Api.*` | partial |
 | Auth | 5 | `LeanAgent.AI.Auth.*` | partial |
 | Providers and model catalogs | 74 | `LeanAgent.AI.Providers.*`, generated/catalog data | partial |
 | Utils | 14 | `LeanAgent.AI.Util.*` | partial |
-| Tests | 83+ | `Tests.lean`, future focused test modules | partial |
+| Tests | 93 | `Tests.lean`, future focused test modules | partial |
 
 ## Root Entrypoints
 
 | Pi source | Lean target | Status | Notes |
 | --- | --- | --- | --- |
-| `src/index.ts` | `LeanAgent.AI` or `LeanAgent.lean` exports | partial | Lean root exports core AI modules, OAuth registry helpers, provider all-entrypoint helpers, and image dispatch modules, but not the full Pi AI public surface. |
+| `src/index.ts` | `LeanAgent.lean` import/export barrel | partial | Lean uses `LeanAgent.lean` as the checked-in AI export surface today; there is no dedicated `LeanAgent/AI.lean` barrel yet. The root barrel exports core AI modules, OAuth registry helpers, provider all-entrypoint helpers, and image dispatch modules, but not the full Pi AI public surface. |
 | `src/compat.ts` | `LeanAgent.AI.Compat` | partial | Global registry, simple dispatch, legacy alias support, static catalog passthroughs, image registry/generation/catalog passthroughs, faux provider registration/unregistration, and built-in Bedrock Converse Stream registration exist. Full legacy surface and richer typed full-stream public exports are still missing. |
 | `src/cli.ts` | future `lean-agent ai ...` commands | missing | Not needed for core loop yet. |
 | `src/models.ts` | `LeanAgent.Models` | partial | Static catalog plus runtime `Provider`/`Collection`, `createModels`, `createProvider`, auth application, and simple completion dispatch. Current OpenAI Responses, OpenAI Codex, Azure, Mistral, Google, Vertex, OpenCode/OpenCode Go, image, and Bedrock checked-in catalog slices exist; generated refresh parity and dynamic provider behavior are still missing. |

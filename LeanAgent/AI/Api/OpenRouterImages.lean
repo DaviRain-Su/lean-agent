@@ -279,16 +279,20 @@ def generateImagesWithConfig
     (options : LeanAgent.AI.ImagesOptions := {}) : IO LeanAgent.AI.AssistantImages := do
   let timestamp ← IO.monoMsNow
   try
+    LeanAgent.AI.Util.Abort.throwIfAborted options.signal
     if config.apiKey.trimAscii.isEmpty then
       throw (IO.userError s!"No API key for provider: {model.provider}")
     let payload ← applyPayloadHook options model (requestToJson model context)
     let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
-    let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy (runHttpJson config model payload options)
+    let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy (runHttpJson config model payload options) options.signal
     match parseResponse model timestamp raw with
     | .ok images => pure images
     | .error err => throw (IO.userError s!"failed to parse provider response: {err}\n{raw}")
   catch err =>
-    pure (errorImages model timestamp err.toString)
+    if LeanAgent.AI.Util.Abort.isAbortErrorMessage err.toString then
+      pure (errorImages model timestamp LeanAgent.AI.Util.Abort.requestAbortedMessage .aborted)
+    else
+      pure (errorImages model timestamp err.toString)
 
 def generateImages
     (model : LeanAgent.AI.ImagesModel)

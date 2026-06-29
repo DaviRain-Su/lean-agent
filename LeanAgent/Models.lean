@@ -2912,15 +2912,36 @@ def Collection.applyAuth
         }
       pure (requestModel, requestOptions)
 
+def abortedAssistantMessage (model : ModelInfo) (timestamp : Nat) : LeanAgent.AI.AssistantMessage :=
+  { content := #[]
+    api := model.api
+    provider := model.provider
+    model := model.id
+    stopReason := .aborted
+    errorMessage := some LeanAgent.AI.Util.Abort.requestAbortedMessage
+    timestamp := timestamp
+  }
+
+def abortedEventStream (model : ModelInfo) (timestamp : Nat) : LeanAgent.AI.AssistantMessageEventStream :=
+  LeanAgent.AI.fromMessage (abortedAssistantMessage model timestamp)
+
 def Collection.streamSimple
     (collection : Collection)
     (model : ModelInfo)
     (context : LeanAgent.AI.Context)
     (options : LeanAgent.AI.SimpleStreamOptions := {}) :
     IO LeanAgent.AI.AssistantMessageEventStream := do
+  if ← LeanAgent.AI.Util.Abort.isAborted options.signal then
+    return abortedEventStream model (← IO.monoMsNow)
   let provider ← collection.requireProvider model
   let (requestModel, requestOptions) ← collection.applyAuth provider model options
-  provider.streamSimple requestModel context requestOptions
+  try
+    provider.streamSimple requestModel context requestOptions
+  catch err =>
+    if LeanAgent.AI.Util.Abort.isAbortErrorMessage err.toString then
+      pure (abortedEventStream requestModel (← IO.monoMsNow))
+    else
+      throw err
 
 def Collection.completeSimple
     (collection : Collection)

@@ -12,14 +12,34 @@ def resolveImagesApiProvider (api : LeanAgent.AI.ImagesApi) :
   | some provider => pure provider
   | none => throw (IO.userError s!"No API provider registered for api: {api}")
 
+def abortedImages (model : LeanAgent.AI.ImagesModel) : IO LeanAgent.AI.AssistantImages := do
+  let timestamp ← IO.monoMsNow
+  pure
+    { api := model.api
+      provider := model.provider
+      model := model.id
+      output := #[]
+      stopReason := .aborted
+      errorMessage := some LeanAgent.AI.Util.Abort.requestAbortedMessage
+      timestamp := timestamp
+    }
+
 def generateImagesWithApi
     (api : LeanAgent.AI.ImagesApi)
     (model : LeanAgent.AI.ImagesModel)
     (context : LeanAgent.AI.ImagesContext)
     (options : LeanAgent.AI.ImagesOptions := {}) :
     IO LeanAgent.AI.AssistantImages := do
+  if ← LeanAgent.AI.Util.Abort.isAborted options.signal then
+    return ← abortedImages model
   let provider ← resolveImagesApiProvider api
-  provider.generateImages model context options
+  try
+    provider.generateImages model context options
+  catch err =>
+    if LeanAgent.AI.Util.Abort.isAbortErrorMessage err.toString then
+      abortedImages model
+    else
+      throw err
 
 def generateImages
     (model : LeanAgent.AI.ImagesModel)
@@ -230,11 +250,16 @@ def Collection.generateImages
     (model : LeanAgent.AI.ImagesModel)
     (context : LeanAgent.AI.ImagesContext)
     (options : LeanAgent.AI.ImagesOptions := {}) : IO LeanAgent.AI.AssistantImages := do
+  if ← LeanAgent.AI.Util.Abort.isAborted options.signal then
+    return ← abortedImages model
   try
     let provider ← collection.requireProvider model
     let (requestModel, requestOptions) ← collection.applyAuth provider model options
     provider.generateImages requestModel context requestOptions
   catch err =>
-    errorImages model err.toString
+    if LeanAgent.AI.Util.Abort.isAbortErrorMessage err.toString then
+      abortedImages model
+    else
+      errorImages model err.toString
 
 end LeanAgent.AI.Images

@@ -45,6 +45,7 @@ structure OpenAICompletionsOptions extends LeanAgent.AI.SimpleStreamOptions wher
 def optionsFromSimple (options : LeanAgent.AI.SimpleStreamOptions) : OpenAICompletionsOptions :=
   { temperature := options.temperature
     maxTokens := options.maxTokens
+    signal := options.signal
     apiKey := options.apiKey
     transport := options.transport
     cacheRetention := options.cacheRetention
@@ -749,6 +750,7 @@ def completeWithOptions
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
   let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
     (runHttpJson config payload (requestHeaders options) options model)
+    options.signal
   match parseChatCompletion raw with
   | .ok response => pure response
   | .error err => throw (IO.userError s!"failed to parse provider response: {err}\n{raw}")
@@ -763,6 +765,7 @@ def streamWithOptions
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
   let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
     (runHttpJson config payload (requestHeaders options) options model)
+    options.signal
   let timestamp ← IO.monoMsNow
   match parseStreamingEventStream api providerId request.model timestamp raw with
   | .ok stream => pure stream

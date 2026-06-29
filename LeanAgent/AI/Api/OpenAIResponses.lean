@@ -35,6 +35,7 @@ structure OpenAIResponsesOptions extends LeanAgent.AI.SimpleStreamOptions where
 def optionsFromSimple (options : LeanAgent.AI.SimpleStreamOptions) : OpenAIResponsesOptions :=
   { temperature := options.temperature
     maxTokens := options.maxTokens
+    signal := options.signal
     apiKey := options.apiKey
     transport := options.transport
     cacheRetention := options.cacheRetention
@@ -988,6 +989,7 @@ def completeWithOptions
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
   let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
     (runHttpJson config model context payload options)
+    options.signal
   let timestamp ← IO.monoMsNow
   match parseResponse model.api model.provider model.id timestamp raw with
   | .ok response => pure (applyMessageUsageCost model options response)
@@ -1003,6 +1005,7 @@ def completeStreamWithOptions
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
   let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
     (runHttpJson config model context payload options)
+    options.signal
   let timestamp ← IO.monoMsNow
   match parseStreamingEventStream model.api model.provider model.id timestamp raw with
   | .ok stream => pure (applyStreamUsageCost model options stream)

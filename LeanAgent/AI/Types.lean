@@ -1,3 +1,4 @@
+import LeanAgent.AI.Util.Abort
 import LeanAgent.Core
 import LeanAgent.Json
 
@@ -154,6 +155,7 @@ abbrev PayloadHook := Lean.Json → ModelRef → IO (Option Lean.Json)
 abbrev ResponseHook := ProviderResponse → ModelRef → IO Unit
 
 structure ImagesOptions where
+  signal : Option LeanAgent.AI.Util.Abort.AbortSignal := none
   apiKey : Option String := none
   env : Array (String × String) := #[]
   headers : Array (String × Option String) := #[]
@@ -167,6 +169,7 @@ structure ImagesOptions where
 structure StreamOptions where
   temperature : Option Float := none
   maxTokens : Option Nat := none
+  signal : Option LeanAgent.AI.Util.Abort.AbortSignal := none
   apiKey : Option String := none
   transport : Option Transport := none
   cacheRetention : Option CacheRetention := none

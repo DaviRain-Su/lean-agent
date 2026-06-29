@@ -1,3 +1,4 @@
+import LeanAgent.AI.Util.Abort
 import LeanAgent.AI.Auth
 
 namespace LeanAgent.AI.OAuth
@@ -82,6 +83,7 @@ structure OAuthDeviceCodePollOptions (α : Type) where
   nowMs : IO Nat := LeanAgent.AI.Auth.epochMsNow
   sleepMs : Nat → IO Unit := fun ms => IO.sleep (UInt32.ofNat ms)
   isCancelled : IO Bool := pure false
+  signal : Option LeanAgent.AI.Util.Abort.AbortSignal := none
 
 structure RegisteredOAuthProvider where
   provider : OAuthProviderInterface
@@ -101,19 +103,29 @@ def deviceCodeTimeoutError (slowDownResponses : Nat) : IO α :=
   else
     throw (IO.userError timeoutMessage)
 
+def deviceCodeAbortSignal (options : OAuthDeviceCodePollOptions α) :
+    Option LeanAgent.AI.Util.Abort.AbortSignal :=
+  options.signal.map fun signal => { signal with message := cancelMessage }
+
 def sleepUntilNextDevicePoll
     (options : OAuthDeviceCodePollOptions α)
     (intervalMs : Nat)
     (deadline? : Option Nat)
     (slowDownResponses : Nat) : IO Unit := do
+  let signal? := deviceCodeAbortSignal options
   match deadline? with
-  | none => options.sleepMs intervalMs
+  | none => LeanAgent.AI.Util.Abort.sleep options.sleepMs intervalMs signal? 50 (some cancelMessage)
   | some deadline =>
       let now ← options.nowMs
       if now >= deadline then
         deviceCodeTimeoutError slowDownResponses
       else
-        options.sleepMs (Nat.min intervalMs (deadline - now))
+        LeanAgent.AI.Util.Abort.sleep
+          options.sleepMs
+          (Nat.min intervalMs (deadline - now))
+          signal?
+          50
+          (some cancelMessage)
 
 partial def pollOAuthDeviceCodeLoop
     (options : OAuthDeviceCodePollOptions α)
@@ -122,6 +134,7 @@ partial def pollOAuthDeviceCodeLoop
     (slowDownResponses : Nat) : IO α := do
   if ← options.isCancelled then
     throw (IO.userError cancelMessage)
+  LeanAgent.AI.Util.Abort.throwIfAborted (deviceCodeAbortSignal options) (some cancelMessage)
   match deadline? with
   | some deadline =>
       if (← options.nowMs) >= deadline then

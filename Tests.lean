@@ -3646,6 +3646,41 @@ def testRetryWithRetriesStopsOnNonRetryableFailure : IO Unit := do
   assertTrue failed "expected non-retryable failure"
   assertTrue ((← attempts.get) == 1) "expected no retry for quota exhaustion"
 
+def testAbortCombineSignals : IO Unit := do
+  let firstAbortRef ← IO.mkRef false
+  let secondAbortRef ← IO.mkRef false
+  let combined := LeanAgent.AI.Util.Abort.combineAbortSignals
+    #[ some { isAborted := firstAbortRef.get }
+     , some { isAborted := secondAbortRef.get }
+     ]
+  assertTrue (!(← LeanAgent.AI.Util.Abort.isAborted combined.signal))
+    "expected combined abort signal to start pending"
+  secondAbortRef.set true
+  assertTrue (← LeanAgent.AI.Util.Abort.isAborted combined.signal)
+    "expected combined abort signal to flip when any child aborts"
+  combined.cleanup
+
+def testRetryWithRetriesStopsOnAbortSignal : IO Unit := do
+  let attempts ← IO.mkRef 0
+  let abortedRef ← IO.mkRef false
+  let aborted ←
+    try
+      let _ : String ← LeanAgent.AI.Util.Retry.withRetries
+        { maxRetries := 2, maxRetryDelayMs := 250 }
+        (do
+          attempts.modify (· + 1)
+          throw (IO.userError "provider HTTP 503: service unavailable")
+          pure "unreachable")
+        (some { isAborted := abortedRef.get })
+        (fun _ => abortedRef.set true)
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains LeanAgent.AI.Util.Abort.requestAbortedMessage)
+        "expected retry abort message"
+      pure true
+  assertTrue aborted "expected retry loop to abort during retry delay"
+  assertTrue ((← attempts.get) == 1) "expected abort to prevent a second retry attempt"
+
 def testModelCatalogDeepSeekDefaults : IO Unit := do
   let catalog := LeanAgent.Models.defaultCatalog
   match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.deepSeekApiKeyEnv with
@@ -4641,6 +4676,24 @@ def testOAuthDeviceCodeFailureAndCancellation : IO Unit := do
         "expected device-code cancellation message"
       pure true
   assertTrue cancelled "cancelled device-code flow should throw before polling"
+
+def testOAuthDeviceCodeSignalCancelsInFlightWait : IO Unit := do
+  let polls ← IO.mkRef [LeanAgent.AI.OAuth.OAuthDeviceCodePollResult.pending]
+  let abortedRef ← IO.mkRef false
+  let cancelled ←
+    try
+      let _ ← LeanAgent.AI.OAuth.pollOAuthDeviceCodeFlow
+        { poll := nextOAuthDeviceCodePoll polls
+          sleepMs := fun _ => abortedRef.set true
+          signal := some { isAborted := abortedRef.get }
+        }
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains LeanAgent.AI.OAuth.cancelMessage)
+        "expected device-code signal cancellation message"
+      pure true
+  assertTrue cancelled "expected device-code signal to cancel an in-flight wait"
+  assertTrue ((← polls.get) == []) "expected only the initial device-code poll before cancellation"
 
 def testOAuthDeviceCodeTimeouts : IO Unit := do
   let timeoutPolls ← IO.mkRef [LeanAgent.AI.OAuth.OAuthDeviceCodePollResult.pending]
@@ -5742,6 +5795,57 @@ def testImagesCollectionUnknownProviderReturnsError : IO Unit := do
      | none => false)
     "expected unknown provider error message"
 
+
+def testImagesCollectionAbortSignalReturnsAborted : IO Unit := do
+  let calledRef ← IO.mkRef false
+  let provider ← LeanAgent.AI.Images.createImagesProvider
+    { id := "fake-images"
+      name := some "Fake Images"
+      auth := fakeProviderAuth
+      models := #[fakeImagesModel]
+      api :=
+        { generateImages := fun model _context _options => do
+            calledRef.set true
+            let timestamp ← IO.monoMsNow
+            pure
+              { api := model.api
+                provider := model.provider
+                model := model.id
+                output := #[LeanAgent.AI.text "image-collection-ok"]
+                timestamp := timestamp
+              }
+        }
+    }
+  let collection ← LeanAgent.AI.Images.createImagesModels
+  collection.setProvider provider
+  let signalRef ← IO.mkRef true
+  let signal : LeanAgent.AI.Util.Abort.AbortSignal := { isAborted := signalRef.get }
+  let result ← collection.generateImages
+    fakeImagesModel
+    { input := #[LeanAgent.AI.text "draw"] }
+    { signal := some signal }
+  assertTrue (result.stopReason == .aborted) "expected image collection abort result"
+  assertTrue (result.errorMessage == some LeanAgent.AI.Util.Abort.requestAbortedMessage)
+    "expected image collection abort message"
+  assertTrue (!(← calledRef.get)) "expected image provider not to run after abort"
+
+def testOpenRouterImagesAbortSignalReturnsAborted : IO Unit := do
+  let signalRef ← IO.mkRef true
+  let signal : LeanAgent.AI.Util.Abort.AbortSignal := { isAborted := signalRef.get }
+  let model : LeanAgent.AI.ImagesModel :=
+    { fakeImagesModel with
+      api := LeanAgent.AI.Api.OpenRouterImages.api
+      provider := LeanAgent.AI.Api.OpenRouterImages.providerId
+      baseUrl := LeanAgent.AI.Api.OpenRouterImages.baseUrl
+    }
+  let result ← LeanAgent.AI.Api.OpenRouterImages.generateImagesWithConfig
+    { apiKey := "ignored-key" }
+    model
+    { input := #[LeanAgent.AI.text "draw"] }
+    { signal := some signal }
+  assertTrue (result.stopReason == .aborted) "expected OpenRouter image abort result"
+  assertTrue (result.errorMessage == some LeanAgent.AI.Util.Abort.requestAbortedMessage)
+    "expected OpenRouter image abort message"
 def fakeOpenRouterImagesAuthContext : LeanAgent.AI.Auth.AuthContext :=
   { env := fun name =>
       pure
@@ -6033,6 +6137,34 @@ def testFauxProviderQueuesResponses : IO Unit := do
   assertTrue (first.usage.input > 0) "expected faux input usage"
   assertTrue (first.usage.output > 0) "expected faux output usage"
   assertTrue (first.usage.totalTokens == first.usage.input + first.usage.output) "expected faux total usage"
+
+def testFauxProviderAbortSignalReturnsAborted : IO Unit := do
+  let handle ← LeanAgent.AI.Providers.Faux.fauxProvider
+  handle.setResponses #[.message (LeanAgent.AI.Providers.Faux.fauxTextMessage "first")]
+  let signalRef ← IO.mkRef true
+  let signal : LeanAgent.AI.Util.Abort.AbortSignal := { isAborted := signalRef.get }
+  let collection ← LeanAgent.Models.createModels
+  collection.setProvider handle.provider
+  let collectionResult ← collection.completeSimple handle.getModel (fauxContext)
+    { signal := some signal }
+  assertTrue (collectionResult.stopReason == .aborted)
+    "expected collection abort to return aborted stop reason"
+  assertTrue (collectionResult.errorMessage == some LeanAgent.AI.Util.Abort.requestAbortedMessage)
+    "expected collection abort message"
+  assertTrue ((← handle.getPendingResponseCount) == 1)
+    "expected collection abort to leave queued faux responses untouched"
+  assertTrue ((← handle.state).callCount == 0)
+    "expected collection abort before faux provider dispatch"
+  let directResult ← handle.provider.completeSimple handle.getModel (fauxContext)
+    { signal := some signal }
+  assertTrue (directResult.stopReason == .aborted)
+    "expected direct faux provider abort stop reason"
+  assertTrue (directResult.errorMessage == some LeanAgent.AI.Util.Abort.requestAbortedMessage)
+    "expected direct faux provider abort message"
+  assertTrue ((← handle.getPendingResponseCount) == 1)
+    "expected direct faux provider abort to leave queue untouched"
+  assertTrue ((← handle.state).callCount == 0)
+    "expected direct faux provider abort before state advances"
 
 def testFauxProviderHelperBlocksAndEvents : IO Unit := do
   let handle ← LeanAgent.AI.Providers.Faux.fauxProvider
@@ -8156,6 +8288,8 @@ def main : IO UInt32 := do
     testRetryClassifiesAssistantErrors
     testRetryWithRetriesSucceedsAfterTransientFailures
     testRetryWithRetriesStopsOnNonRetryableFailure
+    testAbortCombineSignals
+    testRetryWithRetriesStopsOnAbortSignal
     testModelCatalogDeepSeekDefaults
     testOpenAICompatibleProviderFamilyCatalog
     testDefaultModelsRegistersOpenAICompatibleFamily
@@ -8178,6 +8312,7 @@ def main : IO UInt32 := do
     testOAuthDeviceCodeCompletesAfterPending
     testOAuthDeviceCodeSlowDownIncreasesInterval
     testOAuthDeviceCodeFailureAndCancellation
+    testOAuthDeviceCodeSignalCancelsInFlightWait
     testOAuthDeviceCodeTimeouts
     testOAuthPageHtmlEscapesDynamicContent
     testOAuthSuccessPageOmitsDetails
@@ -8206,6 +8341,8 @@ def main : IO UInt32 := do
     testImagesCollectionProviderCrudAndRefresh
     testImagesCollectionAppliesAuthAndOptions
     testImagesCollectionUnknownProviderReturnsError
+    testImagesCollectionAbortSignalReturnsAborted
+    testOpenRouterImagesAbortSignalReturnsAborted
     testOpenRouterImagesProviderFactoryAuthAndModels
     testCompatInjectsEnvApiKeyForKnownProviders
     testCompatInjectsEnvApiKeyForMappedProvidersOutsideCatalog
@@ -8223,6 +8360,7 @@ def main : IO UInt32 := do
     testFauxProviderHelperBlocksAndEvents
     testFauxProviderModelsFactoriesAndCache
     testCompatRegisterFauxProviderDispatchesAndUnregisters
+    testFauxProviderAbortSignalReturnsAborted
     testAIContentBlockJsonRoundTrip
     testAIMessageJsonRoundTrip
     testAIMessageLegacyConversion

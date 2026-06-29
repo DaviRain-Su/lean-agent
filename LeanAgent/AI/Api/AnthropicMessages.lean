@@ -54,6 +54,7 @@ structure AnthropicMessagesOptions extends LeanAgent.AI.SimpleStreamOptions wher
 def optionsFromSimple (options : LeanAgent.AI.SimpleStreamOptions) : AnthropicMessagesOptions :=
   { temperature := options.temperature
     maxTokens := options.maxTokens
+    signal := options.signal
     apiKey := options.apiKey
     transport := options.transport
     cacheRetention := options.cacheRetention
@@ -1124,6 +1125,7 @@ def completeWithOptions
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
   let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
     (runHttpJson config ref payload options context.tools)
+    options.signal
   let timestamp ← IO.monoMsNow
   match parseResponse model.api model.provider model.id timestamp raw with
   | .ok message => pure message
@@ -1143,6 +1145,7 @@ def completeStreamWithOptions
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
   let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
     (runHttpJson config ref payload options context.tools)
+    options.signal
   let timestamp ← IO.monoMsNow
   match parseStreamingEventStream model.api model.provider model.id timestamp raw with
   | .ok stream => pure stream

@@ -45,6 +45,7 @@ structure MistralOptions extends LeanAgent.AI.SimpleStreamOptions where
 def optionsFromSimple (options : LeanAgent.AI.SimpleStreamOptions) : MistralOptions :=
   { temperature := options.temperature
     maxTokens := options.maxTokens
+    signal := options.signal
     apiKey := options.apiKey
     transport := options.transport
     cacheRetention := options.cacheRetention
@@ -867,6 +868,7 @@ def completeWithOptions
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
   let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
     (runHttpJson config model payload options)
+    options.signal
   let timestamp ← IO.monoMsNow
   match parseChatCompletion api model.provider model.id timestamp raw with
   | .ok response => pure response
@@ -883,6 +885,7 @@ def completeStreamWithOptions
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
   let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
     (runHttpJson config model payload options)
+    options.signal
   let timestamp ← IO.monoMsNow
   match parseStreamingEventStream api model.provider model.id timestamp raw with
   | .ok stream => pure stream

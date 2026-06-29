@@ -216,15 +216,40 @@ def resolveApiProvider (api : String) : IO ApiProvider := do
   | some provider => pure provider
   | none => throw (IO.userError s!"No API provider registered for api: {api}")
 
+def abortedCompatMessage
+    (model : LeanAgent.Models.ModelInfo)
+    (timestamp : Nat) : LeanAgent.AI.AssistantMessage :=
+  { content := #[]
+    api := model.api
+    provider := model.provider
+    model := model.id
+    stopReason := .aborted
+    errorMessage := some LeanAgent.AI.Util.Abort.requestAbortedMessage
+    timestamp := timestamp
+  }
+
+def abortedCompatStream
+    (model : LeanAgent.Models.ModelInfo)
+    (timestamp : Nat) : LeanAgent.AI.AssistantMessageEventStream :=
+  LeanAgent.AI.fromMessage (abortedCompatMessage model timestamp)
+
 def streamSimple
     (model : LeanAgent.Models.ModelInfo)
     (context : LeanAgent.AI.Context)
     (options : LeanAgent.AI.SimpleStreamOptions := {}) :
     IO LeanAgent.AI.AssistantMessageEventStream := do
+  if ← LeanAgent.AI.Util.Abort.isAborted options.signal then
+    return abortedCompatStream model (← IO.monoMsNow)
   let provider ← resolveApiProvider model.api
   ensureApiMatches provider model
   let options ← withEnvApiKey model options
-  provider.streams.streamSimple model context options
+  try
+    provider.streams.streamSimple model context options
+  catch err =>
+    if LeanAgent.AI.Util.Abort.isAbortErrorMessage err.toString then
+      pure (abortedCompatStream model (← IO.monoMsNow))
+    else
+      throw err
 
 def streamSimpleWithApi
     (api : String)
@@ -232,10 +257,18 @@ def streamSimpleWithApi
     (context : LeanAgent.AI.Context)
     (options : LeanAgent.AI.SimpleStreamOptions := {}) :
     IO LeanAgent.AI.AssistantMessageEventStream := do
+  if ← LeanAgent.AI.Util.Abort.isAborted options.signal then
+    return abortedCompatStream model (← IO.monoMsNow)
   let provider ← resolveApiProvider api
   ensureApiMatches provider model
   let options ← withEnvApiKey model options
-  provider.streams.streamSimple model context options
+  try
+    provider.streams.streamSimple model context options
+  catch err =>
+    if LeanAgent.AI.Util.Abort.isAbortErrorMessage err.toString then
+      pure (abortedCompatStream model (← IO.monoMsNow))
+    else
+      throw err
 
 def completeSimple
     (model : LeanAgent.Models.ModelInfo)
