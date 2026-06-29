@@ -1,4 +1,5 @@
 import LeanAgent.AI.Auth
+import LeanAgent.AI.OAuth
 import LeanAgent.Json
 import LeanAgent.Models
 
@@ -207,4 +208,20 @@ def modifyModels
             none
       | none => some { model with baseUrl := baseUrl }
 
-end LeanAgent.AI.OAuth.GitHubCopilot
+def oauthProvider : LeanAgent.AI.OAuth.OAuthProviderInterface :=
+  { id := providerId
+    name := name
+    login := fun _callbacks =>
+      throw (IO.userError
+        ("GitHub Copilot device-code login is not yet implemented. " ++
+        "Set GITHUB_COPILOT_TOKEN env var with a valid Copilot token."))
+    usesCallbackServer := false
+    refreshToken := fun _credential =>
+      throw (IO.userError
+        ("GitHub Copilot token refresh is not yet implemented. " ++
+        "Manually update the stored credential or re-login when the token expires."))
+    getApiKey := fun credential => credential.access
+  }
+
+def registerBuiltIn : IO Unit :=
+  LeanAgent.AI.OAuth.registerBuiltInOAuthProvider oauthProvider

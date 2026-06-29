@@ -4993,6 +4993,42 @@ def testGitHubCopilotOAuthModifiesModelsFromCredential : IO Unit := do
     (enterpriseModels.all (fun model => model.baseUrl == "https://copilot-api.enterprise.example"))
     "expected enterprise base URL fallback for Copilot models"
 
+def testGitHubCopilotOAuthRegisterBuiltInProvider : IO Unit := do
+  LeanAgent.AI.OAuth.resetOAuthProviders
+  LeanAgent.AI.OAuth.GitHubCopilot.registerBuiltIn
+  match ← LeanAgent.AI.OAuth.getOAuthProvider? LeanAgent.AI.OAuth.GitHubCopilot.providerId with
+  | some provider =>
+      assertTrue (provider.id == LeanAgent.AI.OAuth.GitHubCopilot.providerId)
+        "expected registered Copilot OAuth provider id"
+      assertTrue (provider.name == LeanAgent.AI.OAuth.GitHubCopilot.name)
+        "expected registered Copilot provider name"
+      assertTrue (!provider.usesCallbackServer)
+        "expected Copilot device-code provider not to use callback server"
+      let apiKey := provider.getApiKey
+        { access := "copilot-test-token"
+          refresh := "refresh-x"
+          expires := 2000
+        }
+      assertTrue (apiKey == "copilot-test-token") "expected Copilot OAuth getApiKey"
+      let loginFailed ←
+        try
+          let callbacks : LeanAgent.AI.OAuth.OAuthLoginCallbacks :=
+            { onAuth := fun _ => pure ()
+              onDeviceCode := fun _ => pure ()
+              onPrompt := fun _ => pure ""
+              onSelect := fun _ => pure none
+            }
+          let _ ← provider.login callbacks
+          pure false
+        catch err =>
+          assertTrue (err.toString.contains "not yet implemented")
+            "expected Copilot login to report not-yet-implemented"
+          pure true
+      assertTrue loginFailed "expected Copilot login to fail gracefully"
+      pure ()
+  | none => fail "expected registered Copilot OAuth provider"
+  LeanAgent.AI.OAuth.resetOAuthProviders
+
 def headerValueOpt? (headers : Array (String × Option String)) (name : String) : Option (Option String) :=
   headers.findSome? fun (headerName, value) =>
     if headerName.toLower == name.toLower then some value else none
@@ -8450,6 +8486,7 @@ def main : IO UInt32 := do
     testGitHubCopilotOAuthDomainAndBaseUrlHelpers
     testGitHubCopilotOAuthParsesAvailableModels
     testGitHubCopilotOAuthModifiesModelsFromCredential
+    testGitHubCopilotOAuthRegisterBuiltInProvider
     testCatalogProviderHeadersApplyThroughAuth
     testCloudflareWorkersAIAuthResolution
     testCloudflareAIGatewayAuthResolution
