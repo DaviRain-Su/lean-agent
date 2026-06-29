@@ -1,5 +1,6 @@
 import Lean
 import LeanAgent.AI.Types
+import LeanAgent.Json
 
 namespace LeanAgent.AI.Auth
 
@@ -20,6 +21,42 @@ deriving BEq
 inductive Credential where
   | apiKey (credential : ApiKeyCredential)
 deriving BEq
+
+def providerEnvToJson (env : ProviderEnv) : Lean.Json :=
+  LeanAgent.Json.obj (env.toList.map fun (name, value) => (name, LeanAgent.Json.str value))
+
+def providerEnvFromJson (json : Lean.Json) : Except String ProviderEnv := do
+  let obj ← json.getObj?
+  let mut env := #[]
+  for (name, value) in Std.TreeMap.Raw.toList obj do
+    let value ← value.getStr?
+    env := env.push (name, value)
+  pure env
+
+def apiKeyCredentialToJson (credential : ApiKeyCredential) : Lean.Json :=
+  let fields :=
+    [("type", LeanAgent.Json.str "api_key")]
+      ++ (match credential.key with
+          | some key => [("key", LeanAgent.Json.str key)]
+          | none => [])
+      ++ (if credential.env.isEmpty then [] else [("env", providerEnvToJson credential.env)])
+  LeanAgent.Json.obj fields
+
+def credentialToJson : Credential → Lean.Json
+  | .apiKey credential => apiKeyCredentialToJson credential
+
+def apiKeyCredentialFromJson (json : Lean.Json) : Except String ApiKeyCredential := do
+  let key ← LeanAgent.Json.optionalString json "key"
+  let env ←
+    match LeanAgent.Json.optVal? json "env" with
+    | some value => providerEnvFromJson value
+    | none => pure #[]
+  pure { key, env }
+
+def credentialFromJson (json : Lean.Json) : Except String Credential := do
+  match ← (← json.getObjVal? "type").getStr? with
+  | "api_key" => pure (.apiKey (← apiKeyCredentialFromJson json))
+  | other => throw s!"unsupported credential type: {other}"
 
 structure AuthContext where
   env : String → IO (Option String)
@@ -187,5 +224,66 @@ def InMemoryCredentialStore.mk : IO CredentialStore := do
         | none => pure current
       delete := deleteCredential
     }
+
+namespace FileCredentialStore
+
+def entriesToJson (entries : Array (String × Credential)) : Lean.Json :=
+  LeanAgent.Json.obj (entries.toList.map fun (providerId, credential) =>
+    (providerId, credentialToJson credential))
+
+def entriesFromJson (json : Lean.Json) : Except String (Array (String × Credential)) := do
+  let obj ← json.getObj?
+  let mut entries := #[]
+  for (providerId, rawCredential) in Std.TreeMap.Raw.toList obj do
+    entries := entries.push (providerId, (← credentialFromJson rawCredential))
+  pure entries
+
+def readEntries (path : System.FilePath) : IO (Array (String × Credential)) := do
+  if !(← path.pathExists) then
+    pure #[]
+  else
+    let raw ← IO.FS.readFile path
+    if raw.trimAscii.isEmpty then
+      pure #[]
+    else
+      match Lean.Json.parse raw >>= entriesFromJson with
+      | .ok entries => pure entries
+      | .error err => throw (IO.userError s!"failed to read credential store {path}: {err}")
+
+def writeEntries (path : System.FilePath) (entries : Array (String × Credential)) : IO Unit := do
+  match path.parent with
+  | some parent => IO.FS.createDirAll parent
+  | none => pure ()
+  IO.FS.writeFile path (entriesToJson entries).pretty
+
+def readProvider (path : System.FilePath) (providerId : String) : IO (Option Credential) := do
+  let entries ← readEntries path
+  pure (entries.findSome? fun (id, credential) => if id == providerId then some credential else none)
+
+def writeProvider (path : System.FilePath) (providerId : String) (credential : Credential) : IO Unit := do
+  let entries ← readEntries path
+  let withoutProvider := entries.filter fun (id, _) => id != providerId
+  writeEntries path (withoutProvider.push (providerId, credential))
+
+def deleteProvider (path : System.FilePath) (providerId : String) : IO Unit := do
+  let entries ← readEntries path
+  writeEntries path (entries.filter fun (id, _) => id != providerId)
+
+def mk (path : System.FilePath) : IO CredentialStore :=
+  pure
+    { read := readProvider path
+      modify := fun providerId fn => do
+        let current ← readProvider path providerId
+        let next ← fn current
+        match next with
+        | some credential => writeProvider path providerId credential
+        | none => pure ()
+        match next with
+        | some credential => pure (some credential)
+        | none => pure current
+      delete := deleteProvider path
+    }
+
+end FileCredentialStore
 
 end LeanAgent.AI.Auth

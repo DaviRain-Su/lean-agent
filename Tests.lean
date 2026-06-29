@@ -1778,6 +1778,76 @@ def testModelsAuthStoredCredentialWins : IO Unit := do
       assertTrue (result.source == some "stored credential") "expected stored credential source"
   | none => fail "expected auth result from stored credential"
 
+def testFileCredentialStoreRoundTrip : IO Unit :=
+  IO.FS.withTempDir fun root => do
+    let path := root / "state" / "auth.json"
+    let store ← LeanAgent.AI.Auth.FileCredentialStore.mk path
+    assertTrue ((← store.read "fake").isNone) "expected missing file store read to return none"
+    let saved ← store.modify "fake" fun current => do
+      assertTrue current.isNone "expected no initial file credential"
+      pure
+        (some
+          (.apiKey
+            { key := some "stored-secret"
+              env := #[("ACCOUNT_ID", "acct"), ("EMPTY", "")]
+            }))
+    match saved with
+    | some (.apiKey credential) =>
+        assertTrue (credential.key == some "stored-secret") "expected saved API key"
+        assertTrue
+          (LeanAgent.AI.Auth.providerEnvGet? credential.env "ACCOUNT_ID" == some "acct")
+          "expected saved credential env"
+    | none => fail "expected saved file credential"
+    assertTrue (← path.pathExists) "expected credential file to be created"
+    let raw ← IO.FS.readFile path
+    assertTrue (raw.contains "api_key") "expected serialized API-key credential type"
+    assertTrue (raw.contains "stored-secret") "expected serialized credential key"
+    let reloaded ← LeanAgent.AI.Auth.FileCredentialStore.mk path
+    match ← reloaded.read "fake" with
+    | some (.apiKey credential) =>
+        assertTrue (credential.key == some "stored-secret") "expected reloaded API key"
+        assertTrue
+          (LeanAgent.AI.Auth.providerEnvGet? credential.env "ACCOUNT_ID" == some "acct")
+          "expected reloaded credential env"
+    | none => fail "expected reloaded file credential"
+    let unchanged ← reloaded.modify "fake" fun current => do
+      assertTrue current.isSome "expected current credential in modify callback"
+      pure none
+    match unchanged with
+    | some (.apiKey credential) =>
+        assertTrue (credential.key == some "stored-secret") "expected modify none to preserve credential"
+    | none => fail "expected modify none to return current credential"
+    reloaded.delete "fake"
+    let afterDelete ← LeanAgent.AI.Auth.FileCredentialStore.mk path
+    assertTrue ((← afterDelete.read "fake").isNone) "expected deleted file credential"
+
+def testFileCredentialStoreRejectsUnsupportedCredentialType : IO Unit :=
+  IO.FS.withTempDir fun root => do
+    let path := root / "auth.json"
+    IO.FS.writeFile path "{\"fake\":{\"type\":\"oauth\",\"access\":\"token\"}}"
+    let store ← LeanAgent.AI.Auth.FileCredentialStore.mk path
+    let failed ←
+      try
+        let _ ← store.read "fake"
+        pure false
+      catch err =>
+        assertTrue
+          (err.toString.contains "unsupported credential type: oauth")
+          "expected unsupported credential type error"
+        pure true
+    assertTrue failed "unsupported credential type should fail"
+
+def testModelsAuthFileCredentialStore : IO Unit :=
+  IO.FS.withTempDir fun root => do
+    let store ← LeanAgent.AI.Auth.FileCredentialStore.mk (root / "auth.json")
+    let _ ← store.modify "fake" fun _ =>
+      pure (some (.apiKey { key := some "file-secret" }))
+    match ← LeanAgent.AI.Auth.resolveProviderAuth "fake" fakeProviderAuth store fakeAuthContext with
+    | some result =>
+        assertTrue (result.auth.apiKey == some "file-secret") "expected file credential to win"
+        assertTrue (result.source == some "stored credential") "expected file credential source"
+    | none => fail "expected auth result from file credential"
+
 def headerValueOpt? (headers : Array (String × Option String)) (name : String) : Option (Option String) :=
   headers.findSome? fun (headerName, value) =>
     if headerName.toLower == name.toLower then some value else none
@@ -3869,6 +3939,9 @@ def main : IO UInt32 := do
     testDefaultModelsRegistersOpenAICompatibleFamily
     testModelsAuthEnvApiKeyResolution
     testModelsAuthStoredCredentialWins
+    testFileCredentialStoreRoundTrip
+    testFileCredentialStoreRejectsUnsupportedCredentialType
+    testModelsAuthFileCredentialStore
     testCloudflareWorkersAIAuthResolution
     testCloudflareAIGatewayAuthResolution
     testCloudflareStoredCredentialResolution
