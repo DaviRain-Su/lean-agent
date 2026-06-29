@@ -612,10 +612,10 @@ def captureResponseHook
     (responseRef : IO.Ref (Option LeanAgent.AI.ProviderResponse))
     (hook? : Option LeanAgent.AI.ResponseHook) : LeanAgent.AI.ResponseHook :=
   fun response model => do
+    responseRef.set (some response)
     match hook? with
     | some hook => hook response model
     | none => pure ()
-    responseRef.set (some response)
 
 def withCapturedResponseHook
     (options : LeanAgent.AI.SimpleStreamOptions) :

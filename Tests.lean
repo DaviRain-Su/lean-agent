@@ -774,6 +774,31 @@ def testModelsWithCapturedResponseHookPreservesOriginalHook : IO Unit := do
         "expected wrapped response hook to capture headers"
   | none => fail "expected wrapped response hook to capture response"
 
+def testModelsWithCapturedResponseHookCapturesResponseBeforeOriginalHookFailure : IO Unit := do
+  let options : LeanAgent.AI.SimpleStreamOptions :=
+    { onResponse := some fun _response _model => do
+        throw (IO.userError "response hook failed")
+    }
+  let (responseRef, wrapped) ← LeanAgent.Models.withCapturedResponseHook options
+  let model : LeanAgent.AI.ModelRef := { id := "hook-model", api := "openai-responses", provider := "openai" }
+  let failed ←
+    try
+      match wrapped.onResponse with
+      | some hook =>
+          hook { status := 200, headers := #[("x-hook", "present")] } model
+          pure false
+      | none => pure false
+    catch err =>
+      pure (err.toString.contains "response hook failed")
+  assertTrue failed "expected wrapped response hook to propagate original failure"
+  match ← responseRef.get with
+  | some response =>
+      assertTrue (response.status == 200) "expected wrapped hook failure path to capture status"
+      assertTrue
+        (headerValueCaseInsensitive? response.headers "x-hook" == some "present")
+        "expected wrapped hook failure path to capture headers"
+  | none => fail "expected wrapped hook failure path to capture response"
+
 def testWrappedOpenAIResponsesCompatOptionChainPreservesResponseHook : IO Unit := do
   let sawOriginalHook ← IO.mkRef false
   let baseOptions : LeanAgent.AI.SimpleStreamOptions :=
@@ -8686,6 +8711,15 @@ def httpServerScript : String :=
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
     , "            return"
+    , "        if self.path == '/codex-provider-rate-limit/codex/responses':"
+    , "            payload = json.dumps({'error': {'message': 'rate limit exceeded', 'type': 'rate_limit_error', 'code': 'rate_limit'}}).encode('utf-8')"
+    , "            self.send_response(429)"
+    , "            self.send_header('Content-Type', 'application/json')"
+    , "            self.send_header('X-Diagnostic-Trace', 'codex-rate-limit-route')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/responses-stream/responses':"
     , "            request = json.loads(body)"
     , "            text = 'streamed' if request.get('stream') is True else 'not-streaming'"
@@ -10841,6 +10875,97 @@ def testCompatOpenAICodexResponsesTypedLegacyAliasLocal : IO Unit := do
     assertTrue (stream.result.api == LeanAgent.AI.Api.OpenAICodexResponses.api)
       "expected typed compat Codex runtime api"
 
+def testOpenAICodexResponsesProviderHttpError : IO Unit := do
+  let port := 18121
+  withHttpServer port do
+    let sawResponse ← IO.mkRef false
+    let failed ←
+      try
+        let _stream ← LeanAgent.AI.Api.OpenAICodexResponses.completeStreamWithOptions
+          { apiKey := fakeOpenAICodexJwt
+            baseUrl := s!"http://127.0.0.1:{port}/codex-provider-rate-limit"
+            timeoutSeconds := 5
+            connectTimeoutSeconds := 5
+            noProxy := some "*"
+            userAgent := "lean-agent-test/0.1.0"
+          }
+          ((LeanAgent.Models.openAICodexModel "gpt-5.5" "GPT-5.5" 5.0 30.0 0.5 0.0 272000 128000).toResponsesModel)
+          { systemPrompt := some "codex system"
+            messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+          }
+          { sessionId := some "codex-session"
+            reasoning := some .minimal
+            onResponse := some fun response ref => do
+              assertTrue (ref.api == LeanAgent.AI.Api.OpenAICodexResponses.api)
+                "expected Codex HTTP error hook model api"
+              assertTrue (response.status == 429) "expected Codex HTTP error hook status"
+              assertTrue
+                (headerValueCaseInsensitive? response.headers "x-diagnostic-trace" ==
+                  some "codex-rate-limit-route")
+                "expected Codex HTTP error hook headers"
+              sawResponse.set true
+          }
+        pure false
+      catch err =>
+        pure
+          (err.toString.contains "provider HTTP 429" &&
+            err.toString.contains "rate limit exceeded" &&
+            err.toString.contains "type=rate_limit_error")
+    assertTrue failed "expected Codex HTTP provider error"
+    assertTrue (← sawResponse.get) "expected Codex HTTP error response hook to run"
+
+def testOpenAICodexProviderHttpErrorDiagnosticsIncludeResponseHeaders : IO Unit := do
+  let port := 18122
+  withHttpServer port do
+    let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+    let _ ← store.modify LeanAgent.Models.openAICodexProviderId fun _ =>
+      pure
+        (some
+          (.oauth
+            { access := fakeOpenAICodexJwt
+              refresh := "refresh-token"
+              expires := 2000
+            }))
+    let ctx : LeanAgent.AI.Auth.AuthContext :=
+      { env := fun _ => pure none
+        fileExists := fun _ => pure false
+        nowMs := pure 1000
+      }
+    let collection ← LeanAgent.Models.createModels (some store) ctx
+    collection.setProvider (← LeanAgent.AI.Providers.OpenAICodex.provider)
+    let model :=
+      { LeanAgent.Models.openAICodexModel "gpt-5.5" "GPT-5.5" 5.0 30.0 0.5 0.0 272000 128000 with
+        baseUrl := s!"http://127.0.0.1:{port}/codex-provider-rate-limit"
+      }
+    let context : LeanAgent.AI.Context :=
+      { systemPrompt := some "codex system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+    let stream ← collection.streamSimple
+      model
+      context
+      { sessionId := some "codex-session", reasoning := some .minimal }
+    assertTrue stream.isComplete "expected Codex provider error stream to complete"
+    assertTrue (stream.result.stopReason == .error) "expected Codex provider error stop reason"
+    match stream.result.errorMessage with
+    | some message =>
+        assertTrue (message.contains "provider HTTP 429") "expected Codex provider status in error"
+        assertTrue (message.contains "rate limit exceeded") "expected Codex provider message in error"
+    | none => fail "expected Codex provider error message"
+    match stream.result.diagnostics[0]? with
+    | some diagnostic =>
+        assertTrue (diagnostic.type == "provider_error") "expected Codex provider_error diagnostic"
+        match diagnostic.details with
+        | some details =>
+            assertTrue (jsonNatField? details "status" == some 429)
+              "expected Codex diagnostic HTTP status"
+        | none => fail "expected Codex diagnostic details"
+        assertTrue
+          (diagnosticResponseHeaderValueCaseInsensitive? diagnostic "x-diagnostic-trace" ==
+            some "codex-rate-limit-route")
+          "expected Codex diagnostic response headers"
+    | none => fail "expected Codex provider diagnostic entry"
+
 def testOpenAIResponsesCompleteWithOptionsLocal : IO Unit := do
   let port := 18088
   withHttpServer port do
@@ -11854,6 +11979,58 @@ def testModelsCollectionProviderErrorDiagnosticsIncludeResponseHeaders : IO Unit
           "expected collection diagnostic response headers"
     | none => fail "expected collection provider diagnostic entry"
 
+def testModelsCollectionProviderErrorDiagnosticsPreserveResponseHeadersWhenOnResponseThrows : IO Unit := do
+  let port := 18084
+  withHttpServer port do
+    let providerId := "diagnostic-openai"
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := "gpt-4o-mini"
+        name := "Diagnostic OpenAI"
+        provider := providerId
+        api := "openai-completions"
+        baseUrl := s!"http://127.0.0.1:{port}/diagnostic-openai"
+        contextWindow := 128000
+        maxTokens := 4096
+      }
+    let provider ← LeanAgent.Models.createProvider
+      { id := providerId
+        name := some "Diagnostic OpenAI"
+        auth := {}
+        models := #[model]
+        apis := #[{ api := model.api, streams := LeanAgent.AI.Providers.Streams.openAICompatibleStreams }]
+      }
+    let collection ← LeanAgent.Models.createModels
+    collection.setProvider provider
+    let stream ← collection.streamSimple
+      model
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+      { apiKey := some "test-key"
+        onResponse := some fun response _model => do
+          assertTrue (response.status == 429) "expected throwing hook response status"
+          throw (IO.userError "response hook failed")
+      }
+    assertTrue stream.isComplete "expected throwing-hook error stream to complete"
+    assertTrue (stream.result.stopReason == .error) "expected throwing-hook stop reason"
+    match stream.result.errorMessage with
+    | some message =>
+        assertTrue (message.contains "response hook failed") "expected throwing hook error message"
+    | none => fail "expected throwing hook error message"
+    match stream.result.diagnostics[0]? with
+    | some diagnostic =>
+        assertTrue (diagnostic.type == "provider_error") "expected throwing-hook provider_error diagnostic"
+        match diagnostic.details with
+        | some details =>
+            assertTrue (jsonNatField? details "status" == some 429)
+              "expected throwing-hook diagnostic HTTP status"
+        | none => fail "expected throwing-hook diagnostic details"
+        assertTrue
+          (diagnosticResponseHeaderValueCaseInsensitive? diagnostic "x-diagnostic-trace" ==
+            some "rate-limit-route")
+          "expected throwing-hook diagnostic response headers"
+    | none => fail "expected throwing-hook diagnostic entry"
+
 def main : IO UInt32 := do
   try
     testAgentLoopReadsFile
@@ -12125,6 +12302,7 @@ def main : IO UInt32 := do
     testOpenAIResponsesOptionsFromSimplePreserveResponseHook
     testModelsApplyAuthPreservesResponseHook
     testModelsWithCapturedResponseHookPreservesOriginalHook
+    testModelsWithCapturedResponseHookCapturesResponseBeforeOriginalHookFailure
     testWrappedOpenAIResponsesCompatOptionChainPreservesResponseHook
     testBuiltinOpenAIApplyAuthPreservesResponseHook
     testCompatOpenAIResponsesTypedLegacyAliasLocal
@@ -12150,8 +12328,11 @@ def main : IO UInt32 := do
     testCompatOpenAICodexResponsesBuiltinDispatch
     testCompatOpenAICodexResponsesTypedLegacyAliasLocal
     testCompatOpenAICodexResponsesMissingTokenUsesOauthCode
+    testOpenAICodexResponsesProviderHttpError
+    testOpenAICodexProviderHttpErrorDiagnosticsIncludeResponseHeaders
     testOpenAICompletionsProviderErrorDiagnostics
     testModelsCollectionProviderErrorDiagnosticsIncludeResponseHeaders
+    testModelsCollectionProviderErrorDiagnosticsPreserveResponseHeadersWhenOnResponseThrows
     IO.println "lean-agent tests passed"
     pure 0
   catch err =>

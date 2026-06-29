@@ -295,6 +295,8 @@ def runHttpJson
     options.toOpenAIResponsesOptions
     (modelRef config model)
     response
+  if response.status < 200 || response.status >= 300 then
+    throw (IO.userError (LeanAgent.AI.Util.Diagnostics.providerHttpErrorMessage response.status response.body))
   pure response.body
 
 def completeStreamWithOptions
