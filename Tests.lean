@@ -1059,6 +1059,109 @@ def testModelsCalculateCost : IO Unit := do
   assertTrue (cost.cacheWrite == 8.0) "expected cache write cost"
   assertTrue (cost.total == 13.5) "expected total cost"
 
+def fauxContext (text : String := "hi") : LeanAgent.AI.Context :=
+  { systemPrompt := some "Be concise."
+    messages := #[.user { content := #[LeanAgent.AI.text text], timestamp := 1 }]
+  }
+
+def testFauxProviderQueuesResponses : IO Unit := do
+  let handle ← LeanAgent.AI.Providers.Faux.fauxProvider
+  handle.setResponses
+    #[ .message (LeanAgent.AI.Providers.Faux.fauxTextMessage "first")
+     , .message (LeanAgent.AI.Providers.Faux.fauxTextMessage "second")
+     ]
+  let collection ← LeanAgent.Models.createModels
+  collection.setProvider handle.provider
+  let model := handle.getModel
+  let first ← collection.completeSimple model (fauxContext)
+  let second ← collection.completeSimple model (fauxContext)
+  let exhausted ← collection.completeSimple model (fauxContext)
+  assertTrue (LeanAgent.AI.contentPlainText first.content == "first") "expected first faux response"
+  assertTrue (LeanAgent.AI.contentPlainText second.content == "second") "expected second faux response"
+  assertTrue (exhausted.stopReason == .error) "expected exhausted faux response to error"
+  assertTrue (exhausted.errorMessage == some "No more faux responses queued") "expected exhausted error message"
+  assertTrue ((← handle.getPendingResponseCount) == 0) "expected empty faux queue"
+  assertTrue ((← handle.state).callCount == 3) "expected faux call count"
+  assertTrue (first.usage.input > 0) "expected faux input usage"
+  assertTrue (first.usage.output > 0) "expected faux output usage"
+  assertTrue (first.usage.totalTokens == first.usage.input + first.usage.output) "expected faux total usage"
+
+def testFauxProviderHelperBlocksAndEvents : IO Unit := do
+  let handle ← LeanAgent.AI.Providers.Faux.fauxProvider
+  let toolArgs := LeanAgent.Json.obj [("text", LeanAgent.Json.str "hi")]
+  handle.setResponses
+    #[ .message
+        (LeanAgent.AI.Providers.Faux.fauxAssistantMessage
+          #[ LeanAgent.AI.Providers.Faux.fauxThinking "think"
+           , LeanAgent.AI.Providers.Faux.fauxToolCall "echo" toolArgs "tool-1"
+           , LeanAgent.AI.Providers.Faux.fauxText "done"
+           ]
+          .toolUse)
+     ]
+  let stream ← handle.provider.streamSimple handle.getModel (fauxContext) {}
+  let response := stream.result
+  assertTrue (response.stopReason == .toolUse) "expected faux tool-use stop"
+  assertTrue
+    (response.content.any fun
+      | .thinking content => content.thinking == "think"
+      | _ => false)
+    "expected faux thinking block"
+  match LeanAgent.AI.contentToolCalls response.content |>.toList with
+  | [call] =>
+      assertTrue (call.id == "tool-1") "expected faux tool id"
+      assertTrue (call.name == "echo") "expected faux tool name"
+      assertTrue (call.arguments == toolArgs) "expected faux tool args"
+  | _ => fail "expected one faux tool call"
+  assertTrue
+    (stream.events.any fun
+      | .thinkingDelta _ "think" _ => true
+      | _ => false)
+    "expected faux thinking event"
+  assertTrue
+    (stream.events.any fun
+      | .toolCallEnd _ call _ => call.name == "echo"
+      | _ => false)
+    "expected faux tool event"
+
+def testFauxProviderModelsFactoriesAndCache : IO Unit := do
+  let handle ← LeanAgent.AI.Providers.Faux.fauxProvider
+    { api := some "faux:test"
+      provider := some "faux-provider"
+      models :=
+        #[ { id := "faux-fast", reasoning := false }
+         , { id := "faux-thinker", reasoning := true }
+         ]
+    }
+  handle.setResponses
+    #[ .factory (fun _context _options state model =>
+          pure (LeanAgent.AI.Providers.Faux.fauxTextMessage s!"{model.id}:{model.reasoning}:{state.callCount}"))
+     , .message (LeanAgent.AI.Providers.Faux.fauxTextMessage "cached")
+     ]
+  match handle.getModel? "faux-thinker" with
+  | some thinker =>
+      assertTrue thinker.reasoning "expected faux thinker reasoning model"
+      let first ← handle.provider.completeSimple thinker (fauxContext)
+        { sessionId := some "session-1", cacheRetention := some .short }
+      assertTrue (LeanAgent.AI.contentPlainText first.content == "faux-thinker:true:1")
+        "expected model-aware faux factory"
+      assertTrue (first.api == "faux:test") "expected faux api rewrite"
+      assertTrue (first.provider == "faux-provider") "expected faux provider rewrite"
+      assertTrue (first.model == "faux-thinker") "expected faux model rewrite"
+      assertTrue (first.usage.cacheWrite > 0) "expected first cached request to write prompt"
+      let followupContext : LeanAgent.AI.Context :=
+        { systemPrompt := some "Be concise."
+          messages :=
+            #[ .user { content := #[LeanAgent.AI.text "hi"], timestamp := 1 }
+             , .assistant first
+             , .user { content := #[LeanAgent.AI.text "follow up"], timestamp := 2 }
+             ]
+        }
+      let second ← handle.provider.completeSimple thinker followupContext
+        { sessionId := some "session-1", cacheRetention := some .short }
+      assertTrue (LeanAgent.AI.contentPlainText second.content == "cached") "expected queued cached response"
+      assertTrue (second.usage.cacheRead > 0) "expected follow-up to read prompt cache"
+  | none => fail "expected faux thinker model"
+
 def testAIContentBlockJsonRoundTrip : IO Unit := do
   let block : LeanAgent.AI.ContentBlock :=
     .toolCall
@@ -1620,6 +1723,9 @@ def main : IO UInt32 := do
     testModelsAuthStoredCredentialWins
     testModelsCollectionDispatchesWithAuth
     testModelsCalculateCost
+    testFauxProviderQueuesResponses
+    testFauxProviderHelperBlocksAndEvents
+    testFauxProviderModelsFactoriesAndCache
     testAIContentBlockJsonRoundTrip
     testAIMessageJsonRoundTrip
     testAIMessageLegacyConversion

@@ -171,7 +171,7 @@ should be generated or checked in as Lean data.
 | Cloudflare Workers AI | `cloudflare-workers-ai.ts`, `cloudflare-workers-ai.models.ts` | `LeanAgent.AI.Providers.CloudflareWorkersAI` | missing |
 | Cloudflare auth | `cloudflare-auth.ts` | `LeanAgent.AI.Providers.CloudflareAuth` | missing |
 | DeepSeek | `deepseek.ts`, `deepseek.models.ts` | `LeanAgent.Models` | partial |
-| Faux test provider | `faux.ts` | `LeanAgent.AI.Providers.Faux` | missing |
+| Faux test provider | `faux.ts` | `LeanAgent.AI.Providers.Faux` | partial |
 | Fireworks | `fireworks.ts`, `fireworks.models.ts` | `LeanAgent.Models` | partial |
 | GitHub Copilot | `github-copilot.ts`, `github-copilot.models.ts` | `LeanAgent.AI.Providers.GitHubCopilot` | missing |
 | Google | `google.ts`, `google.models.ts` | `LeanAgent.AI.Providers.Google` | missing |
@@ -243,7 +243,7 @@ Initial Lean parity should port tests in this order:
 | `stream.test.ts`, `empty.test.ts`, `abort.test.ts` | event stream tests | missing | Establishes stream contract. |
 | `openai-completions-*.test.ts` | OpenAI completions tests | partial | Payload tests cover empty tools, tool history, tool choice, max tokens, temperature, reasoning effort, prompt cache key/retention, streaming payload/SSE parsing, buffered streaming runtime dispatch, request/response headers, usage parsing, provider HTTP diagnostics, repaired tool arguments, and legacy assistant tool-call omission. Network provider matrix and true live-stream timing tests are missing. |
 | `retry.test.ts`, `diagnostics.test.ts`, `estimate.test.ts`, `overflow.test.ts`, `validation.test.ts`, `unicode-surrogate.test.ts` | util tests | partial | Retry classifier/policy, diagnostics extraction/round-trip, estimate utilities, provider header filtering/merge, proxy env resolution, JSON repair/streaming fallback, JSON Schema validation/coercion, Unicode surrogate sanitization helpers, overflow detection, and OpenAI transient HTTP retry are covered. Live provider unicode-surrogate tests are missing. |
-| `faux-provider.test.ts` | faux provider tests | missing | Needed for deterministic agent tests. |
+| `faux-provider.test.ts` | faux provider tests | partial | Deterministic provider handle, queued responses, helper blocks, model-aware factories, usage/cache estimates, model rewrite, collection dispatch, and event reconstruction are covered. Global compat registration, async timing, and abort behavior are missing. |
 | `images*.test.ts`, `openrouter-images.test.ts` | image tests | missing | Separate image phase. |
 | Anthropic/Google/Mistral/Bedrock/Azure/Codex tests | provider protocol tests | missing | After core OpenAI-compatible path is stable. |
 
