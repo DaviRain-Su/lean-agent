@@ -55,6 +55,7 @@ import LeanAgent.AI.Providers.OpenAICodex
 import LeanAgent.AI.Providers.OpenRouterImages
 import LeanAgent.AI.Providers.OpenRouter
 import LeanAgent.AI.Providers.Together
+import LeanAgent.AI.Providers.VercelAIGateway
 import LeanAgent.AI.Providers.XAI
 import LeanAgent.AI.Providers.Xiaomi
 import LeanAgent.AI.Providers.XiaomiTokenPlanAMS

@@ -40,6 +40,7 @@ structure AnthropicMessagesOptions extends LeanAgent.AI.SimpleStreamOptions wher
   thinkingBudgetTokens : Option Nat := none
   thinkingEffort : Option String := none
   thinkingDisplay : Option String := none
+  supportsTemperature : Bool := true
 
 def optionsFromSimple (options : LeanAgent.AI.SimpleStreamOptions) : AnthropicMessagesOptions :=
   { temperature := options.temperature
@@ -302,7 +303,11 @@ def requestOptionFields
   let maxTokenFields := [("max_tokens", LeanAgent.Json.nat maxTokens)]
   let temperatureFields :=
     match options.temperature with
-    | some temperature => [("temperature", LeanAgent.AI.floatJson temperature)]
+    | some temperature =>
+        if options.thinkingEnabled == some true || !options.supportsTemperature then
+          []
+        else
+          [("temperature", LeanAgent.AI.floatJson temperature)]
     | none => []
   maxTokenFields ++ temperatureFields
 

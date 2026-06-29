@@ -24,6 +24,7 @@ import LeanAgent.AI.Providers.OpenAICodex
 import LeanAgent.AI.Providers.OpenRouterImages
 import LeanAgent.AI.Providers.OpenRouter
 import LeanAgent.AI.Providers.Together
+import LeanAgent.AI.Providers.VercelAIGateway
 import LeanAgent.AI.Providers.XAI
 import LeanAgent.AI.Providers.Xiaomi
 import LeanAgent.AI.Providers.XiaomiTokenPlanAMS
@@ -81,6 +82,7 @@ def catalogProviders : IO (Array LeanAgent.Models.Provider) := do
      , ← LeanAgent.AI.Providers.KimiCoding.provider
      , ← LeanAgent.AI.Providers.MiniMax.provider
      , ← LeanAgent.AI.Providers.MiniMaxCN.provider
+     , ← LeanAgent.AI.Providers.VercelAIGateway.provider
      , ← LeanAgent.AI.Providers.Google.provider
      , ← LeanAgent.AI.Providers.GoogleVertex.provider
      , ← LeanAgent.AI.Providers.Mistral.provider

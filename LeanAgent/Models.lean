@@ -90,6 +90,11 @@ def minimaxCNApiKeyEnv : String := "MINIMAX_CN_API_KEY"
 def minimaxCNDefaultModel : String := "MiniMax-M2.7"
 def minimaxCNBaseUrl : String := "https://api.minimaxi.com/anthropic"
 
+def vercelAIGatewayProviderId : String := "vercel-ai-gateway"
+def vercelAIGatewayApiKeyEnv : String := "AI_GATEWAY_API_KEY"
+def vercelAIGatewayDefaultModel : String := "alibaba/qwen-3-14b"
+def vercelAIGatewayBaseUrl : String := "https://ai-gateway.vercel.sh"
+
 def googleProviderId : String := "google"
 def googleApiKeyEnv : String := "GEMINI_API_KEY"
 def googleDefaultModel : String := "gemini-2.5-flash"
@@ -178,6 +183,8 @@ structure ModelCompat where
   supportsDeveloperRole : Bool := true
   requiresReasoningContentOnAssistantMessages : Bool := false
   thinkingFormat : Option String := none
+  supportsTemperature : Bool := true
+  forceAdaptiveThinking : Bool := false
 deriving Repr, BEq
 
 structure ModelInfo where
@@ -798,6 +805,195 @@ def minimaxCNModels : Array ModelInfo :=
   #[ catalogAnthropicMessagesModel minimaxCNProviderId minimaxCNBaseUrl "MiniMax-M2.7" "MiniMax-M2.7" 0.3 1.2 0.06 0.375 204800 131072 true #[] #["text"]
    , catalogAnthropicMessagesModel minimaxCNProviderId minimaxCNBaseUrl "MiniMax-M2.7-highspeed" "MiniMax-M2.7-highspeed" 0.6 2.4 0.06 0.375 204800 131072 true #[] #["text"]
    , catalogAnthropicMessagesModel minimaxCNProviderId minimaxCNBaseUrl "MiniMax-M3" "MiniMax-M3" 0.6 2.4 0.12 0.0 512000 128000 true #[] #["text", "image"]
+   ]
+
+def vercelAIGatewayModels : Array ModelInfo :=
+  #[
+   catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "alibaba/qwen-3-14b" "Qwen3-14B" 0.12 0.24 0.0 0.0 40960 16384 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "alibaba/qwen-3-235b" "Qwen3 235B A22B" 0.22 0.88 0.0 0.0 262144 16384 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "alibaba/qwen-3-30b" "Qwen3-30B-A3B" 0.12 0.5 0.0 0.0 40960 16384 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "alibaba/qwen-3-32b" "Qwen 3 32B" 0.16 0.64 0.0 0.0 128000 8192 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "alibaba/qwen-3.6-max-preview" "Qwen 3.6 Max Preview" 1.3 7.8 0.26 1.625 240000 64000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "alibaba/qwen3-235b-a22b-thinking" "Qwen3 VL 235B A22B Thinking" 0.4 4.0 0.0 0.0 131072 32768 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "alibaba/qwen3-coder" "Qwen3 Coder 480B A35B Instruct" 1.5 7.5 0.3 0.0 262144 65536 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "alibaba/qwen3-coder-30b-a3b" "Qwen 3 Coder 30B A3B Instruct" 0.15 0.6 0.0 0.0 262144 8192 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "alibaba/qwen3-coder-next" "Qwen3 Coder Next" 0.5 1.2 0.0 0.0 256000 256000 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "alibaba/qwen3-coder-plus" "Qwen3 Coder Plus" 1.0 5.0 0.2 0.0 1000000 65536 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "alibaba/qwen3-max" "Qwen3 Max" 1.2 6.0 0.24 0.0 262144 32768 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "alibaba/qwen3-max-preview" "Qwen3 Max Preview" 1.2 6.0 0.24 0.0 262144 32768 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "alibaba/qwen3-max-thinking" "Qwen 3 Max Thinking" 1.2 6.0 0.24 0.0 256000 65536 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "alibaba/qwen3-next-80b-a3b-instruct" "Qwen3 Next 80B A3B Instruct" 0.15 1.2 0.0 0.0 131072 32768 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "alibaba/qwen3-next-80b-a3b-thinking" "Qwen3 Next 80B A3B Thinking" 0.15 1.2 0.0 0.0 131072 32768 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "alibaba/qwen3-vl-235b-a22b-instruct" "Qwen3 VL 235B A22B Instruct" 0.4 1.6 0.0 0.0 131072 129024 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "alibaba/qwen3-vl-instruct" "Qwen3 VL 235B A22B Instruct" 0.4 1.6 0.0 0.0 131072 129024 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "alibaba/qwen3-vl-thinking" "Qwen3 VL 235B A22B Thinking" 0.4 4.0 0.0 0.0 131072 32768 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "alibaba/qwen3.5-flash" "Qwen 3.5 Flash" 0.1 0.4 0.001 0.125 1000000 64000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "alibaba/qwen3.5-plus" "Qwen 3.5 Plus" 0.4 2.4 0.04 0.5 1000000 64000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "alibaba/qwen3.6-27b" "Qwen 3.6 27B" 0.6 3.6 0.0 0.0 256000 256000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "alibaba/qwen3.6-plus" "Qwen 3.6 Plus" 0.5 3.0 0.1 0.625 1000000 64000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "alibaba/qwen3.7-max" "Qwen 3.7 Max" 1.25 3.75 0.25 1.5625 991000 64000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "alibaba/qwen3.7-plus" "Qwen 3.7 Plus" 0.4 1.6 0.08 0.5 1000000 64000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "amazon/nova-2-lite" "Nova 2 Lite" 0.3 2.5 0.075 0.0 1000000 1000000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "amazon/nova-lite" "Nova Lite" 0.06 0.24 0.0 0.0 300000 8192 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "amazon/nova-micro" "Nova Micro" 0.035 0.14 0.0 0.0 128000 8192 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "amazon/nova-pro" "Nova Pro" 0.8 3.2 0.0 0.0 300000 8192 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "anthropic/claude-3-haiku" "Claude 3 Haiku" 0.25 1.25 0.03 0.3 200000 4096 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "anthropic/claude-3.5-haiku" "Claude 3.5 Haiku" 0.8 4.0 0.08 1.0 200000 8192 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "anthropic/claude-haiku-4.5" "Claude Haiku 4.5" 1.0 5.0 0.1 1.25 200000 64000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "anthropic/claude-opus-4" "Claude Opus 4" 15.0 75.0 1.5 18.75 200000 32000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "anthropic/claude-opus-4.1" "Claude Opus 4.1" 15.0 75.0 1.5 18.75 200000 32000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "anthropic/claude-opus-4.5" "Claude Opus 4.5" 5.0 25.0 0.5 6.25 200000 64000 true #[] #["text", "image"]
+   , { (catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "anthropic/claude-opus-4.6" "Claude Opus 4.6" 5.0 25.0 0.5 6.25 1000000 128000 true #[{ level := .level .xhigh, mapped := some "max" }] #["text", "image"]) with compat := { forceAdaptiveThinking := true } }
+   , { (catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "anthropic/claude-opus-4.7" "Claude Opus 4.7" 5.0 25.0 0.5 6.25 1000000 128000 true #[{ level := .level .xhigh, mapped := some "xhigh" }] #["text", "image"]) with compat := { supportsTemperature := false, forceAdaptiveThinking := true } }
+   , { (catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "anthropic/claude-opus-4.8" "Claude Opus 4.8" 5.0 25.0 0.5 6.25 1000000 128000 true #[{ level := .level .xhigh, mapped := some "xhigh" }] #["text", "image"]) with compat := { supportsTemperature := false, forceAdaptiveThinking := true } }
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "anthropic/claude-sonnet-4" "Claude Sonnet 4" 3.0 15.0 0.3 3.75 1000000 64000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "anthropic/claude-sonnet-4.5" "Claude Sonnet 4.5" 3.0 15.0 0.3 3.75 1000000 64000 true #[] #["text", "image"]
+   , { (catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "anthropic/claude-sonnet-4.6" "Claude Sonnet 4.6" 3.0 15.0 0.3 3.75 1000000 128000 true #[] #["text", "image"]) with compat := { forceAdaptiveThinking := true } }
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "arcee-ai/trinity-large-preview" "Trinity Large Preview" 0.25 1.0 0.0 0.0 131000 131000 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "arcee-ai/trinity-large-thinking" "Trinity Large Thinking" 0.25 0.9 0.0 0.0 262100 80000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "arcee-ai/trinity-mini" "Trinity Mini" 0.045 0.15 0.0 0.0 131072 131072 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "bytedance/seed-1.6" "Seed 1.6" 0.25 2.0 0.05 0.0 256000 32000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "bytedance/seed-1.8" "Bytedance Seed 1.8" 0.25 2.0 0.05 0.0 256000 64000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "cohere/command-a" "Command A" 2.5 10.0 0.0 0.0 256000 8000 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "deepseek/deepseek-r1" "DeepSeek-R1" 1.35 5.4 0.0 0.0 128000 8192 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "deepseek/deepseek-v3" "DeepSeek V3 0324" 0.27 1.12 0.135 0.0 163840 163840 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "deepseek/deepseek-v3.1" "DeepSeek V3.1" 0.56 1.68 0.28 0.0 163840 8192 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "deepseek/deepseek-v3.1-terminus" "DeepSeek V3.1 Terminus" 0.27 1.0 0.135 0.0 131072 65536 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "deepseek/deepseek-v3.2" "DeepSeek V3.2" 0.28 0.42 0.028 0.0 128000 8000 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "deepseek/deepseek-v3.2-thinking" "DeepSeek V3.2 Thinking" 0.62 1.85 0.0 0.0 128000 8000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "deepseek/deepseek-v4-flash" "DeepSeek V4 Flash" 0.14 0.28 0.0028 0.0 1000000 384000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "deepseek/deepseek-v4-pro" "DeepSeek V4 Pro" 0.435 0.87 0.0036 0.0 1000000 384000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "google/gemini-2.5-flash" "Gemini 2.5 Flash" 0.3 2.5 0.03 0.0 1000000 65536 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "google/gemini-2.5-flash-lite" "Gemini 2.5 Flash Lite" 0.1 0.4 0.01 0.0 1048576 65536 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "google/gemini-2.5-pro" "Gemini 2.5 Pro" 1.25 10.0 0.125 0.0 1048576 65536 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "google/gemini-3-flash" "Gemini 3 Flash" 0.5 3.0 0.05 0.0 1000000 65000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "google/gemini-3-pro-preview" "Gemini 3 Pro Preview" 2.0 12.0 0.2 0.0 1000000 64000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "google/gemini-3.1-flash-lite" "Gemini 3.1 Flash Lite" 0.25 1.5 0.03 0.0 1000000 65000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "google/gemini-3.1-flash-lite-preview" "Gemini 3.1 Flash Lite Preview" 0.25 1.5 0.03 0.0 1000000 65000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "google/gemini-3.1-pro-preview" "Gemini 3.1 Pro Preview" 2.0 12.0 0.2 0.0 1000000 64000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "google/gemini-3.5-flash" "Gemini 3.5 Flash" 1.5 9.0 0.15 0.0 1000000 64000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "google/gemma-4-26b-a4b-it" "Gemma 4 26B A4B IT" 0.15 0.6 0.015 0.0 262144 131072 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "google/gemma-4-31b-it" "Gemma 4 31B IT" 0.14 0.4 0.0 0.0 262144 131072 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "inception/mercury-2" "Mercury 2" 0.25 0.75 0.025 0.0 128000 128000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "inception/mercury-coder-small" "Mercury Coder Small Beta" 0.25 1.0 0.0 0.0 32000 16384 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "interfaze/interfaze-beta" "Interfaze Beta" 1.5 3.5 0.0 0.0 1000000 32000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "kwaipilot/kat-coder-pro-v1" "KAT-Coder-Pro V1" 0.3 1.2 0.06 0.0 256000 32000 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "kwaipilot/kat-coder-pro-v2" "Kat Coder Pro V2" 0.3 1.2 0.06 0.0 256000 256000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "meituan/longcat-flash-chat" "LongCat Flash Chat" 0.0 0.0 0.0 0.0 128000 100000 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "meituan/longcat-flash-thinking-2601" "LongCat Flash Thinking 2601" 0.0 0.0 0.0 0.0 32768 32768 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "meta/llama-3.1-70b" "Llama 3.1 70B Instruct" 0.72 0.72 0.0 0.0 128000 8192 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "meta/llama-3.1-8b" "Llama 3.1 8B Instruct" 0.22 0.22 0.0 0.0 128000 8192 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "meta/llama-3.2-11b" "Llama 3.2 11B Vision Instruct" 0.16 0.16 0.0 0.0 128000 8192 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "meta/llama-3.2-90b" "Llama 3.2 90B Vision Instruct" 0.72 0.72 0.0 0.0 128000 8192 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "meta/llama-3.3-70b" "Llama 3.3 70B Instruct" 0.72 0.72 0.0 0.0 128000 8192 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "meta/llama-4-maverick" "Llama 4 Maverick 17B Instruct" 0.24 0.97 0.0 0.0 128000 8192 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "meta/llama-4-scout" "Llama 4 Scout 17B Instruct" 0.17 0.66 0.0 0.0 128000 8192 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "minimax/minimax-m2" "MiniMax M2" 0.3 1.2 0.03 0.375 205000 205000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "minimax/minimax-m2.1" "MiniMax M2.1" 0.3 1.2 0.03 0.375 204800 131072 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "minimax/minimax-m2.1-lightning" "MiniMax M2.1 Lightning" 0.3 2.4 0.03 0.375 204800 131072 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "minimax/minimax-m2.5" "MiniMax M2.5" 0.3 1.2 0.03 0.375 204800 131000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "minimax/minimax-m2.5-highspeed" "MiniMax M2.5 High Speed" 0.6 2.4 0.03 0.375 204800 131000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "minimax/minimax-m2.7" "MiniMax M2.7" 0.3 1.2 0.06 0.375 204800 131000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "minimax/minimax-m2.7-highspeed" "MiniMax M2.7 High Speed" 0.6 2.4 0.06 0.375 204800 131100 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "minimax/minimax-m3" "MiniMax M3" 0.3 1.2 0.06 0.0 1000000 1000000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "mistral/codestral" "Mistral Codestral" 0.3 0.9 0.0 0.0 128000 4000 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "mistral/devstral-2" "Devstral 2" 0.4 2.0 0.0 0.0 256000 256000 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "mistral/devstral-small" "Devstral Small 1.1" 0.1 0.3 0.0 0.0 128000 64000 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "mistral/devstral-small-2" "Devstral Small 2" 0.1 0.3 0.0 0.0 256000 256000 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "mistral/magistral-medium" "Magistral Medium 2509" 2.0 5.0 0.0 0.0 128000 64000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "mistral/magistral-small" "Magistral Small 2509" 0.5 1.5 0.0 0.0 128000 64000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "mistral/ministral-14b" "Ministral 14B" 0.2 0.2 0.0 0.0 256000 256000 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "mistral/ministral-3b" "Ministral 3B" 0.1 0.1 0.0 0.0 128000 4000 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "mistral/ministral-8b" "Ministral 8B" 0.15 0.15 0.0 0.0 128000 4000 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "mistral/mistral-large-3" "Mistral Large 3" 0.5 1.5 0.0 0.0 256000 256000 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "mistral/mistral-medium" "Mistral Medium 3.1" 0.4 2.0 0.0 0.0 128000 64000 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "mistral/mistral-medium-3.5" "Mistral Medium Latest" 1.5 7.5 0.0 0.0 256000 256000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "mistral/mistral-nemo" "Mistral Nemo 12B" 0.15 0.15 0.0 0.0 128000 128000 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "mistral/mistral-small" "Mistral Small" 0.1 0.3 0.0 0.0 32000 4000 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "mistral/pixtral-12b" "Pixtral 12B 2409" 0.15 0.15 0.0 0.0 128000 4000 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "mistral/pixtral-large" "Pixtral Large" 2.0 6.0 0.0 0.0 128000 4000 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "moonshotai/kimi-k2" "Kimi K2 Instruct" 0.57 2.3 0.0 0.0 131072 131072 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "moonshotai/kimi-k2-thinking" "Kimi K2 Thinking" 0.6 2.5 0.15 0.0 262114 262114 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "moonshotai/kimi-k2.5" "Kimi K2.5" 0.6 3.0 0.1 0.0 262114 262114 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "moonshotai/kimi-k2.6" "Kimi K2.6" 0.95 4.0 0.16 0.0 262000 262000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "moonshotai/kimi-k2.7-code" "Kimi K2.7 Code" 0.95 4.0 0.19 0.0 256000 32768 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "moonshotai/kimi-k2.7-code-highspeed" "Kimi K2.7 Code High Speed" 1.9 8.0 0.38 0.0 262144 32768 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "nvidia/nemotron-3-nano-30b-a3b" "Nemotron 3 Nano 30B A3B" 0.05 0.24 0.0 0.0 262144 262144 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "nvidia/nemotron-3-super-120b-a12b" "NVIDIA Nemotron 3 Super 120B A12B" 0.15 0.65 0.0 0.0 256000 32000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "nvidia/nemotron-3-ultra-550b-a55b" "Nemotron 3 Ultra" 0.6 2.4 0.12 0.0 1000000 65000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "nvidia/nemotron-nano-12b-v2-vl" "Nvidia Nemotron Nano 12B V2 VL" 0.2 0.6 0.0 0.0 131072 131072 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "nvidia/nemotron-nano-9b-v2" "Nvidia Nemotron Nano 9B V2" 0.06 0.23 0.0 0.0 131072 131072 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-3.5-turbo" "GPT-3.5 Turbo" 0.5 1.5 0.0 0.0 16385 4096 false #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-4-turbo" "GPT-4 Turbo" 10.0 30.0 0.0 0.0 128000 4096 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-4.1" "GPT-4.1" 2.0 8.0 0.5 0.0 1047576 32768 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-4.1-mini" "GPT-4.1 mini" 0.4 1.6 0.1 0.0 1047576 32768 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-4.1-nano" "GPT-4.1 nano" 0.1 0.4 0.025 0.0 1047576 32768 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-4o" "GPT-4o" 2.5 10.0 1.25 0.0 128000 16384 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-4o-mini" "GPT-4o mini" 0.15 0.6 0.075 0.0 128000 16384 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-5" "GPT-5" 1.25 10.0 0.125 0.0 400000 128000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-5-chat" "GPT 5 Chat" 1.25 10.0 0.125 0.0 128000 16384 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-5-codex" "GPT-5-Codex" 1.25 10.0 0.125 0.0 400000 128000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-5-mini" "GPT-5 mini" 0.25 2.0 0.025 0.0 400000 128000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-5-nano" "GPT-5 nano" 0.05 0.4 0.005 0.0 400000 128000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-5-pro" "GPT-5 pro" 15.0 120.0 0.0 0.0 400000 272000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-5.1-codex" "GPT-5.1-Codex" 1.25 10.0 0.125 0.0 400000 128000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-5.1-codex-max" "GPT 5.1 Codex Max" 1.25 10.0 0.125 0.0 400000 128000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-5.1-codex-mini" "GPT 5.1 Codex Mini" 0.25 2.0 0.025 0.0 400000 128000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-5.1-instant" "GPT-5.1 Instant" 1.25 10.0 0.125 0.0 128000 16384 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-5.1-thinking" "GPT 5.1 Thinking" 1.25 10.0 0.125 0.0 400000 128000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-5.2" "GPT 5.2" 1.75 14.0 0.175 0.0 400000 128000 true #[{ level := .level .xhigh, mapped := some "xhigh" }] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-5.2-chat" "GPT 5.2 Chat" 1.75 14.0 0.175 0.0 128000 16384 false #[{ level := .level .xhigh, mapped := some "xhigh" }] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-5.2-codex" "GPT 5.2 Codex" 1.75 14.0 0.175 0.0 400000 128000 true #[{ level := .level .xhigh, mapped := some "xhigh" }] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-5.2-pro" "GPT 5.2 " 21.0 168.0 0.0 0.0 400000 128000 true #[{ level := .level .xhigh, mapped := some "xhigh" }] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-5.3-chat" "GPT-5.3 Chat" 1.75 14.0 0.175 0.0 128000 16384 false #[{ level := .level .xhigh, mapped := some "xhigh" }] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-5.3-codex" "GPT 5.3 Codex" 1.75 14.0 0.175 0.0 400000 128000 true #[{ level := .level .xhigh, mapped := some "xhigh" }] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-5.4" "GPT 5.4" 2.5 15.0 0.25 0.0 1050000 128000 true #[{ level := .level .xhigh, mapped := some "xhigh" }] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-5.4-mini" "GPT 5.4 Mini" 0.75 4.5 0.075 0.0 400000 128000 true #[{ level := .level .xhigh, mapped := some "xhigh" }] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-5.4-nano" "GPT 5.4 Nano" 0.2 1.25 0.02 0.0 400000 128000 true #[{ level := .level .xhigh, mapped := some "xhigh" }] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-5.4-pro" "GPT 5.4 Pro" 30.0 180.0 0.0 0.0 1050000 128000 true #[{ level := .level .xhigh, mapped := some "xhigh" }] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-5.5" "GPT 5.5" 5.0 30.0 0.5 0.0 1000000 128000 true #[{ level := .level .xhigh, mapped := some "xhigh" }] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-5.5-pro" "GPT 5.5 Pro" 30.0 180.0 0.0 0.0 1000000 128000 true #[{ level := .level .xhigh, mapped := some "xhigh" }, { level := .off, mapped := none }, { level := .level .minimal, mapped := none }, { level := .level .low, mapped := none }] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-oss-120b" "GPT OSS 120B" 0.35 0.75 0.25 0.0 131072 131000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-oss-20b" "GPT OSS 20B" 0.05 0.2 0.0 0.0 131072 8192 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/gpt-oss-safeguard-20b" "GPT OSS Safeguard 20B" 0.075 0.3 0.037 0.0 131072 65536 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/o1" "o1" 15.0 60.0 7.5 0.0 200000 100000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/o3" "o3" 2.0 8.0 0.5 0.0 200000 100000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/o3-deep-research" "o3-deep-research" 10.0 40.0 2.5 0.0 200000 100000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/o3-mini" "o3-mini" 1.1 4.4 0.55 0.0 200000 100000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/o3-pro" "o3 Pro" 20.0 80.0 0.0 0.0 200000 100000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "openai/o4-mini" "o4-mini" 1.1 4.4 0.275 0.0 200000 100000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "sakana/fugu-ultra" "Fugu Ultra" 5.0 30.0 0.5 0.0 1000000 1000000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "stepfun/step-3.5-flash" "StepFun 3.5 Flash" 0.09 0.3 0.02 0.0 262114 262114 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "stepfun/step-3.7-flash" "Step 3.7 Flash" 0.2 1.15 0.04 0.0 256000 256000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "xai/grok-4.1-fast-non-reasoning" "Grok 4.1 Fast Non-Reasoning" 0.2 0.5 0.05 0.0 1000000 1000000 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "xai/grok-4.1-fast-reasoning" "Grok 4.1 Fast Reasoning" 0.2 0.5 0.05 0.0 1000000 1000000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "xai/grok-4.20-multi-agent" "Grok 4.20 Multi-Agent" 1.25 2.5 0.2 0.0 2000000 2000000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "xai/grok-4.20-multi-agent-beta" "Grok 4.20 Multi Agent Beta" 1.25 2.5 0.2 0.0 2000000 2000000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "xai/grok-4.20-non-reasoning" "Grok 4.20 Non-Reasoning" 1.25 2.5 0.2 0.0 2000000 2000000 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "xai/grok-4.20-non-reasoning-beta" "Grok 4.20 Beta Non-Reasoning" 1.25 2.5 0.2 0.0 2000000 2000000 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "xai/grok-4.20-reasoning" "Grok 4.20 Reasoning" 1.25 2.5 0.2 0.0 2000000 2000000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "xai/grok-4.20-reasoning-beta" "Grok 4.20 Beta Reasoning" 1.25 2.5 0.2 0.0 2000000 2000000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "xai/grok-4.3" "Grok 4.3" 1.25 2.5 0.2 0.0 1000000 1000000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "xai/grok-build-0.1" "Grok Build 0.1" 1.0 2.0 0.2 0.0 256000 256000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "xiaomi/mimo-v2-flash" "MiMo V2 Flash" 0.1 0.3 0.01 0.0 262144 32000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "xiaomi/mimo-v2-pro" "MiMo V2 Pro" 1.0 3.0 0.2 0.0 1000000 128000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "xiaomi/mimo-v2.5" "MiMo M2.5" 0.14 0.28 0.0028 0.0 1050000 131100 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "xiaomi/mimo-v2.5-pro" "MiMo V2.5 Pro" 0.435 0.87 0.0036 0.0 1050000 131000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "zai/glm-4.5" "GLM-4.5" 0.6 2.2 0.11 0.0 128000 96000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "zai/glm-4.5-air" "GLM 4.5 Air" 0.2 1.1 0.03 0.0 128000 96000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "zai/glm-4.5v" "GLM 4.5V" 0.6 1.8 0.11 0.0 66000 16000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "zai/glm-4.6" "GLM 4.6" 0.6 2.2 0.11 0.0 200000 96000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "zai/glm-4.6v" "GLM-4.6V" 0.3 0.9 0.05 0.0 128000 24000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "zai/glm-4.6v-flash" "GLM-4.6V-Flash" 0.0 0.0 0.0 0.0 128000 24000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "zai/glm-4.7" "GLM 4.7" 2.25 2.75 2.25 0.0 131000 40000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "zai/glm-4.7-flash" "GLM 4.7 Flash" 0.07 0.4 0.0 0.0 200000 131000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "zai/glm-4.7-flashx" "GLM 4.7 FlashX" 0.06 0.4 0.01 0.0 200000 128000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "zai/glm-5" "GLM 5" 1.0 3.2 0.2 0.0 202800 131100 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "zai/glm-5-turbo" "GLM 5 Turbo" 1.2 4.0 0.24 0.0 202800 131100 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "zai/glm-5.1" "GLM 5.1" 1.4 4.4 0.26 0.0 202800 64000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "zai/glm-5.2" "GLM 5.2" 1.5 4.5 0.3 0.0 1000000 128000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "zai/glm-5.2-fast" "GLM 5.2 Fast" 3.0 10.25 0.5 0.0 1000000 128000 true #[] #["text"]
+   , catalogAnthropicMessagesModel vercelAIGatewayProviderId vercelAIGatewayBaseUrl "zai/glm-5v-turbo" "GLM 5V Turbo" 1.2 4.0 0.24 0.0 200000 128000 true #[] #["text", "image"]
    ]
 
 def googleModel
@@ -1469,6 +1665,15 @@ def minimaxCNProviderInfo : ProviderInfo :=
     models := minimaxCNModels
   }
 
+def vercelAIGatewayProviderInfo : ProviderInfo :=
+  { id := vercelAIGatewayProviderId
+    name := "Vercel AI Gateway"
+    baseUrl := vercelAIGatewayBaseUrl
+    apiKeyEnv := vercelAIGatewayApiKeyEnv
+    defaultModel := vercelAIGatewayDefaultModel
+    models := vercelAIGatewayModels
+  }
+
 def googleProviderInfo : ProviderInfo :=
   { id := googleProviderId
     name := "Google"
@@ -1537,6 +1742,7 @@ def defaultCatalog : ProviderCatalog :=
      , kimiCodingProviderInfo
      , minimaxProviderInfo
      , minimaxCNProviderInfo
+     , vercelAIGatewayProviderInfo
      , googleProviderInfo
      , googleVertexProviderInfo
      , mistralProviderInfo
@@ -1731,6 +1937,17 @@ def offThinkingLevelPayloadValue? (model : ModelInfo) : Option String :=
   match thinkingLevelMapValue? model .off with
   | some (some value) => some value
   | _ => none
+
+def anthropicThinkingEffort (model : ModelInfo) (level : LeanAgent.AI.ThinkingLevel) : String :=
+  match thinkingLevelMapValue? model (.level level) with
+  | some (some mapped) => mapped
+  | _ =>
+      match level with
+      | .minimal => "low"
+      | .low => "low"
+      | .medium => "medium"
+      | .high => "high"
+      | .xhigh => "high"
 
 def openAICompletionsOptionsFromSimple
     (model : ModelInfo)
@@ -1973,20 +2190,30 @@ def anthropicMessagesOptionsFromSimple
     (context : LeanAgent.AI.Context)
     (options : LeanAgent.AI.SimpleStreamOptions) :
     LeanAgent.AI.Api.AnthropicMessages.AnthropicMessagesOptions :=
-  let base := LeanAgent.AI.Api.AnthropicMessages.optionsFromSimple options
+  let base :=
+    { LeanAgent.AI.Api.AnthropicMessages.optionsFromSimple options with
+      supportsTemperature := model.compat.supportsTemperature
+    }
   match options.reasoning with
   | none =>
       { base with thinkingEnabled := some false }
   | some level =>
       let maxTokens := (resolvedMaxTokens? model context options).getD model.maxTokens
-      let adjusted := LeanAgent.AI.Api.SimpleOptions.adjustMaxTokensForThinking
-        (some maxTokens) model.maxTokens level options.thinkingBudgets
-      let thinkingBudget := Nat.min adjusted.thinkingBudget (maxTokens - Nat.min maxTokens 1024)
-      { base with
-        maxTokens := some maxTokens
-        thinkingEnabled := some true
-        thinkingBudgetTokens := some thinkingBudget
-      }
+      if model.compat.forceAdaptiveThinking then
+        { base with
+          maxTokens := some maxTokens
+          thinkingEnabled := some true
+          thinkingEffort := some (anthropicThinkingEffort model level)
+        }
+      else
+        let adjusted := LeanAgent.AI.Api.SimpleOptions.adjustMaxTokensForThinking
+          (some maxTokens) model.maxTokens level options.thinkingBudgets
+        let thinkingBudget := Nat.min adjusted.thinkingBudget (maxTokens - Nat.min maxTokens 1024)
+        { base with
+          maxTokens := some maxTokens
+          thinkingEnabled := some true
+          thinkingBudgetTokens := some thinkingBudget
+        }
 
 def anthropicMessagesStreams : ProviderStreams :=
   { streamSimple := fun model context options => do

@@ -935,6 +935,8 @@ def testAnthropicMessagesRequestPayload : IO Unit := do
     "expected non-stream Anthropic payload"
   assertTrue (LeanAgent.Json.optVal? payload "max_tokens" == some (LeanAgent.Json.nat 123))
     "expected Anthropic max tokens"
+  assertTrue (LeanAgent.Json.optVal? payload "temperature" == none)
+    "expected Anthropic temperature to be omitted while thinking is enabled"
   match jsonArrayField? payload "system" with
   | some system =>
       match system[0]? with
@@ -988,6 +990,41 @@ def testAnthropicMessagesRequestPayload : IO Unit := do
   match LeanAgent.Json.optVal? payload "metadata" with
   | some metadata => assertTrue (jsonStringField? metadata "user_id" == some "user-1") "expected metadata user_id"
   | none => fail "expected metadata"
+
+def testAnthropicMessagesCompatOptions : IO Unit := do
+  let model : LeanAgent.Models.ModelInfo :=
+    { LeanAgent.Models.anthropicSonnet45 with
+      compat := { forceAdaptiveThinking := true, supportsTemperature := false }
+      thinkingLevelMap := #[{ level := .level .xhigh, mapped := some "max" }]
+    }
+  let options := LeanAgent.Models.anthropicMessagesOptionsFromSimple
+    model
+    {}
+    { reasoning := some .xhigh, temperature := some 0.2 }
+  assertTrue (options.thinkingEnabled == some true)
+    "expected adaptive Anthropic thinking to be enabled"
+  assertTrue (options.thinkingEffort == some "max")
+    "expected adaptive Anthropic xhigh thinking effort mapping"
+  assertTrue (options.thinkingBudgetTokens == none)
+    "expected adaptive Anthropic thinking to omit budget tokens"
+  assertTrue (!options.supportsTemperature)
+    "expected Anthropic compat to disable temperature"
+  let payload := LeanAgent.AI.Api.AnthropicMessages.requestToJsonWithOptions
+    model.toModelRef
+    model.input
+    model.maxTokens
+    model.reasoning
+    {}
+    options
+  match LeanAgent.Json.optVal? payload "thinking" with
+  | some thinking =>
+      assertTrue (jsonStringField? thinking "type" == some "adaptive")
+        "expected adaptive Anthropic thinking payload"
+      assertTrue (jsonStringField? thinking "effort" == some "max")
+        "expected adaptive Anthropic effort payload"
+  | none => fail "expected adaptive Anthropic thinking"
+  assertTrue (LeanAgent.Json.optVal? payload "temperature" == none)
+    "expected disabled Anthropic temperature support to omit temperature"
 
 def testAnthropicMessagesHeaders : IO Unit := do
   let headers := LeanAgent.AI.Api.AnthropicMessages.requestHeaders
@@ -2966,6 +3003,7 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
      , LeanAgent.Models.kimiCodingProviderId
      , LeanAgent.Models.minimaxProviderId
      , LeanAgent.Models.minimaxCNProviderId
+     , LeanAgent.Models.vercelAIGatewayProviderId
      , LeanAgent.Models.googleProviderId
      , LeanAgent.Models.googleVertexProviderId
      , LeanAgent.Models.mistralProviderId
@@ -3014,6 +3052,10 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
   assertTrue (rendered.contains "kimi-coding/k2p7") "expected Kimi Coding model"
   assertTrue (rendered.contains "minimax/MiniMax-M2.7") "expected MiniMax model"
   assertTrue (rendered.contains "minimax-cn/MiniMax-M2.7") "expected MiniMax CN model"
+  assertTrue (rendered.contains "vercel-ai-gateway/alibaba/qwen-3-14b")
+    "expected Vercel AI Gateway default model"
+  assertTrue (rendered.contains "vercel-ai-gateway/anthropic/claude-opus-4.7")
+    "expected Vercel AI Gateway Anthropic model"
   assertTrue (rendered.contains "google/gemini-2.5-flash") "expected Google Gemini model"
   assertTrue (rendered.contains "google-vertex/gemini-2.5-flash") "expected Google Vertex model"
   assertTrue (rendered.contains "mistral/devstral-medium-latest") "expected Mistral model"
@@ -3037,6 +3079,8 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
   assertTrue (LeanAgent.Models.kimiCodingModels.size == 3) "expected generated Kimi Coding model catalog"
   assertTrue (LeanAgent.Models.minimaxModels.size == 3) "expected generated MiniMax model catalog"
   assertTrue (LeanAgent.Models.minimaxCNModels.size == 3) "expected generated MiniMax CN model catalog"
+  assertTrue (LeanAgent.Models.vercelAIGatewayModels.size == 185)
+    "expected generated Vercel AI Gateway model catalog"
   match LeanAgent.Models.ProviderCatalog.model? catalog LeanAgent.Models.antLingProviderId "Ring-2.6-1T" with
   | some model =>
       assertTrue model.reasoning "expected Ant Ling Ring reasoning metadata"
@@ -3084,6 +3128,13 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
       assertTrue (provider.defaultModel == LeanAgent.Models.minimaxCNDefaultModel)
         "expected MiniMax CN default model"
   | none => fail "expected MiniMax CN provider by env"
+  match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.vercelAIGatewayApiKeyEnv with
+  | some provider =>
+      assertTrue (provider.id == LeanAgent.Models.vercelAIGatewayProviderId)
+        "expected Vercel AI Gateway provider by env"
+      assertTrue (provider.defaultModel == LeanAgent.Models.vercelAIGatewayDefaultModel)
+        "expected Vercel AI Gateway default model"
+  | none => fail "expected Vercel AI Gateway provider by env"
   match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.googleApiKeyEnv with
   | some provider =>
       assertTrue (provider.id == LeanAgent.Models.googleProviderId) "expected Google provider by env"
@@ -3118,7 +3169,7 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
 def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
   let collection ← LeanAgent.Models.createDefaultModels
   let providers ← collection.getProviders
-  assertTrue (providers.size == 29) "expected default provider family"
+  assertTrue (providers.size == 30) "expected default provider family"
   match ← collection.getModel? LeanAgent.Models.openAIProviderId LeanAgent.Models.openAIDefaultModel with
   | some model =>
       assertTrue (model.api == "openai-responses") "expected OpenAI Responses API"
@@ -3190,6 +3241,17 @@ def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
         "expected MiniMax Anthropic Messages API"
       assertTrue (model.contextWindow == 512000) "expected MiniMax M3 context metadata"
   | none => fail "expected MiniMax model in default runtime collection"
+  match ← collection.getModel? LeanAgent.Models.vercelAIGatewayProviderId "anthropic/claude-opus-4.7" with
+  | some model =>
+      assertTrue (model.api == LeanAgent.AI.Api.AnthropicMessages.api)
+        "expected Vercel AI Gateway Anthropic Messages API"
+      assertTrue model.compat.forceAdaptiveThinking
+        "expected Vercel AI Gateway adaptive thinking compat"
+      assertTrue (!model.compat.supportsTemperature)
+        "expected Vercel AI Gateway temperature compat metadata"
+      assertTrue ((LeanAgent.Models.thinkingLevelMapValue? model (.level .xhigh)) == some (some "xhigh"))
+        "expected Vercel AI Gateway xhigh mapping"
+  | none => fail "expected Vercel AI Gateway model in default runtime collection"
   match ← collection.getModel? LeanAgent.Models.anthropicProviderId LeanAgent.Models.anthropicDefaultModel with
   | some model =>
       assertTrue (model.api == LeanAgent.AI.Api.AnthropicMessages.api) "expected Anthropic Messages API"
@@ -3339,6 +3401,7 @@ def testOpenAICompatibleProviderFactoriesMatchCatalog : IO Unit := do
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.KimiCoding.provider LeanAgent.Models.kimiCodingProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.MiniMax.provider LeanAgent.Models.minimaxProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.MiniMaxCN.provider LeanAgent.Models.minimaxCNProviderInfo
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.VercelAIGateway.provider LeanAgent.Models.vercelAIGatewayProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Google.provider LeanAgent.Models.googleProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.GoogleVertex.provider LeanAgent.Models.googleVertexProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Mistral.provider LeanAgent.Models.mistralProviderInfo
@@ -4198,6 +4261,8 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
     "expected all providers to include MiniMax catalog provider"
   assertTrue (providerIds.contains LeanAgent.Models.minimaxCNProviderId)
     "expected all providers to include MiniMax CN catalog provider"
+  assertTrue (providerIds.contains LeanAgent.Models.vercelAIGatewayProviderId)
+    "expected all providers to include Vercel AI Gateway catalog provider"
   let openAICompatibleAdditions :=
     #[ LeanAgent.Models.antLingProviderId
      , LeanAgent.Models.huggingFaceProviderId
@@ -4292,6 +4357,13 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
       assertTrue (model.provider == LeanAgent.Models.minimaxCNProviderId) "expected MiniMax CN builtin model"
   | none => fail "expected MiniMax CN builtin model lookup"
   match LeanAgent.AI.Providers.All.getBuiltinModel?
+    LeanAgent.Models.vercelAIGatewayProviderId
+    LeanAgent.Models.vercelAIGatewayDefaultModel with
+  | some model =>
+      assertTrue (model.api == LeanAgent.AI.Api.AnthropicMessages.api)
+        "expected Vercel AI Gateway builtin model"
+  | none => fail "expected Vercel AI Gateway builtin model lookup"
+  match LeanAgent.AI.Providers.All.getBuiltinModel?
     LeanAgent.AI.Providers.CloudflareAIGateway.providerId
     "gpt-4o-mini" with
   | some model =>
@@ -4299,7 +4371,7 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
   | none => fail "expected Cloudflare AI Gateway builtin model lookup"
   let collection ← LeanAgent.AI.Providers.All.builtinModels none fakeCloudflareAuthContext
   let providers ← collection.getProviders
-  assertTrue (providers.size == 31) "expected implemented builtin text providers"
+  assertTrue (providers.size == 32) "expected implemented builtin text providers"
   match ← collection.getProvider? LeanAgent.AI.Providers.CloudflareWorkersAI.providerId with
   | some _ => pure ()
   | none => fail "expected Workers AI provider in builtin collection"
@@ -4371,6 +4443,9 @@ def testEnvApiKeysProviderMap : IO Unit := do
     (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "minimax-cn" == some #[LeanAgent.Models.minimaxCNApiKeyEnv])
     "expected MiniMax CN env var"
   assertTrue
+    (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "vercel-ai-gateway" == some #[LeanAgent.Models.vercelAIGatewayApiKeyEnv])
+    "expected Vercel AI Gateway env var"
+  assertTrue
     (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "google" == some #[LeanAgent.Models.googleApiKeyEnv])
     "expected Google Gemini env var"
   assertTrue
@@ -4403,6 +4478,10 @@ def testEnvApiKeysProviderMap : IO Unit := do
     "kimi-coding"
     #[("KIMI_API_KEY", "kimi-token")]
   assertTrue (kimiKey == some "kimi-token") "expected configured Kimi Coding API key"
+  let vercelKey ← LeanAgent.AI.EnvApiKeys.getEnvApiKey
+    "vercel-ai-gateway"
+    #[("AI_GATEWAY_API_KEY", "vercel-token")]
+  assertTrue (vercelKey == some "vercel-token") "expected configured Vercel AI Gateway API key"
   let missing ← LeanAgent.AI.EnvApiKeys.findEnvKeys "unknown-provider" #[]
   assertTrue (missing == none) "expected stable missing provider result"
 
@@ -6686,6 +6765,7 @@ def main : IO UInt32 := do
     testOpenAIResponsesSharedOmitsDifferentModelFcItemId
     testOpenAIResponsesSharedConvertsTools
     testAnthropicMessagesRequestPayload
+    testAnthropicMessagesCompatOptions
     testAnthropicMessagesHeaders
     testAnthropicMessagesParsesResponse
     testAnthropicMessagesParsesStreamingEvents
