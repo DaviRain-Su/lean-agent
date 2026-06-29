@@ -4,6 +4,7 @@ import LeanAgent.AI.Api.OpenAICompletions
 import LeanAgent.AI.Api.OpenAIPromptCache
 import LeanAgent.AI.Api.OpenAIResponses
 import LeanAgent.AI.Api.OpenAIResponsesShared
+import LeanAgent.AI.Api.SimpleOptions
 import LeanAgent.AI.Api.TransformMessages
 import LeanAgent.AI.EventStream
 import LeanAgent.AI.Providers.Faux

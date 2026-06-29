@@ -1,11 +1,11 @@
 import LeanAgent.AI.Api.OpenAIPromptCache
 import LeanAgent.AI.Api.GitHubCopilotHeaders
 import LeanAgent.AI.Api.OpenAIResponsesShared
+import LeanAgent.AI.Api.SimpleOptions
 import LeanAgent.AI.EventStream
 import LeanAgent.AI.Types
 import LeanAgent.AI.Util.Diagnostics
 import LeanAgent.AI.Util.Headers
-import LeanAgent.AI.Util.Estimate
 import LeanAgent.AI.Util.JsonParse
 import LeanAgent.AI.Util.Retry
 import LeanAgent.AI.Util.SSE
@@ -56,29 +56,11 @@ def reasoningEffortString : LeanAgent.AI.ThinkingLevel → String
   | .xhigh => "high"
   | level => level.toString
 
-def contextSafetyTokens : Nat := 4096
-def minMaxTokens : Nat := 1
-
-def clampMaxTokensToContext
-    (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
-    (context : LeanAgent.AI.Context)
-    (maxTokens : Nat) : Nat :=
-  if model.contextWindow == 0 then
-    Nat.max minMaxTokens maxTokens
-  else
-    let estimate := LeanAgent.AI.Util.Estimate.estimateContextTokens context
-    let reserved := estimate.tokens + contextSafetyTokens
-    let available := if model.contextWindow > reserved then model.contextWindow - reserved else 0
-    Nat.min maxTokens (Nat.max minMaxTokens available)
-
 def resolvedMaxTokens?
     (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
     (context : LeanAgent.AI.Context)
     (options : OpenAIResponsesOptions) : Option Nat :=
-  match options.maxTokens with
-  | some maxTokens => some (clampMaxTokensToContext model context maxTokens)
-  | none =>
-      if model.maxTokens == 0 then none else some (clampMaxTokensToContext model context model.maxTokens)
+  LeanAgent.AI.Api.SimpleOptions.resolvedMaxTokens? model.contextWindow model.maxTokens context options.toSimpleStreamOptions
 
 def requestOptionFields
     (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)

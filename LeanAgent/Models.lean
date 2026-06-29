@@ -1,9 +1,9 @@
 import LeanAgent.Core
 import LeanAgent.AI.Auth
 import LeanAgent.AI.Api.OpenAICompletions
+import LeanAgent.AI.Api.SimpleOptions
 import LeanAgent.AI.EventStream
 import LeanAgent.AI.Types
-import LeanAgent.AI.Util.Estimate
 
 namespace LeanAgent.Models
 
@@ -554,33 +554,18 @@ def contextToProviderRequest (model : ModelInfo) (context : LeanAgent.AI.Context
     tools := context.tools.map legacyToolFromAITool
   }
 
-def contextSafetyTokens : Nat := 4096
-def minMaxTokens : Nat := 1
-
 def clampMaxTokensToContext (model : ModelInfo) (context : LeanAgent.AI.Context) (maxTokens : Nat) : Nat :=
-  if model.contextWindow == 0 then
-    Nat.max minMaxTokens maxTokens
-  else
-    let estimate := LeanAgent.AI.Util.Estimate.estimateContextTokens context
-    let reserved := estimate.tokens + contextSafetyTokens
-    let available := if model.contextWindow > reserved then model.contextWindow - reserved else 0
-    Nat.min maxTokens (Nat.max minMaxTokens available)
+  LeanAgent.AI.Api.SimpleOptions.clampMaxTokensToContext model.contextWindow context maxTokens
 
 def resolvedMaxTokens? (model : ModelInfo) (context : LeanAgent.AI.Context) (options : LeanAgent.AI.SimpleStreamOptions) :
     Option Nat :=
-  match options.maxTokens with
-  | some maxTokens => some (clampMaxTokensToContext model context maxTokens)
-  | none =>
-      if model.maxTokens == 0 then
-        none
-      else
-        some (clampMaxTokensToContext model context model.maxTokens)
+  LeanAgent.AI.Api.SimpleOptions.resolvedMaxTokens? model.contextWindow model.maxTokens context options
 
 def clampSimpleOptionsToContext
     (model : ModelInfo)
     (context : LeanAgent.AI.Context)
     (options : LeanAgent.AI.SimpleStreamOptions) : LeanAgent.AI.SimpleStreamOptions :=
-  { options with maxTokens := resolvedMaxTokens? model context options }
+  LeanAgent.AI.Api.SimpleOptions.clampStreamOptionsToContext model.contextWindow model.maxTokens context options
 
 def openAICompatibleStreams : ProviderStreams :=
   { streamSimple := fun model context options => do

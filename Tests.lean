@@ -1035,6 +1035,34 @@ def testEstimateContextUsesRecentAssistantUsage : IO Unit := do
   assertTrue (estimate.trailingTokens == 2) "expected trailing tokens"
   assertTrue (estimate.lastUsageIndex == some 1) "expected assistant usage index"
 
+def testSimpleOptionsAdjustMaxTokensForThinking : IO Unit := do
+  assertTrue
+    (LeanAgent.AI.Api.SimpleOptions.adjustMaxTokensForThinking none 100000 .medium ==
+      ({ maxTokens := 100000, thinkingBudget := 8192 } :
+        LeanAgent.AI.Api.SimpleOptions.ThinkingTokenAdjustment))
+    "expected implicit cap to use model max and default medium budget"
+  assertTrue
+    (LeanAgent.AI.Api.SimpleOptions.adjustMaxTokensForThinking (some 2048) 100000 .medium ==
+      ({ maxTokens := 10240, thinkingBudget := 8192 } :
+        LeanAgent.AI.Api.SimpleOptions.ThinkingTokenAdjustment))
+    "expected explicit output cap to reserve thinking budget"
+  assertTrue
+    (LeanAgent.AI.Api.SimpleOptions.adjustMaxTokensForThinking (some 1) 4000 .high ==
+      ({ maxTokens := 4000, thinkingBudget := 2976 } :
+        LeanAgent.AI.Api.SimpleOptions.ThinkingTokenAdjustment))
+    "expected thinking budget to shrink when max tokens cannot fit it"
+  let customBudgets : LeanAgent.AI.ThinkingBudgets := { medium := some 3000 }
+  assertTrue
+    (LeanAgent.AI.Api.SimpleOptions.adjustMaxTokensForThinking (some 2000) 10000 .medium (some customBudgets) ==
+      ({ maxTokens := 5000, thinkingBudget := 3000 } :
+        LeanAgent.AI.Api.SimpleOptions.ThinkingTokenAdjustment))
+    "expected custom thinking budget"
+  assertTrue
+    (LeanAgent.AI.Api.SimpleOptions.adjustMaxTokensForThinking none 50000 .xhigh ==
+      ({ maxTokens := 50000, thinkingBudget := 16384 } :
+        LeanAgent.AI.Api.SimpleOptions.ThinkingTokenAdjustment))
+    "expected xhigh reasoning to clamp to high budget"
+
 def testModelsClampMaxTokensToContext : IO Unit := do
   let model : LeanAgent.Models.ModelInfo :=
     { id := "tiny"
@@ -2573,6 +2601,7 @@ def main : IO UInt32 := do
     testShortHashMatchesPi
     testEstimateUtilities
     testEstimateContextUsesRecentAssistantUsage
+    testSimpleOptionsAdjustMaxTokensForThinking
     testModelsClampMaxTokensToContext
     testProviderEnvValueResolution
     testProxyEnvResolution
