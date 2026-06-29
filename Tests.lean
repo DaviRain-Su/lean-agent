@@ -485,6 +485,14 @@ def testOpenAICompletionsParsesUsage : IO Unit := do
       | none => fail "expected usage to parse"
   | .error err => fail s!"expected usage parse success: {err}"
 
+def testShortHashMatchesPi : IO Unit := do
+  assertTrue (LeanAgent.AI.Util.Hash.shortHash "" == "k4n83c7h0j2b") "expected empty hash"
+  assertTrue (LeanAgent.AI.Util.Hash.shortHash "hello" == "1h6qa0qrowduu") "expected hello hash"
+  assertTrue (LeanAgent.AI.Util.Hash.shortHash "README.md" == "gel9t9gqr92v") "expected path hash"
+  assertTrue (LeanAgent.AI.Util.Hash.shortHash "fc_call_123" == "1x2drirwxo1zn") "expected call hash"
+  assertTrue (LeanAgent.AI.Util.Hash.shortHash "😀" == "13wj7r7usi372") "expected emoji hash"
+  assertTrue (LeanAgent.AI.Util.Hash.shortHash "a😀b" == "12yrce3kjl8pw") "expected mixed utf16 hash"
+
 def retryAssistantMessage (errorMessage : Option String) : LeanAgent.AI.AssistantMessage :=
   { content := #[]
     api := "fake"
@@ -1227,6 +1235,7 @@ def main : IO UInt32 := do
     testOpenAICompletionsParsesStreamingThinking
     testDiagnosticsExtractsProviderError
     testOpenAICompletionsParsesUsage
+    testShortHashMatchesPi
     testRetryClassifiesAssistantErrors
     testRetryWithRetriesSucceedsAfterTransientFailures
     testRetryWithRetriesStopsOnNonRetryableFailure

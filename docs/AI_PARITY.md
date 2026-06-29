@@ -209,7 +209,7 @@ should be generated or checked in as Lean data.
 | `utils/diagnostics.ts` | `LeanAgent.AI.Util.Diagnostics`, `LeanAgent.Http` | partial | Diagnostic error info, assistant message diagnostics, append helper, provider error body extraction, and response header capture exist. Exact JS thrown-value/stack behavior and assistant-level response-header diagnostics are incomplete. |
 | `utils/estimate.ts` | `LeanAgent.AI.Util.Estimate` | missing | Token estimation. |
 | `utils/event-stream.ts` | `LeanAgent.AI.EventStream`, `LeanAgent.AI.Util.SSE`, `LeanAgent.Loop` | partial | Synchronous event/result container, buffered SSE response parsing, legacy provider wrapper, and loop consumption bridge exist. Async iteration/backpressure and live transport callbacks are not implemented. |
-| `utils/hash.ts` | `LeanAgent.AI.Util.Hash` | missing | Stable hashing for cache/session affinity. |
+| `utils/hash.ts` | `LeanAgent.AI.Util.Hash` | implemented | Pi-compatible deterministic `shortHash`, including UTF-16 code-unit behavior, exists with golden tests. |
 | `utils/headers.ts` | `LeanAgent.Http`, `LeanAgent.AI.Api.OpenAICompletions` | partial | Custom request headers, basic override behavior, and response header parsing exist. Dedicated header utility module and full provider callback integration are missing. |
 | `utils/json-parse.ts` | `LeanAgent.Json` or `LeanAgent.AI.Util.JsonParse` | partial | Basic JSON helpers exist, partial JSON cleanup missing. |
 | `utils/node-http-proxy.ts` | `LeanAgent.AI.Util.Proxy` | missing | Proxy detection/config. |
