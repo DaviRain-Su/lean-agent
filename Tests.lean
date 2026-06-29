@@ -7140,9 +7140,15 @@ def testModelsCollectionDispatchesWithAuth : IO Unit := do
       apis := #[{ api := "fake-api", streams := fakeRuntimeStreams seenApiKey }]
     }
   collection.setProvider provider
+  match ← collection.getProvider "fake" with
+  | some found => assertTrue (found.id == "fake") "expected runtime provider lookup"
+  | none => fail "expected runtime provider lookup"
   match ← collection.getModel? "fake" "fake-model" with
   | some model => assertTrue (model.id == "fake-model") "expected runtime model lookup"
   | none => fail "expected runtime model lookup"
+  match ← collection.getModel "fake" "fake-model" with
+  | some model => assertTrue (model.id == "fake-model") "expected runtime getModel alias lookup"
+  | none => fail "expected runtime getModel alias lookup"
   let message ← collection.completeSimple
     fakeRuntimeModel
     { systemPrompt := some "system"
@@ -7629,9 +7635,14 @@ def testImagesCollectionProviderCrudAndRefresh : IO Unit := do
     }
   collection.setProvider provider
   assertTrue ((← collection.getProviders).size == 1) "expected image provider registration"
+  match ← collection.getProvider "fake-images" with
+  | some found => assertTrue (found.id == "fake-images") "expected image provider lookup"
+  | none => fail "expected image provider lookup"
   assertTrue ((← collection.getModels).size == 1) "expected image model listing"
   assertTrue ((← collection.getModel? "fake-images" "fake-image-model").isSome)
     "expected image model lookup"
+  assertTrue ((← collection.getModel "fake-images" "fake-image-model").isSome)
+    "expected image getModel alias lookup"
   let firstTask ← IO.asTask (collection.refresh (some "fake-images"))
   let secondTask ← IO.asTask (collection.refresh (some "fake-images"))
   match ← IO.wait firstTask with

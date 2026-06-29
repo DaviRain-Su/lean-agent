@@ -418,6 +418,9 @@ def Collection.getProvider? (collection : Collection) (id : String) : IO (Option
   let providers ← collection.getProviders
   pure (providers.find? fun provider => provider.id == id)
 
+def Collection.getProvider (collection : Collection) (id : String) : IO (Option Provider) :=
+  collection.getProvider? id
+
 def Collection.setProvider (collection : Collection) (provider : Provider) : IO Unit := do
   collection.providersRef.modify fun providers =>
     (providers.filter fun current => current.id != provider.id).push provider
@@ -546,6 +549,9 @@ def Collection.getModels (collection : Collection) (providerId : Option String :
 def Collection.getModel? (collection : Collection) (providerId modelId : String) : IO (Option ModelInfo) := do
   let models ← collection.getModels (some providerId)
   pure (models.find? fun model => model.id == modelId)
+
+def Collection.getModel (collection : Collection) (providerId modelId : String) : IO (Option ModelInfo) :=
+  collection.getModel? providerId modelId
 
 def Collection.refresh (collection : Collection) (providerId : Option String := none) : IO Unit := do
   match providerId with
