@@ -208,6 +208,45 @@ def testSessionJsonlRoundTrip : IO Unit :=
     assertTrue (content.contains "\"type\":\"session\"") "expected session header"
     assertTrue (content.contains "\"type\":\"message\"") "expected message entries"
 
+def testSessionResourceCleanups : IO Unit := do
+  let seen ← IO.mkRef (#[] : Array String)
+  let unregisterA ← LeanAgent.AI.SessionResources.registerSessionResourceCleanup fun sessionId =>
+    seen.modify (fun entries => entries.push ("a:" ++ sessionId.getD "none"))
+  let unregisterB ← LeanAgent.AI.SessionResources.registerSessionResourceCleanup fun sessionId =>
+    seen.modify (fun entries => entries.push ("b:" ++ sessionId.getD "none"))
+  LeanAgent.AI.SessionResources.cleanupSessionResources (some "s1")
+  assertTrue ((← seen.get) == #["a:s1", "b:s1"]) "expected registered cleanups to run in order"
+  unregisterA
+  seen.set #[]
+  LeanAgent.AI.SessionResources.cleanupSessionResources (some "s2")
+  assertTrue ((← seen.get) == #["b:s2"]) "expected unregistered cleanup to be skipped"
+  unregisterB
+
+def testSessionResourceCleanupAggregatesErrors : IO Unit := do
+  let seen ← IO.mkRef (#[] : Array String)
+  let unregisterFail ← LeanAgent.AI.SessionResources.registerSessionResourceCleanup fun _ =>
+    throw (IO.userError "first cleanup failed")
+  let unregisterOk ← LeanAgent.AI.SessionResources.registerSessionResourceCleanup fun sessionId =>
+    seen.modify (fun entries => entries.push ("ok:" ++ sessionId.getD "none"))
+  let unregisterFailAgain ← LeanAgent.AI.SessionResources.registerSessionResourceCleanup fun _ =>
+    throw (IO.userError "second cleanup failed")
+  let failed ←
+    try
+      LeanAgent.AI.SessionResources.cleanupSessionResources none
+      pure false
+    catch err =>
+      let message := err.toString
+      assertTrue (message.contains "Failed to cleanup session resources")
+        "expected aggregate cleanup failure message"
+      assertTrue (message.contains "first cleanup failed") "expected first cleanup error"
+      assertTrue (message.contains "second cleanup failed") "expected second cleanup error"
+      pure true
+  assertTrue failed "expected cleanup aggregate failure"
+  assertTrue ((← seen.get) == #["ok:none"]) "expected cleanup after failing callback to still run"
+  unregisterFail
+  unregisterOk
+  unregisterFailAgain
+
 def testOpenAIAssistantOmitsEmptyToolCalls : IO Unit := do
   let json := LeanAgent.OpenAI.messageToJson (AgentMessage.assistant "done" #[])
   assertTrue (LeanAgent.Json.optVal? json "tool_calls" == none) "empty tool_calls should be omitted"
@@ -2825,6 +2864,8 @@ def main : IO UInt32 := do
     testProjectCommandExpansion
     testProjectSkillExpansion
     testSessionJsonlRoundTrip
+    testSessionResourceCleanups
+    testSessionResourceCleanupAggregatesErrors
     testOpenAIAssistantOmitsEmptyToolCalls
     testOpenAICompletionsOmitsEmptyTools
     testOpenAICompletionsIncludesToolsWhenPresent

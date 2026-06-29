@@ -69,7 +69,7 @@ Before starting OMP advanced work:
 | `src/models.generated.ts` | generated Lean catalog or checked-in catalog | partial | Lean has a hand-curated starter catalog for key OpenAI-compatible providers. Full generated catalog parity is missing. |
 | `src/types.ts` | `LeanAgent.AI.Types` | partial | Core content/message/usage/stream-option types exist. Provider-specific compat and full stream runtime still missing. |
 | `src/env-api-keys.ts` | `LeanAgent.AI.Auth` | partial | Env API-key auth exists for registered providers. Full provider env map and ambient credential probes are missing. |
-| `src/session-resources.ts` | `LeanAgent.AI.SessionResources` | missing | Needed for cross-provider handoff and session resources. |
+| `src/session-resources.ts` | `LeanAgent.AI.SessionResources` | implemented | Global cleanup registry exists with unregister handles, optional session id propagation, and aggregate cleanup errors. |
 | `src/legacy-api-aliases.ts` | `LeanAgent.AI.Compat.Aliases` | missing | Needed only when compat API is implemented. |
 | `src/oauth.ts` | `LeanAgent.AI.OAuth` | missing | Depends on auth and device-code support. |
 | `src/bedrock-provider.ts` | `LeanAgent.AI.Providers.Bedrock` | missing | Depends on AWS/Bedrock support. |
@@ -244,6 +244,7 @@ Initial Lean parity should port tests in this order:
 | `openai-completions-*.test.ts` | OpenAI completions tests | partial | Payload tests cover empty tools, tool history, tool choice, max tokens, temperature, reasoning effort, thinking-level payload aliases, prompt cache key/retention, streaming payload/SSE parsing, buffered streaming runtime dispatch, request/response headers, usage parsing, provider HTTP diagnostics, repaired tool arguments, and legacy assistant tool-call omission. Network provider matrix and true live-stream timing tests are missing. |
 | `retry.test.ts`, `diagnostics.test.ts`, `estimate.test.ts`, `overflow.test.ts`, `validation.test.ts`, `unicode-surrogate.test.ts` | util tests | partial | Retry classifier/policy, diagnostics extraction/round-trip, estimate utilities, provider header filtering/merge, proxy env resolution, JSON repair/streaming fallback, JSON Schema validation/coercion, Unicode surrogate sanitization helpers, overflow detection, and OpenAI transient HTTP retry are covered. Live provider unicode-surrogate tests are missing. |
 | `faux-provider.test.ts` | faux provider tests | partial | Deterministic provider handle, queued responses, helper blocks, model-aware factories, usage/cache estimates, model rewrite, collection dispatch, and event reconstruction are covered. Global compat registration, async timing, and abort behavior are missing. |
+| `session-resources.test.ts` | session resource cleanup tests | implemented | Cleanup registration, unregister handles, session id propagation, continued cleanup after failures, and aggregate errors are covered. |
 | `images*.test.ts`, `openrouter-images.test.ts` | image tests | missing | Separate image phase. |
 | Anthropic/Google/Mistral/Bedrock/Azure/Codex tests | provider protocol tests | missing | After core OpenAI-compatible path is stable. |
 
