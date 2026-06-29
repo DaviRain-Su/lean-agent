@@ -941,6 +941,21 @@ def httpServerScript : String :=
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
     , "            return"
+    , "        if self.path == '/runtime-stream-openai/chat/completions':"
+    , "            request = json.loads(body)"
+    , "            ok = request.get('stream') is True and request.get('stream_options', {}).get('include_usage') is True"
+    , "            text = 'streamed' if ok else 'missing-stream-options'"
+    , "            payload = ("
+    , "                'data: ' + json.dumps({'choices': [{'delta': {'content': text[:6]}, 'finish_reason': None}]}) + '\\n\\n' +"
+    , "                'data: ' + json.dumps({'choices': [{'delta': {'content': text[6:]}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 4, 'completion_tokens': 2}}) + '\\n\\n' +"
+    , "                'data: [DONE]\\n\\n'"
+    , "            ).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'text/event-stream')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/large':"
     , "            payload = b'x' * 1024"
     , "            self.send_response(200)"
@@ -1099,6 +1114,44 @@ def testOpenAICompletionsSendsCustomHeaders : IO Unit := do
       { headers := #[("X-Trace", some "trace-1")] }
     assertTrue (response.content == "trace-1") "expected OpenAI-compatible request header"
 
+def testOpenAICompletionsStreamWithOptionsLocal : IO Unit := do
+  let port := 18086
+  withHttpServer port do
+    let stream ← LeanAgent.AI.Api.OpenAICompletions.streamWithOptions
+      { apiKey := "test-key"
+        baseUrl := s!"http://127.0.0.1:{port}/runtime-stream-openai"
+        timeoutSeconds := 5
+        connectTimeoutSeconds := 5
+        noProxy := some "*"
+        userAgent := "lean-agent-test/0.1.0"
+      }
+      (basicProviderRequest)
+      "openai-completions"
+      "deepseek"
+    assertTrue stream.isComplete "expected completed streaming response"
+    assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "streamed") "expected streamed response text"
+    assertTrue (stream.result.usage.totalTokens == 6) "expected streaming usage"
+
+def testOpenAICompatibleStreamsUsesStreamingRuntime : IO Unit := do
+  let port := 18087
+  withHttpServer port do
+    let model := { LeanAgent.Models.deepSeekV4Flash with baseUrl := s!"http://127.0.0.1:{port}/runtime-stream-openai" }
+    let context : LeanAgent.AI.Context :=
+      { systemPrompt := some "system"
+        messages :=
+          #[.user
+              { content := #[LeanAgent.AI.text "hello"]
+                timestamp := 1
+              }]
+      }
+    let stream ← LeanAgent.Models.openAICompatibleStreams.streamSimple
+      model
+      context
+      { apiKey := some "test-key" }
+    assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "streamed") "expected runtime streamed text"
+    assertTrue (stream.result.api == "openai-completions") "expected runtime api"
+    assertTrue (stream.result.provider == LeanAgent.Models.deepSeekProviderId) "expected runtime provider"
+
 def testOpenAICompletionsProviderErrorDiagnostics : IO Unit := do
   let port := 18083
   withHttpServer port do
@@ -1175,6 +1228,8 @@ def main : IO UInt32 := do
     testHttpClientResponseLimit
     testOpenAICompletionsRetriesTransientHttpFailure
     testOpenAICompletionsSendsCustomHeaders
+    testOpenAICompletionsStreamWithOptionsLocal
+    testOpenAICompatibleStreamsUsesStreamingRuntime
     testOpenAICompletionsProviderErrorDiagnostics
     IO.println "lean-agent tests passed"
     pure 0

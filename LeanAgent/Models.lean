@@ -563,12 +563,12 @@ def openAICompatibleStreams : ProviderStreams :=
               baseUrl := model.baseUrl
             }
           let request := contextToProviderRequest model context
-          let response ← LeanAgent.AI.Api.OpenAICompletions.completeWithOptions
+          LeanAgent.AI.Api.OpenAICompletions.streamWithOptions
             config
             request
+            model.api
+            model.provider
             (LeanAgent.AI.Api.OpenAICompletions.optionsFromSimple options)
-          let timestamp ← IO.monoMsNow
-          pure (LeanAgent.AI.streamFromLegacyProviderResponse model.api model.provider model.id timestamp response)
   }
 
 def authForProviderInfo (info : ProviderInfo) : LeanAgent.AI.Auth.ProviderAuth :=

@@ -693,6 +693,19 @@ def completeWithOptions
   | .ok response => pure response
   | .error err => throw (IO.userError s!"failed to parse provider response: {err}\n{raw}")
 
+def streamWithOptions
+    (config : OpenAICompatibleConfig)
+    (request : ProviderRequest)
+    (api providerId : String)
+    (options : OpenAICompletionsOptions := {}) : IO LeanAgent.AI.AssistantMessageEventStream := do
+  let payload := requestToStreamingJsonWithOptions request options config.baseUrl
+  let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
+  let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy (runHttpJson config payload (optionHeaders options.headers))
+  let timestamp ← IO.monoMsNow
+  match parseStreamingEventStream api providerId request.model timestamp raw with
+  | .ok stream => pure stream
+  | .error err => throw (IO.userError s!"failed to parse streaming provider response: {err}\n{raw}")
+
 def provider (config : OpenAICompatibleConfig) : LeanAgent.ModelProvider :=
   { complete := fun request => completeWithOptions config request }
 
