@@ -5778,6 +5778,43 @@ def testFauxProviderModelsFactoriesAndCache : IO Unit := do
       assertTrue (second.usage.cacheRead > 0) "expected follow-up to read prompt cache"
   | none => fail "expected faux thinker model"
 
+def testCompatRegisterFauxProviderDispatchesAndUnregisters : IO Unit := do
+  LeanAgent.AI.Compat.resetApiProviders
+  let registration ← LeanAgent.AI.Compat.registerFauxProvider
+    { api := some "faux:compat"
+      provider := some "faux-compat-provider"
+      models := #[{ id := "faux-compat-model", reasoning := true }]
+    }
+  registration.setResponses
+    #[ .message (LeanAgent.AI.Providers.Faux.fauxTextMessage "compat-response") ]
+  match ← LeanAgent.AI.Compat.getApiProvider? registration.api with
+  | some provider => assertTrue (provider.api == "faux:compat") "expected compat faux api registration"
+  | none => fail "expected compat faux provider registration"
+  let model := registration.getModel
+  assertTrue (model.id == "faux-compat-model") "expected compat faux model"
+  let stream ← LeanAgent.AI.Compat.streamSimpleWithApi registration.api model (fauxContext "compat")
+    { sessionId := some "compat-session" }
+  assertTrue
+    (LeanAgent.AI.contentPlainText stream.result.content == "compat-response")
+    "expected registered faux provider response"
+  assertTrue (stream.result.api == "faux:compat") "expected faux response api rewrite"
+  assertTrue (stream.result.provider == "faux-compat-provider") "expected faux response provider rewrite"
+  assertTrue (stream.result.model == "faux-compat-model") "expected faux response model rewrite"
+  assertTrue ((← registration.getPendingResponseCount) == 0) "expected compat faux queue to be exhausted"
+  assertTrue ((← registration.state).callCount == 1) "expected compat faux call count"
+  registration.unregister
+  assertTrue ((← LeanAgent.AI.Compat.getApiProvider? registration.api).isNone)
+    "expected compat faux unregister to remove provider"
+  let failed ←
+    try
+      let _ ← LeanAgent.AI.Compat.streamSimpleWithApi registration.api model (fauxContext) {}
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains "No API provider registered") "expected unregistered faux provider error"
+      pure true
+  assertTrue failed "expected unregistered faux provider dispatch to fail"
+  LeanAgent.AI.Compat.resetApiProviders
+
 def testAIContentBlockJsonRoundTrip : IO Unit := do
   let block : LeanAgent.AI.ContentBlock :=
     .toolCall
@@ -7817,6 +7854,7 @@ def main : IO UInt32 := do
     testFauxProviderQueuesResponses
     testFauxProviderHelperBlocksAndEvents
     testFauxProviderModelsFactoriesAndCache
+    testCompatRegisterFauxProviderDispatchesAndUnregisters
     testAIContentBlockJsonRoundTrip
     testAIMessageJsonRoundTrip
     testAIMessageLegacyConversion

@@ -1,4 +1,5 @@
 import LeanAgent.AI.EnvApiKeys
+import LeanAgent.AI.Providers.Faux
 import LeanAgent.Models
 
 namespace LeanAgent.AI.Compat
@@ -65,6 +66,59 @@ def resetApiProviders : IO Unit := do
   registerBuiltInApiProviders
 
 initialize registerBuiltIns : Unit ← registerBuiltInApiProviders
+
+structure FauxProviderRegistration where
+  handle : LeanAgent.AI.Providers.Faux.FauxProviderHandle
+  sourceId : String
+
+def FauxProviderRegistration.api (registration : FauxProviderRegistration) : String :=
+  registration.handle.api
+
+def FauxProviderRegistration.models (registration : FauxProviderRegistration) :
+    Array LeanAgent.Models.ModelInfo :=
+  registration.handle.models
+
+def FauxProviderRegistration.getModel? (registration : FauxProviderRegistration) (modelId : String) :
+    Option LeanAgent.Models.ModelInfo :=
+  registration.handle.getModel? modelId
+
+def FauxProviderRegistration.getModel (registration : FauxProviderRegistration) :
+    LeanAgent.Models.ModelInfo :=
+  registration.handle.getModel
+
+def FauxProviderRegistration.state (registration : FauxProviderRegistration) :
+    IO LeanAgent.AI.Providers.Faux.FauxState :=
+  registration.handle.state
+
+def FauxProviderRegistration.setResponses
+    (registration : FauxProviderRegistration)
+    (responses : Array LeanAgent.AI.Providers.Faux.FauxResponseStep) : IO Unit :=
+  registration.handle.setResponses responses
+
+def FauxProviderRegistration.appendResponses
+    (registration : FauxProviderRegistration)
+    (responses : Array LeanAgent.AI.Providers.Faux.FauxResponseStep) : IO Unit :=
+  registration.handle.appendResponses responses
+
+def FauxProviderRegistration.getPendingResponseCount (registration : FauxProviderRegistration) :
+    IO Nat :=
+  registration.handle.getPendingResponseCount
+
+def FauxProviderRegistration.unregister (registration : FauxProviderRegistration) : IO Unit :=
+  unregisterApiProviders registration.sourceId
+
+def registerFauxProvider
+    (options : LeanAgent.AI.Providers.Faux.FauxOptions := {}) :
+    IO FauxProviderRegistration := do
+  let handle ← LeanAgent.AI.Providers.Faux.fauxProvider options
+  let timestamp ← IO.monoMsNow
+  let sourceId := s!"faux-provider-{handle.api}-{timestamp}"
+  registerApiProvider
+    { api := handle.api
+      streams := { streamSimple := handle.provider.streamSimple }
+    }
+    (some sourceId)
+  pure { handle := handle, sourceId := sourceId }
 
 def providerEnvApiKey? (model : LeanAgent.Models.ModelInfo) (env : LeanAgent.AI.Auth.ProviderEnv) :
     IO (Option String) :=
