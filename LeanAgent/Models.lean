@@ -2327,6 +2327,7 @@ def anthropicMessagesOptionsFromSimple
       supportsEagerToolInputStreaming := model.compat.supportsEagerToolInputStreaming
       supportsCacheControlOnTools := model.compat.supportsCacheControlOnTools
       allowEmptySignature := model.compat.allowEmptySignature
+      forceAdaptiveThinking := model.compat.forceAdaptiveThinking
     }
   match options.reasoning with
   | none =>

@@ -17,6 +17,7 @@ open LeanAgent
 def api : String := "anthropic-messages"
 def anthropicVersion : String := "2023-06-01"
 def fineGrainedToolStreamingBeta : String := "fine-grained-tool-streaming-2025-05-14"
+def interleavedThinkingBeta : String := "interleaved-thinking-2025-05-14"
 
 structure AnthropicMessagesConfig where
   apiKey : String
@@ -47,6 +48,8 @@ structure AnthropicMessagesOptions extends LeanAgent.AI.SimpleStreamOptions wher
   supportsEagerToolInputStreaming : Bool := true
   supportsCacheControlOnTools : Bool := true
   allowEmptySignature : Bool := false
+  forceAdaptiveThinking : Bool := false
+  interleavedThinking : Bool := true
 
 def optionsFromSimple (options : LeanAgent.AI.SimpleStreamOptions) : AnthropicMessagesOptions :=
   { temperature := options.temperature
@@ -486,33 +489,50 @@ def shouldUseFineGrainedToolStreamingBeta
     (options : AnthropicMessagesOptions) : Bool :=
   !tools.isEmpty && !options.supportsEagerToolInputStreaming
 
+def betaFeatures
+    (tools : Array LeanAgent.AI.Tool)
+    (options : AnthropicMessagesOptions) : Array String :=
+  let fineGrainedFeatures :=
+    if shouldUseFineGrainedToolStreamingBeta tools options then
+      #[fineGrainedToolStreamingBeta]
+    else
+      #[]
+  let interleavedFeatures :=
+    if options.interleavedThinking && !options.forceAdaptiveThinking then
+      #[interleavedThinkingBeta]
+    else
+      #[]
+  fineGrainedFeatures ++ interleavedFeatures
+
+def betaHeaderValue? (features : Array String) : Option String :=
+  if features.isEmpty then none else some (String.intercalate "," features.toList)
+
 def requestHeaders
     (config : AnthropicMessagesConfig)
     (options : AnthropicMessagesOptions)
     (tools : Array LeanAgent.AI.Tool := #[]) : Array (String × String) :=
-  let useFineGrainedToolStreamingBeta :=
-    shouldUseFineGrainedToolStreamingBeta tools options
+  let features := betaFeatures tools options
+  let betaHeader := betaHeaderValue? features
   let authHeaders :=
     if config.apiKey.trimAscii.toString.isEmpty then
       #[]
     else if config.apiKey.contains "sk-ant-oat" then
-      let beta :=
-        if useFineGrainedToolStreamingBeta then
-          "claude-code-20250219,oauth-2025-04-20," ++ fineGrainedToolStreamingBeta
-        else
-          "claude-code-20250219,oauth-2025-04-20"
+      let betaSuffix :=
+        match betaHeader with
+        | some value => "," ++ value
+        | none => ""
       #[ ("Authorization", "Bearer " ++ config.apiKey)
-       , ("anthropic-beta", beta)
+       , ("anthropic-beta", "claude-code-20250219,oauth-2025-04-20" ++ betaSuffix)
        , ("user-agent", "claude-cli/2.1.75")
        , ("x-app", "cli")
        ]
     else
       #[("x-api-key", config.apiKey)]
   let betaHeaders :=
-    if !config.apiKey.contains "sk-ant-oat" && useFineGrainedToolStreamingBeta then
-      #[("anthropic-beta", fineGrainedToolStreamingBeta)]
-    else
-      #[]
+    match betaHeader with
+    | some value =>
+        if config.apiKey.contains "sk-ant-oat" then #[] else #[("anthropic-beta", value)]
+    | none => #[]
   let sessionHeaders :=
     if options.sendSessionAffinityHeaders && options.cacheRetention != some .none then
       match options.sessionId with

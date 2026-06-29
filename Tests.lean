@@ -1111,6 +1111,10 @@ def testAnthropicMessagesCompatOptions : IO Unit := do
     "expected Anthropic compat to disable temperature"
   assertTrue options.sendSessionAffinityHeaders
     "expected Anthropic session affinity compat to map into options"
+  assertTrue options.forceAdaptiveThinking
+    "expected Anthropic adaptive thinking compat to map into options"
+  assertTrue options.interleavedThinking
+    "expected Anthropic interleaved thinking beta to default on"
   let payload := LeanAgent.AI.Api.AnthropicMessages.requestToJsonWithOptions
     model.toModelRef
     model.input
@@ -1250,6 +1254,20 @@ def testAnthropicMessagesHeaders : IO Unit := do
     "expected Anthropic version header"
   assertTrue (headerValueCaseInsensitive? headers "X-Custom" == some "custom")
     "expected custom config header"
+  assertTrue
+    (headerValueCaseInsensitive? headers "anthropic-beta" ==
+      some LeanAgent.AI.Api.AnthropicMessages.interleavedThinkingBeta)
+    "expected default Anthropic interleaved thinking beta header"
+  let noInterleavedHeaders := LeanAgent.AI.Api.AnthropicMessages.requestHeaders
+    { apiKey := "anthropic-key" }
+    { interleavedThinking := false }
+  assertTrue (headerValueCaseInsensitive? noInterleavedHeaders "anthropic-beta" == none)
+    "expected disabled interleaved thinking to omit Anthropic beta header"
+  let adaptiveThinkingHeaders := LeanAgent.AI.Api.AnthropicMessages.requestHeaders
+    { apiKey := "anthropic-key" }
+    { forceAdaptiveThinking := true }
+  assertTrue (headerValueCaseInsensitive? adaptiveThinkingHeaders "anthropic-beta" == none)
+    "expected adaptive thinking compat to omit interleaved thinking beta header"
   let headerAuthOnly := LeanAgent.AI.Api.AnthropicMessages.requestHeaders
     { apiKey := "" }
     { headers := #[("Authorization", some "Bearer external")] }
@@ -1265,24 +1283,41 @@ def testAnthropicMessagesHeaders : IO Unit := do
   assertTrue (headerValueCaseInsensitive? oauthHeaders "x-api-key" == none)
     "expected OAuth token not to use x-api-key"
   assertTrue
-    (headerValueCaseInsensitive? oauthHeaders "anthropic-beta" == some "claude-code-20250219,oauth-2025-04-20")
+    (headerValueCaseInsensitive? oauthHeaders "anthropic-beta" ==
+      some ("claude-code-20250219,oauth-2025-04-20," ++
+        LeanAgent.AI.Api.AnthropicMessages.interleavedThinkingBeta))
     "expected OAuth beta headers"
   let fineGrainedHeaders := LeanAgent.AI.Api.AnthropicMessages.requestHeaders
     { apiKey := "anthropic-key" }
-    { supportsEagerToolInputStreaming := false }
+    { supportsEagerToolInputStreaming := false
+      forceAdaptiveThinking := true
+    }
     #[readTool]
   assertTrue
     (headerValueCaseInsensitive? fineGrainedHeaders "anthropic-beta" ==
       some LeanAgent.AI.Api.AnthropicMessages.fineGrainedToolStreamingBeta)
     "expected Anthropic fine-grained tool streaming beta header"
-  let noToolFineGrainedHeaders := LeanAgent.AI.Api.AnthropicMessages.requestHeaders
+  let combinedBetaHeaders := LeanAgent.AI.Api.AnthropicMessages.requestHeaders
     { apiKey := "anthropic-key" }
     { supportsEagerToolInputStreaming := false }
+    #[readTool]
+  assertTrue
+    (headerValueCaseInsensitive? combinedBetaHeaders "anthropic-beta" ==
+      some (LeanAgent.AI.Api.AnthropicMessages.fineGrainedToolStreamingBeta ++ "," ++
+        LeanAgent.AI.Api.AnthropicMessages.interleavedThinkingBeta))
+    "expected Anthropic beta header to combine fine-grained and interleaved features"
+  let noToolFineGrainedHeaders := LeanAgent.AI.Api.AnthropicMessages.requestHeaders
+    { apiKey := "anthropic-key" }
+    { supportsEagerToolInputStreaming := false
+      interleavedThinking := false
+    }
   assertTrue (headerValueCaseInsensitive? noToolFineGrainedHeaders "anthropic-beta" == none)
     "expected no Anthropic fine-grained beta header without tools"
   let oauthFineGrainedHeaders := LeanAgent.AI.Api.AnthropicMessages.requestHeaders
     { apiKey := "sk-ant-oat-token" }
-    { supportsEagerToolInputStreaming := false }
+    { supportsEagerToolInputStreaming := false
+      forceAdaptiveThinking := true
+    }
     #[readTool]
   assertTrue
     (headerValueCaseInsensitive? oauthFineGrainedHeaders "anthropic-beta" ==
