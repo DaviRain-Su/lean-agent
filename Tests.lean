@@ -1961,6 +1961,121 @@ def testModelsAuthOAuthCredentialOwnsProvider : IO Unit := do
     (fakeAuthContextWithNow 1000)
   assertTrue result.isNone "stored OAuth credential without OAuth handler should not fall back to env"
 
+def fakeOAuthCredential (access refresh : String) (expires : Nat) : LeanAgent.AI.OAuth.OAuthCredentials :=
+  { access, refresh, expires }
+
+def fakeOAuthProviderForRegistry
+    (id name : String)
+    (refreshCalls : IO.Ref Nat)
+    (failRefresh : Bool := false) : LeanAgent.AI.OAuth.OAuthProviderInterface :=
+  { id := id
+    name := name
+    login := fun _ => pure (fakeOAuthCredential "login-token" "login-refresh" 5000)
+    refreshToken := fun credential => do
+      refreshCalls.modify (· + 1)
+      if failRefresh then
+        throw (IO.userError "refresh failed")
+      else
+        pure { credential with access := credential.access ++ "-refreshed", expires := 5000 }
+    getApiKey := fun credential => "Bearer " ++ credential.access
+  }
+
+def testOAuthProviderRegistryCrud : IO Unit := do
+  LeanAgent.AI.OAuth.resetOAuthProviders
+  let refreshCalls ← IO.mkRef 0
+  let provider := fakeOAuthProviderForRegistry "registry-test" "Registry Test" refreshCalls
+  LeanAgent.AI.OAuth.registerOAuthProvider provider
+  match ← LeanAgent.AI.OAuth.getOAuthProvider? "registry-test" with
+  | some found => assertTrue (found.name == "Registry Test") "expected registered OAuth provider"
+  | none => fail "expected registered OAuth provider lookup"
+  let providers ← LeanAgent.AI.OAuth.getOAuthProviders
+  assertTrue (providers.any (fun found => found.id == "registry-test")) "expected provider in registry list"
+  let info ← LeanAgent.AI.OAuth.getOAuthProviderInfoList
+  assertTrue
+    (info.any (fun found =>
+      found.id == "registry-test" && found.name == "Registry Test" && found.available))
+    "expected provider info list entry"
+  LeanAgent.AI.OAuth.unregisterOAuthProvider "registry-test"
+  assertTrue ((← LeanAgent.AI.OAuth.getOAuthProvider? "registry-test").isNone)
+    "expected unregister to remove custom OAuth provider"
+  LeanAgent.AI.OAuth.registerOAuthProvider provider
+  LeanAgent.AI.OAuth.resetOAuthProviders
+  assertTrue ((← LeanAgent.AI.OAuth.getOAuthProvider? "registry-test").isNone)
+    "expected reset to remove custom OAuth provider"
+
+def testOAuthRefreshTokenDispatch : IO Unit := do
+  LeanAgent.AI.OAuth.resetOAuthProviders
+  let refreshCalls ← IO.mkRef 0
+  LeanAgent.AI.OAuth.registerOAuthProvider
+    (fakeOAuthProviderForRegistry "refresh-test" "Refresh Test" refreshCalls)
+  let refreshed ← LeanAgent.AI.OAuth.refreshOAuthToken
+    "refresh-test"
+    (fakeOAuthCredential "old-token" "refresh-token" 1)
+  assertTrue (refreshed.access == "old-token-refreshed") "expected registry refresh dispatch"
+  assertTrue (refreshed.expires == 5000) "expected refreshed expiry"
+  assertTrue ((← refreshCalls.get) == 1) "expected one refresh call"
+  LeanAgent.AI.OAuth.resetOAuthProviders
+
+def testOAuthGetOAuthApiKey : IO Unit := do
+  LeanAgent.AI.OAuth.resetOAuthProviders
+  let refreshCalls ← IO.mkRef 0
+  LeanAgent.AI.OAuth.registerOAuthProvider
+    (fakeOAuthProviderForRegistry "api-key-test" "API Key Test" refreshCalls)
+  let missing ← LeanAgent.AI.OAuth.getOAuthApiKey "api-key-test" #[] (pure 1000)
+  assertTrue missing.isNone "expected missing OAuth credentials to return none"
+  match ← LeanAgent.AI.OAuth.getOAuthApiKey
+    "api-key-test"
+    #[("api-key-test", fakeOAuthCredential "fresh-token" "refresh-token" 2000)]
+    (pure 1000) with
+  | some result =>
+      assertTrue (result.apiKey == "Bearer fresh-token") "expected fresh OAuth API key"
+      assertTrue (result.newCredentials.access == "fresh-token") "expected fresh credentials to be unchanged"
+  | none => fail "expected fresh OAuth API key result"
+  assertTrue ((← refreshCalls.get) == 0) "fresh OAuth credentials should not refresh"
+  match ← LeanAgent.AI.OAuth.getOAuthApiKey
+    "api-key-test"
+    #[("api-key-test", fakeOAuthCredential "expired-token" "refresh-token" 999)]
+    (pure 1000) with
+  | some result =>
+      assertTrue (result.apiKey == "Bearer expired-token-refreshed") "expected refreshed OAuth API key"
+      assertTrue (result.newCredentials.access == "expired-token-refreshed")
+        "expected refreshed credentials"
+  | none => fail "expected refreshed OAuth API key result"
+  assertTrue ((← refreshCalls.get) == 1) "expired OAuth credentials should refresh"
+  LeanAgent.AI.OAuth.resetOAuthProviders
+
+def testOAuthGetOAuthApiKeyErrors : IO Unit := do
+  LeanAgent.AI.OAuth.resetOAuthProviders
+  let unknownFailed ←
+    try
+      let _ ← LeanAgent.AI.OAuth.getOAuthApiKey
+        "unknown-oauth"
+        #[("unknown-oauth", fakeOAuthCredential "token" "refresh" 2000)]
+        (pure 1000)
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains "Unknown OAuth provider: unknown-oauth")
+        "expected unknown OAuth provider error"
+      pure true
+  assertTrue unknownFailed "unknown OAuth provider should fail"
+  let refreshCalls ← IO.mkRef 0
+  LeanAgent.AI.OAuth.registerOAuthProvider
+    (fakeOAuthProviderForRegistry "failing-oauth" "Failing OAuth" refreshCalls true)
+  let refreshFailed ←
+    try
+      let _ ← LeanAgent.AI.OAuth.getOAuthApiKey
+        "failing-oauth"
+        #[("failing-oauth", fakeOAuthCredential "expired" "refresh" 999)]
+        (pure 1000)
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains "Failed to refresh OAuth token for failing-oauth")
+        "expected refresh wrapper error"
+      pure true
+  assertTrue refreshFailed "failing OAuth refresh should fail"
+  assertTrue ((← refreshCalls.get) == 1) "expected failed refresh to be attempted once"
+  LeanAgent.AI.OAuth.resetOAuthProviders
+
 def headerValueOpt? (headers : Array (String × Option String)) (name : String) : Option (Option String) :=
   headers.findSome? fun (headerName, value) =>
     if headerName.toLower == name.toLower then some value else none
@@ -4059,6 +4174,10 @@ def main : IO UInt32 := do
     testModelsAuthOAuthValidCredential
     testModelsAuthOAuthExpiredCredentialRefreshes
     testModelsAuthOAuthCredentialOwnsProvider
+    testOAuthProviderRegistryCrud
+    testOAuthRefreshTokenDispatch
+    testOAuthGetOAuthApiKey
+    testOAuthGetOAuthApiKeyErrors
     testCloudflareWorkersAIAuthResolution
     testCloudflareAIGatewayAuthResolution
     testCloudflareStoredCredentialResolution

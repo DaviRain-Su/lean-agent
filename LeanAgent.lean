@@ -16,6 +16,7 @@ import LeanAgent.AI.EventStream
 import LeanAgent.AI.Images
 import LeanAgent.AI.Images.Models
 import LeanAgent.AI.Images.Registry
+import LeanAgent.AI.OAuth
 import LeanAgent.AI.Providers.CloudflareAuth
 import LeanAgent.AI.Providers.Faux
 import LeanAgent.AI.Providers.OpenRouterImages
