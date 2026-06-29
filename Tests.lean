@@ -5101,6 +5101,61 @@ def headerValueStringCI? (headers : Array (String × String)) (name : String) : 
   headers.findSome? fun (headerName, value) =>
     if headerName.toLower == name.toLower then some value else none
 
+def testGitHubCopilotHeadersInference : IO Unit := do
+  let userMessage :=
+    LeanAgent.AI.Message.user
+      { content := #[]
+        timestamp := 0
+      }
+  assertTrue
+    (LeanAgent.AI.Api.GitHubCopilotHeaders.inferCopilotInitiator #[userMessage] == "user")
+    "expected user message to infer user initiator"
+  let assistantMessage : LeanAgent.AI.Message :=
+    .assistant
+      { content := #[]
+        api := ""
+        provider := ""
+        model := ""
+        stopReason := .stop
+        timestamp := 1
+      }
+  assertTrue
+    (LeanAgent.AI.Api.GitHubCopilotHeaders.inferCopilotInitiator
+      #[userMessage, assistantMessage] == "agent")
+    "expected assistant last message to infer agent initiator"
+
+  let noImageMessages := #[userMessage]
+  assertTrue
+    (!LeanAgent.AI.Api.GitHubCopilotHeaders.hasCopilotVisionInput noImageMessages)
+    "expected no vision input for text-only messages"
+
+  let imageMessage :=
+    LeanAgent.AI.Message.user
+      { content := #[LeanAgent.AI.image "AAA" "image/png"]
+        timestamp := 0
+      }
+  assertTrue
+    (LeanAgent.AI.Api.GitHubCopilotHeaders.hasCopilotVisionInput #[imageMessage])
+    "expected vision input detection for image message"
+
+  let headersNoImage :=
+    LeanAgent.AI.Api.GitHubCopilotHeaders.buildCopilotDynamicHeaders #[userMessage] false
+  assertTrue
+    (headerValueStringCI? headersNoImage "x-initiator" == some "user")
+    "expected initiator header"
+  assertTrue
+    (headerValueStringCI? headersNoImage "openai-intent" == some "conversation-edits")
+    "expected intent header"
+  assertTrue
+    (headerValueStringCI? headersNoImage "copilot-vision-request" == none)
+    "expected vision header to be omitted when hasImages is false"
+
+  let headersWithImage :=
+    LeanAgent.AI.Api.GitHubCopilotHeaders.buildCopilotDynamicHeaders #[userMessage] true
+  assertTrue
+    (headerValueStringCI? headersWithImage "copilot-vision-request" == some "true")
+    "expected vision header when hasImages is true"
+
 def testCatalogProviderHeadersApplyThroughAuth : IO Unit := do
   let provider ← LeanAgent.AI.Providers.KimiCoding.provider
   let models ← provider.getModels
@@ -8625,6 +8680,7 @@ def main : IO UInt32 := do
     testGitHubCopilotOAuthParsesAvailableModels
     testGitHubCopilotOAuthModifiesModelsFromCredential
     testGitHubCopilotOAuthRegisterBuiltInProvider
+    testGitHubCopilotHeadersInference
     testCatalogProviderHeadersApplyThroughAuth
     testCloudflareWorkersAIAuthResolution
     testCloudflareAIGatewayAuthResolution
