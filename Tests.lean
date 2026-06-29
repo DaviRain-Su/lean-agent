@@ -5741,11 +5741,108 @@ def testModelsAuthOAuthRefreshFailureUsesModelsErrorOauth : IO Unit := do
     catch err =>
       assertTrue (err.toString.contains "ModelsError(oauth)")
         "expected typed oauth models error"
-      assertTrue (err.toString.contains "Failed to refresh OAuth token for fake")
+      assertTrue (err.toString.contains "OAuth refresh failed for fake")
         "expected refresh failure details"
       pure true
   assertTrue failed "expected OAuth refresh failure to throw"
   assertTrue ((← refreshCalls.get) == 1) "expected one failing OAuth refresh attempt"
+
+def testModelsAuthReadFailureUsesModelsErrorAuth : IO Unit := do
+  let store : LeanAgent.AI.Auth.CredentialStore :=
+    { read := fun _ => throw (IO.userError "read failed")
+      modify := fun _ _ => pure none
+      delete := fun _ => pure ()
+    }
+  let failed ←
+    try
+      let _ ← LeanAgent.AI.Auth.resolveProviderAuth "fake" fakeProviderAuth store fakeAuthContext
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains "ModelsError(auth)")
+        "expected typed auth error for credential store read failure"
+      assertTrue (err.toString.contains "Credential store read failed for fake")
+        "expected credential store read failure details"
+      pure true
+  assertTrue failed "expected credential store read failure to throw"
+
+def testModelsAuthApiKeyFailureUsesModelsErrorAuth : IO Unit := do
+  let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+  let failingAuth : LeanAgent.AI.Auth.ProviderAuth :=
+    { apiKey :=
+        some
+          { name := "Failing API key"
+            resolve := fun _ _ _ => throw (IO.userError "resolve failed")
+          }
+    }
+  let failed ←
+    try
+      let _ ← LeanAgent.AI.Auth.resolveProviderAuth "fake" failingAuth store fakeAuthContext
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains "ModelsError(auth)")
+        "expected typed auth error for API key resolution failure"
+      assertTrue (err.toString.contains "API key auth failed for provider fake")
+        "expected API key resolution failure details"
+      pure true
+  assertTrue failed "expected API key resolution failure to throw"
+
+def testModelsAuthOAuthModifyFailureUsesModelsErrorAuth : IO Unit := do
+  let store : LeanAgent.AI.Auth.CredentialStore :=
+    { read := fun _ =>
+        pure
+          (some
+            (.oauth
+              { access := "expired-token"
+                refresh := "refresh-1"
+                expires := 999
+              }))
+      modify := fun _ _ => throw (IO.userError "modify failed")
+      delete := fun _ => pure ()
+    }
+  let auth := { fakeProviderAuth with oauth := some (fakeOAuthAuth (← IO.mkRef 0)) }
+  let failed ←
+    try
+      let _ ← LeanAgent.AI.Auth.resolveProviderAuth "fake" auth store (fakeAuthContextWithNow 1000)
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains "ModelsError(auth)")
+        "expected typed auth error for credential store modify failure"
+      assertTrue (err.toString.contains "Credential store modify failed for fake")
+        "expected credential store modify failure details"
+      pure true
+  assertTrue failed "expected credential store modify failure to throw"
+
+def testModelsAuthOAuthToAuthFailureUsesModelsErrorOauth : IO Unit := do
+  let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+  let _ ← store.modify "fake" fun _ =>
+    pure
+      (some
+        (.oauth
+          { access := "oauth-access"
+            refresh := "oauth-refresh"
+            expires := 2000
+          }))
+  let failingOAuth : LeanAgent.AI.Auth.OAuthAuth :=
+    { name := "Failing OAuth toAuth"
+      login := fun _ => throw (IO.userError "unexpected failing OAuth login")
+      refresh := fun credential => pure credential
+      toAuth := fun _ => throw (IO.userError "toAuth failed")
+    }
+  let failed ←
+    try
+      let _ ← LeanAgent.AI.Auth.resolveProviderAuth
+        "fake"
+        { fakeProviderAuth with oauth := some failingOAuth }
+        store
+        (fakeAuthContextWithNow 1000)
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains "ModelsError(oauth)")
+        "expected typed oauth error for toAuth failure"
+      assertTrue (err.toString.contains "OAuth auth derivation failed for fake")
+        "expected OAuth auth derivation failure details"
+      pure true
+  assertTrue failed "expected OAuth toAuth failure to throw"
 
 def testModelsAuthOAuthCredentialOwnsProvider : IO Unit := do
   let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
@@ -12400,6 +12497,10 @@ def main : IO UInt32 := do
     testModelsAuthOAuthExpiredCredentialRefreshes
     testModelsAuthOAuthConcurrentRefreshesSerialize
     testModelsAuthOAuthRefreshFailureUsesModelsErrorOauth
+    testModelsAuthReadFailureUsesModelsErrorAuth
+    testModelsAuthApiKeyFailureUsesModelsErrorAuth
+    testModelsAuthOAuthModifyFailureUsesModelsErrorAuth
+    testModelsAuthOAuthToAuthFailureUsesModelsErrorOauth
     testModelsAuthOAuthCredentialOwnsProvider
     testLazyOAuthLoadsOnceAndDelegates
     testOAuthProviderRegistryCrud

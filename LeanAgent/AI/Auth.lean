@@ -314,11 +314,20 @@ def resolveApiKey
     (model : LeanAgent.AI.ModelRef)
     (ctx : AuthContext)
     (apiKeyAuth : ApiKeyAuth)
-    (credential : Option ApiKeyCredential) : IO (Option AuthResult) :=
-  apiKeyAuth.resolve model ctx credential
+    (credential : Option ApiKeyCredential) : IO (Option AuthResult) := do
+  try
+    apiKeyAuth.resolve model ctx credential
+  catch _ =>
+    throw (IO.userError s!"ModelsError(auth): API key auth failed for provider {model.provider}")
 
 def oauthModelsError (message : String) : IO.Error :=
   IO.userError s!"ModelsError(oauth): {message}"
+
+def authModelsError (message : String) : IO.Error :=
+  IO.userError s!"ModelsError(auth): {message}"
+
+def isModelsErrorCode (err : IO.Error) (code : String) : Bool :=
+  err.toString.startsWith s!"ModelsError({code})"
 
 def oauthCredentialIsExpired (ctx : AuthContext) (credential : OAuthCredential) : IO Bool := do
   let now ← ctx.nowMs
@@ -338,12 +347,18 @@ def refreshStoredOAuthCredential
           match current with
           | some (.oauth currentOAuth) =>
               if ← oauthCredentialIsExpired ctx currentOAuth then
-                pure (some (.oauth (← oauth.refresh currentOAuth)))
+                try
+                  pure (some (.oauth (← oauth.refresh currentOAuth)))
+                catch _ =>
+                  throw (oauthModelsError s!"OAuth refresh failed for {providerId}")
               else
                 pure none
           | _ => pure none
-      catch _ =>
-        throw (oauthModelsError s!"Failed to refresh OAuth token for {providerId}")
+      catch err =>
+        if isModelsErrorCode err "oauth" then
+          throw err
+        else
+          throw (authModelsError s!"Credential store modify failed for {providerId}")
     match post with
     | some (.oauth refreshed) => credential := refreshed
     | _ => return none
@@ -357,11 +372,17 @@ def resolveStoredOAuth
     (stored : OAuthCredential) : IO (Option AuthResult) := do
   match ← refreshStoredOAuthCredential ctx credentials providerId oauth stored with
   | some credential =>
-      pure (some { auth := (← oauth.toAuth credential), source := some "OAuth" })
+      try
+        pure (some { auth := (← oauth.toAuth credential), source := some "OAuth" })
+      catch _ =>
+        throw (oauthModelsError s!"OAuth auth derivation failed for {providerId}")
   | none => pure none
 
-def readCredential (credentials : CredentialStore) (providerId : String) : IO (Option Credential) :=
-  credentials.read providerId
+def readCredential (credentials : CredentialStore) (providerId : String) : IO (Option Credential) := do
+  try
+    credentials.read providerId
+  catch _ =>
+    throw (authModelsError s!"Credential store read failed for {providerId}")
 
 def defaultAuthModelRef (providerId : String) (baseUrl : Option String := none) :
     LeanAgent.AI.ModelRef :=
