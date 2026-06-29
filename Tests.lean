@@ -6232,6 +6232,31 @@ def httpServerScript : String :=
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
     , "            return"
+    , "        if self.path == '/anthropic-typed/v1/messages':"
+    , "            request = json.loads(body)"
+    , "            thinking = request.get('thinking') or {}"
+    , "            tool_choice = request.get('tool_choice') or {}"
+    , "            text = '|'.join([request.get('model') or '', str(request.get('stream')), self.headers.get('x-api-key') or '', thinking.get('type') or '', str(thinking.get('budget_tokens') or ''), thinking.get('display') or '', tool_choice.get('type') or '', self.headers.get('X-Trace') or ''])"
+    , "            payload = ("
+    , "                'event: message_start\\n' +"
+    , "                'data: ' + json.dumps({'type': 'message_start', 'message': {'id': 'msg_anthropic_typed_http', 'model': request.get('model') or '', 'usage': {'input_tokens': 4}}}) + '\\n\\n' +"
+    , "                'event: content_block_start\\n' +"
+    , "                'data: ' + json.dumps({'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}}) + '\\n\\n' +"
+    , "                'event: content_block_delta\\n' +"
+    , "                'data: ' + json.dumps({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': text}}) + '\\n\\n' +"
+    , "                'event: content_block_stop\\n' +"
+    , "                'data: ' + json.dumps({'type': 'content_block_stop', 'index': 0}) + '\\n\\n' +"
+    , "                'event: message_delta\\n' +"
+    , "                'data: ' + json.dumps({'type': 'message_delta', 'delta': {'stop_reason': 'end_turn'}, 'usage': {'output_tokens': 2}}) + '\\n\\n' +"
+    , "                'event: message_stop\\n' +"
+    , "                'data: ' + json.dumps({'type': 'message_stop'}) + '\\n\\n'"
+    , "            ).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'text/event-stream')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/mistral/v1/chat/completions':"
     , "            request = json.loads(body)"
     , "            messages = request.get('messages') or []"
@@ -7148,6 +7173,40 @@ def testAnthropicMessagesStreamWithOptionsLocal : IO Unit := do
         "claude-sonnet-4-5|True|anthropic-key|2023-06-01|trace-anthropic|caller-session")
       "expected Anthropic session affinity header with caller override"
 
+def testCompatAnthropicTypedLegacyAliasLocal : IO Unit := do
+  let port := 18105
+  withHttpServer port do
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := LeanAgent.Models.anthropicDefaultModel
+        name := "Claude Sonnet"
+        provider := LeanAgent.Models.anthropicProviderId
+        api := LeanAgent.AI.Api.AnthropicMessages.api
+        baseUrl := s!"http://127.0.0.1:{port}/anthropic-typed/v1"
+        contextWindow := 200000
+        maxTokens := 64000
+        reasoning := true
+        input := #["text", "image"]
+      }
+    let stream ← LeanAgent.AI.Compat.Aliases.streamAnthropic
+      model
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+      { apiKey := some "anthropic-key"
+        thinkingEnabled := some true
+        thinkingBudgetTokens := some 2048
+        thinkingDisplay := some "omitted"
+        toolChoice := some .any
+        headers := #[("X-Trace", some "trace-anthropic")]
+      }
+    assertTrue stream.isComplete "expected compat Anthropic typed legacy alias stream"
+    assertTrue (stream.result.responseId == some "msg_anthropic_typed_http")
+      "expected typed Anthropic response id"
+    assertTrue
+      (LeanAgent.AI.contentPlainText stream.result.content ==
+        "claude-sonnet-4-5|True|anthropic-key|enabled|2048|omitted|any|trace-anthropic")
+      "expected compat Anthropic typed alias to preserve thinking and tool choice options"
+
 def testGoogleGenerativeAIStreamWithOptionsLocal : IO Unit := do
   let port := 18098
   withHttpServer port do
@@ -7531,6 +7590,7 @@ def main : IO UInt32 := do
     testAzureOpenAIResponsesStreamWithOptionsLocal
     testCompatAzureOpenAIResponsesTypedLegacyAliasLocal
     testAnthropicMessagesStreamWithOptionsLocal
+    testCompatAnthropicTypedLegacyAliasLocal
     testGoogleGenerativeAIStreamWithOptionsLocal
     testGoogleVertexStreamWithOptionsLocal
     testMistralConversationsStreamWithOptionsLocal

@@ -26,8 +26,57 @@ abbrev OpenAICodexResponsesStream :=
     LeanAgent.AI.Api.OpenAICodexResponses.OpenAICodexResponsesOptions →
       IO LeanAgent.AI.AssistantMessageEventStream
 
+abbrev AnthropicMessagesStream :=
+  LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
+    LeanAgent.AI.Api.AnthropicMessages.AnthropicMessagesOptions →
+      IO LeanAgent.AI.AssistantMessageEventStream
+
 def streamForApi (api : String) : AliasStream :=
   fun model context options => LeanAgent.AI.Compat.streamSimpleWithApi api model context options
+
+def withEnvApiKeyForAnthropicMessages
+    (model : LeanAgent.Models.ModelInfo)
+    (options : LeanAgent.AI.Api.AnthropicMessages.AnthropicMessagesOptions) :
+    IO LeanAgent.AI.Api.AnthropicMessages.AnthropicMessagesOptions := do
+  let simple ← LeanAgent.AI.Compat.withEnvApiKey model options.toSimpleStreamOptions
+  pure { options with apiKey := simple.apiKey }
+
+def withModelCompatForAnthropicMessages
+    (model : LeanAgent.Models.ModelInfo)
+    (options : LeanAgent.AI.Api.AnthropicMessages.AnthropicMessagesOptions) :
+    LeanAgent.AI.Api.AnthropicMessages.AnthropicMessagesOptions :=
+  { options with
+    supportsTemperature := model.compat.supportsTemperature
+    sendSessionAffinityHeaders := model.compat.sendSessionAffinityHeaders
+    supportsLongCacheRetention := model.compat.supportsLongCacheRetention
+    supportsEagerToolInputStreaming := model.compat.supportsEagerToolInputStreaming
+    supportsCacheControlOnTools := model.compat.supportsCacheControlOnTools
+    allowEmptySignature := model.compat.allowEmptySignature
+    forceAdaptiveThinking := model.compat.forceAdaptiveThinking
+  }
+
+def streamAnthropicWithOptions : AnthropicMessagesStream :=
+  fun model context options => do
+    LeanAgent.AI.Compat.ensureApiMatches
+      { api := LeanAgent.AI.Api.AnthropicMessages.api
+        streams := LeanAgent.Models.anthropicMessagesStreams
+      }
+      model
+    let options := withModelCompatForAnthropicMessages model options
+    let options ← withEnvApiKeyForAnthropicMessages model options
+    let apiKey ← LeanAgent.Models.requireApiKeyOrHeaderAuth model.provider options.toSimpleStreamOptions
+    let config : LeanAgent.AI.Api.AnthropicMessages.AnthropicMessagesConfig :=
+      { apiKey := apiKey
+        baseUrl := model.baseUrl
+      }
+    LeanAgent.AI.Api.AnthropicMessages.completeStreamWithOptions
+      config
+      model.toModelRef
+      model.input
+      model.maxTokens
+      model.reasoning
+      context
+      options
 
 def withEnvApiKeyForOpenAIResponses
     (model : LeanAgent.Models.ModelInfo)
@@ -141,11 +190,11 @@ def streamMistralWithOptions : MistralStream :=
       options
     pure (LeanAgent.Models.applyUsageCostToStream model stream)
 
-def streamAnthropic : AliasStream :=
-  streamForApi "anthropic-messages"
+def streamAnthropic : AnthropicMessagesStream :=
+  streamAnthropicWithOptions
 
 def streamSimpleAnthropic : AliasStream :=
-  streamAnthropic
+  streamForApi "anthropic-messages"
 
 def streamBedrockConverseStream : AliasStream :=
   streamForApi "bedrock-converse-stream"
