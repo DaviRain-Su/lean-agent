@@ -272,6 +272,29 @@ def convertMessages
       { normalizeToolCallId? := some normalizeToolCallId }
   convertMessagesAux model transformed
 
+def schemaMetaDeclarations : List String :=
+  [ "$schema"
+  , "$id"
+  , "$anchor"
+  , "$dynamicAnchor"
+  , "$vocabulary"
+  , "$comment"
+  , "$defs"
+  , "definitions"
+  ]
+
+partial def sanitizeForOpenApi (schema : Lean.Json) : Lean.Json :=
+  match schema with
+  | Lean.Json.obj fields =>
+      let filtered := fields.toList.filter fun (name, _) =>
+        !schemaMetaDeclarations.contains name
+      let mapped := filtered.map fun (name, value) =>
+        (name, sanitizeForOpenApi value)
+      LeanAgent.Json.obj mapped
+  | Lean.Json.arr items =>
+      LeanAgent.Json.arr (items.map sanitizeForOpenApi)
+  | _ => schema
+
 def convertTools
     (tools : Array LeanAgent.AI.Tool)
     (useParameters : Bool := false) : Option (Array Lean.Json) :=
@@ -285,7 +308,7 @@ def convertTools
                 (tools.map fun tool =>
                   let parameterField :=
                     if useParameters then
-                      ("parameters", tool.parameters)
+                      ("parameters", sanitizeForOpenApi tool.parameters)
                     else
                       ("parametersJsonSchema", tool.parameters)
                   LeanAgent.Json.obj

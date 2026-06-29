@@ -1672,6 +1672,91 @@ def testGoogleGenerativeAIRequestPayload : IO Unit := do
       | none => fail "expected Google functionCallingConfig"
   | none => fail "expected Google toolConfig"
 
+def testGoogleSharedConvertToolsSanitizesOpenApiParameters : IO Unit := do
+  let parameters := LeanAgent.Json.obj
+    [ ("$schema", LeanAgent.Json.str "http://json-schema.org/draft-07/schema#")
+    , ("$id", LeanAgent.Json.str "urn:bash-tool")
+    , ("$comment", LeanAgent.Json.str "internal note")
+    , ("$defs", LeanAgent.Json.obj [("commandDef", LeanAgent.Json.obj [("type", LeanAgent.Json.str "string")])])
+    , ("definitions", LeanAgent.Json.obj [("legacyDef", LeanAgent.Json.obj [("type", LeanAgent.Json.str "number")])])
+    , ("type", LeanAgent.Json.str "object")
+    , ("properties", LeanAgent.Json.obj
+        [ ("command", LeanAgent.Json.obj
+            [ ("$schema", LeanAgent.Json.str "http://json-schema.org/draft-07/schema#")
+            , ("$id", LeanAgent.Json.str "urn:nested")
+            , ("$ref", LeanAgent.Json.str "#/$defs/commandDef")
+            , ("type", LeanAgent.Json.str "string")
+            , ("examples", LeanAgent.Json.arr #[LeanAgent.Json.str "echo hi"])
+            ])
+        ])
+    , ("required", LeanAgent.Json.arr #[LeanAgent.Json.str "command"])
+    ]
+  let tool : LeanAgent.AI.Tool :=
+    { name := "bash"
+      description := "Run a command"
+      parameters := parameters
+    }
+  match LeanAgent.AI.Api.GoogleShared.convertTools #[tool] true with
+  | some groups =>
+      match groups[0]? with
+      | some group =>
+          match jsonArrayField? group "functionDeclarations" with
+          | some declarations =>
+              match declarations[0]? with
+              | some declaration =>
+                  assertTrue (LeanAgent.Json.optVal? declaration "parametersJsonSchema" == none)
+                    "expected legacy parameters field only"
+                  match LeanAgent.Json.optVal? declaration "parameters" with
+                  | some sanitized =>
+                      assertTrue (LeanAgent.Json.optVal? sanitized "$schema" == none)
+                        "expected top-level $schema stripped"
+                      assertTrue (LeanAgent.Json.optVal? sanitized "$id" == none)
+                        "expected top-level $id stripped"
+                      assertTrue (LeanAgent.Json.optVal? sanitized "$comment" == none)
+                        "expected top-level $comment stripped"
+                      assertTrue (LeanAgent.Json.optVal? sanitized "$defs" == none)
+                        "expected top-level $defs stripped"
+                      assertTrue (LeanAgent.Json.optVal? sanitized "definitions" == none)
+                        "expected legacy definitions stripped"
+                      assertTrue (LeanAgent.Json.optVal? sanitized "required" == some (LeanAgent.Json.arr #[LeanAgent.Json.str "command"]))
+                        "expected required preserved"
+                      match LeanAgent.Json.optVal? sanitized "properties" with
+                      | some properties =>
+                          match LeanAgent.Json.optVal? properties "command" with
+                          | some command =>
+                              assertTrue (LeanAgent.Json.optVal? command "$schema" == none)
+                                "expected nested $schema stripped"
+                              assertTrue (LeanAgent.Json.optVal? command "$id" == none)
+                                "expected nested $id stripped"
+                              assertTrue (LeanAgent.Json.optVal? command "$ref" == some (LeanAgent.Json.str "#/$defs/commandDef"))
+                                "expected nested $ref preserved"
+                              assertTrue (LeanAgent.Json.optVal? command "examples" |>.isSome)
+                                "expected non-meta examples keyword preserved"
+                          | none => fail "expected command property"
+                      | _ => fail "expected properties object"
+                  | none => fail "expected sanitized parameters"
+              | none => fail "expected function declaration"
+          | none => fail "expected function declarations"
+      | none => fail "expected Google tool group"
+  | none => fail "expected converted tools"
+
+  match LeanAgent.AI.Api.GoogleShared.convertTools #[tool] false with
+  | some groups =>
+      match groups[0]? with
+      | some group =>
+          match jsonArrayField? group "functionDeclarations" with
+          | some declarations =>
+              match declarations[0]? with
+              | some declaration =>
+                  assertTrue (LeanAgent.Json.optVal? declaration "parameters" == none)
+                    "expected default parametersJsonSchema field only"
+                  assertTrue (LeanAgent.Json.optVal? declaration "parametersJsonSchema" == some parameters)
+                    "expected full JSON Schema preserved by default"
+              | none => fail "expected default function declaration"
+          | none => fail "expected default function declarations"
+      | none => fail "expected default Google tool group"
+  | none => fail "expected default converted tools"
+
 def testGoogleGenerativeAIParsesResponse : IO Unit := do
   let raw :=
     "{ \"responseId\":\"resp_google\", \"modelVersion\":\"gemini-2.5-flash\", \"candidates\":[{" ++
@@ -8615,6 +8700,7 @@ def main : IO UInt32 := do
     testAnthropicMessagesParsesStreamingEvents
     testAnthropicMessagesStreamingRequiresMessageStop
     testGoogleGenerativeAIRequestPayload
+    testGoogleSharedConvertToolsSanitizesOpenApiParameters
     testGoogleGenerativeAIParsesResponse
     testGoogleGenerativeAIParsesStreamingEvents
     testGoogleVertexUrlsAndHeaders
