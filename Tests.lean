@@ -1016,6 +1016,8 @@ def testAnthropicMessagesRequestPayload : IO Unit := do
       assertTrue (LeanAgent.Json.optVal? thinking "budget_tokens" == some (LeanAgent.Json.nat 2048))
         "expected thinking budget"
   | none => fail "expected thinking object"
+  assertTrue (LeanAgent.Json.optVal? payload "output_config" == none)
+    "expected budget-based Anthropic thinking to omit output_config"
   match jsonArrayField? payload "messages" with
   | some messages =>
       assertTrue (messages.size == 3) "expected user, assistant, tool-result messages"
@@ -1126,9 +1128,16 @@ def testAnthropicMessagesCompatOptions : IO Unit := do
   | some thinking =>
       assertTrue (jsonStringField? thinking "type" == some "adaptive")
         "expected adaptive Anthropic thinking payload"
-      assertTrue (jsonStringField? thinking "effort" == some "max")
-        "expected adaptive Anthropic effort payload"
+      assertTrue (jsonStringField? thinking "display" == some "summarized")
+        "expected adaptive Anthropic thinking display"
+      assertTrue (jsonStringField? thinking "effort" == none)
+        "expected adaptive Anthropic effort outside thinking payload"
   | none => fail "expected adaptive Anthropic thinking"
+  match jsonObjectField? payload "output_config" with
+  | some outputConfig =>
+      assertTrue (jsonStringField? outputConfig "effort" == some "max")
+        "expected adaptive Anthropic output_config effort"
+  | none => fail "expected adaptive Anthropic output_config"
   assertTrue (LeanAgent.Json.optVal? payload "temperature" == none)
     "expected disabled Anthropic temperature support to omit temperature"
 

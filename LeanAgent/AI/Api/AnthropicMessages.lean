@@ -412,10 +412,9 @@ def thinkingFields
         let display := options.thinkingDisplay.getD "summarized"
         let base :=
           match options.thinkingEffort with
-          | some effort =>
+          | some _ =>
               [ ("type", LeanAgent.Json.str "adaptive")
               , ("display", LeanAgent.Json.str display)
-              , ("effort", LeanAgent.Json.str effort)
               ]
           | none =>
               [ ("type", LeanAgent.Json.str "enabled")
@@ -424,6 +423,19 @@ def thinkingFields
               ]
         [("thinking", LeanAgent.Json.obj base)]
     | some false => [("thinking", LeanAgent.Json.obj [("type", LeanAgent.Json.str "disabled")])]
+    | none => []
+
+def outputConfigFields
+    (reasoning : Bool)
+    (options : AnthropicMessagesOptions) : List (String × Lean.Json) :=
+  if !reasoning || options.thinkingEnabled != some true then
+    []
+  else
+    match options.thinkingEffort with
+    | some effort =>
+        [ ("output_config",
+            LeanAgent.Json.obj [("effort", LeanAgent.Json.str effort)])
+        ]
     | none => []
 
 def metadataFields (metadata? : Option Lean.Json) : List (String × Lean.Json) :=
@@ -476,6 +488,7 @@ def requestToJsonWithOptions
      ] ++ systemFields context cacheControl
        ++ requestOptionFields modelMaxTokens options
        ++ thinkingFields reasoning options
+       ++ outputConfigFields reasoning options
        ++ toolFields
             context.tools
             cacheControl
