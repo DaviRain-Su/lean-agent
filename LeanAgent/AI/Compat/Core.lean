@@ -1,10 +1,19 @@
 import LeanAgent.AI.Api.AnthropicMessages
+import LeanAgent.AI.Api.AnthropicMessagesLazy
 import LeanAgent.AI.Api.AzureOpenAIResponses
+import LeanAgent.AI.Api.AzureOpenAIResponsesLazy
 import LeanAgent.AI.Api.BedrockConverseStream
+import LeanAgent.AI.Api.BedrockConverseStreamLazy
 import LeanAgent.AI.Api.GoogleGenerativeAI
+import LeanAgent.AI.Api.GoogleGenerativeAILazy
 import LeanAgent.AI.Api.GoogleVertex
+import LeanAgent.AI.Api.GoogleVertexLazy
 import LeanAgent.AI.Api.MistralConversations
+import LeanAgent.AI.Api.MistralConversationsLazy
 import LeanAgent.AI.Api.OpenAICodexResponses
+import LeanAgent.AI.Api.OpenAICodexResponsesLazy
+import LeanAgent.AI.Api.OpenAICompletionsLazy
+import LeanAgent.AI.Api.OpenAIResponsesLazy
 import LeanAgent.AI.EnvApiKeys
 import LeanAgent.AI.Images.Models
 import LeanAgent.AI.Providers.Faux
@@ -62,43 +71,55 @@ def registerBuiltInApiProviders : IO Unit := do
   if (← getApiProvider? LeanAgent.AI.Api.AnthropicMessages.api).isNone then
     registerApiProvider
       { api := LeanAgent.AI.Api.AnthropicMessages.api
-        streams := LeanAgent.AI.Providers.Streams.anthropicMessagesStreams
+        streams := LeanAgent.AI.Api.AnthropicMessagesLazy.anthropicMessagesApi
       }
       (some (builtinApiSourceId LeanAgent.AI.Api.AnthropicMessages.api))
   if (← getApiProvider? "openai-completions").isNone then
     registerApiProvider
-      { api := "openai-completions", streams := LeanAgent.AI.Providers.Streams.openAICompatibleStreams }
+      { api := "openai-completions"
+        streams := LeanAgent.AI.Api.OpenAICompletionsLazy.openAICompletionsApi
+      }
       (some (builtinApiSourceId "openai-completions"))
   if (← getApiProvider? "openai-responses").isNone then
     registerApiProvider
-      { api := "openai-responses", streams := LeanAgent.AI.Providers.Streams.openAIResponsesStreams }
+      { api := "openai-responses"
+        streams := LeanAgent.AI.Api.OpenAIResponsesLazy.openAIResponsesApi
+      }
       (some (builtinApiSourceId "openai-responses"))
   if (← getApiProvider? LeanAgent.AI.Api.OpenAICodexResponses.api).isNone then
     registerApiProvider
       { api := LeanAgent.AI.Api.OpenAICodexResponses.api
-        streams := LeanAgent.AI.Providers.Streams.openAICodexResponsesStreams
+        streams := LeanAgent.AI.Api.OpenAICodexResponsesLazy.openAICodexResponsesApi
       }
       (some (builtinApiSourceId LeanAgent.AI.Api.OpenAICodexResponses.api))
   if (← getApiProvider? "azure-openai-responses").isNone then
     registerApiProvider
-      { api := "azure-openai-responses", streams := LeanAgent.AI.Providers.Streams.azureOpenAIResponsesStreams }
+      { api := "azure-openai-responses"
+        streams := LeanAgent.AI.Api.AzureOpenAIResponsesLazy.azureOpenAIResponsesApi
+      }
       (some (builtinApiSourceId "azure-openai-responses"))
   if (← getApiProvider? LeanAgent.AI.Api.GoogleGenerativeAI.api).isNone then
     registerApiProvider
-      { api := LeanAgent.AI.Api.GoogleGenerativeAI.api, streams := LeanAgent.AI.Providers.Streams.googleGenerativeAIStreams }
+      { api := LeanAgent.AI.Api.GoogleGenerativeAI.api
+        streams := LeanAgent.AI.Api.GoogleGenerativeAILazy.googleGenerativeAIApi
+      }
       (some (builtinApiSourceId LeanAgent.AI.Api.GoogleGenerativeAI.api))
   if (← getApiProvider? LeanAgent.AI.Api.GoogleVertex.api).isNone then
     registerApiProvider
-      { api := LeanAgent.AI.Api.GoogleVertex.api, streams := LeanAgent.AI.Providers.Streams.googleVertexStreams }
+      { api := LeanAgent.AI.Api.GoogleVertex.api
+        streams := LeanAgent.AI.Api.GoogleVertexLazy.googleVertexApi
+      }
       (some (builtinApiSourceId LeanAgent.AI.Api.GoogleVertex.api))
   if (← getApiProvider? LeanAgent.AI.Api.MistralConversations.api).isNone then
     registerApiProvider
-      { api := LeanAgent.AI.Api.MistralConversations.api, streams := LeanAgent.AI.Providers.Streams.mistralConversationsStreams }
+      { api := LeanAgent.AI.Api.MistralConversations.api
+        streams := LeanAgent.AI.Api.MistralConversationsLazy.mistralConversationsApi
+      }
       (some (builtinApiSourceId LeanAgent.AI.Api.MistralConversations.api))
   if (← getApiProvider? LeanAgent.AI.Api.BedrockConverseStream.api).isNone then
     registerApiProvider
       { api := LeanAgent.AI.Api.BedrockConverseStream.api
-        streams := LeanAgent.AI.Providers.Streams.bedrockConverseStreamStreams
+        streams := LeanAgent.AI.Api.BedrockConverseStreamLazy.bedrockConverseStreamApi
       }
       (some (builtinApiSourceId LeanAgent.AI.Api.BedrockConverseStream.api))
 
@@ -192,6 +213,9 @@ def unregisterImagesApiProviders (sourceId : String) : IO Unit :=
 
 def clearImagesApiProviders : IO Unit :=
   LeanAgent.AI.Images.clearImagesApiProviders
+
+def registerBuiltInImagesApiProviders : IO Unit :=
+  LeanAgent.AI.Images.registerBuiltInImagesApiProviders
 
 def resetImagesApiProviders : IO Unit :=
   LeanAgent.AI.Images.resetImagesApiProviders

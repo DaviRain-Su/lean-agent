@@ -1,3 +1,4 @@
+import LeanAgent.AI.Api.OpenRouterImagesLazy
 import LeanAgent.AI.Api.OpenRouterImages
 import LeanAgent.AI.Auth
 import LeanAgent.AI.Images
@@ -8,14 +9,11 @@ namespace LeanAgent.AI.Providers.OpenRouterImages
 
 def apiProvider : LeanAgent.AI.Images.ImagesApiProvider :=
   { api := LeanAgent.AI.Api.OpenRouterImages.api
-    generateImages := fun model context options =>
-      LeanAgent.AI.Api.OpenRouterImages.generateImages model context options
+    generateImages := LeanAgent.AI.Api.OpenRouterImagesLazy.openRouterImagesApi.generateImages
   }
 
 def providerImages : LeanAgent.AI.Images.ProviderImages :=
-  { generateImages := fun model context options =>
-      LeanAgent.AI.Api.OpenRouterImages.generateImages model context options
-  }
+  LeanAgent.AI.Api.OpenRouterImagesLazy.openRouterImagesApi
 
 def auth : LeanAgent.AI.Auth.ProviderAuth :=
   { apiKey := some (LeanAgent.AI.Auth.envApiKeyAuth "OpenRouter API key" #[LeanAgent.AI.Api.OpenRouterImages.apiKeyEnv]) }

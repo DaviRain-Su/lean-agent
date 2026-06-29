@@ -7184,6 +7184,42 @@ def testCompatGenericStreamAndCompleteDispatch : IO Unit := do
     "expected compat generic complete to pass api key"
   LeanAgent.AI.Compat.resetApiProviders
 
+def testBedrockLazyApiOverride : IO Unit := do
+  let usedOverride ← IO.mkRef false
+  try
+    LeanAgent.AI.Api.BedrockConverseStreamLazy.setBedrockProviderModule
+      { streamSimple := fun model _context _options => do
+          usedOverride.set true
+          let message : LeanAgent.AI.AssistantMessage :=
+            { content := #[LeanAgent.AI.text "bedrock-override"]
+              api := model.api
+              provider := model.provider
+              model := model.id
+              usage := {}
+              stopReason := .stop
+              timestamp := 0
+            }
+          pure (LeanAgent.AI.fromMessage message)
+      }
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := "bedrock-override"
+        name := "Bedrock Override"
+        provider := "bedrock-override"
+        api := LeanAgent.AI.Api.BedrockConverseStream.api
+        baseUrl := "https://example.test"
+        contextWindow := 128000
+        maxTokens := 4096
+      }
+    let stream ← LeanAgent.AI.Api.BedrockConverseStreamLazy.bedrockConverseStreamApi.streamSimple
+      model
+      { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 0 }] }
+      {}
+    assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "bedrock-override")
+      "expected bedrock lazy wrapper override to replace builtin module"
+    assertTrue (← usedOverride.get) "expected bedrock lazy wrapper to use registered override"
+  finally
+    LeanAgent.AI.Api.BedrockConverseStreamLazy.resetBedrockProviderModule
+
 def fakeImagesModel : LeanAgent.AI.ImagesModel :=
   { id := "fake-image-model"
     name := "Fake Image Model"
@@ -7791,6 +7827,16 @@ def testModelsLazyProviderStreamsLoadFailureReturnsErrorStream : IO Unit := do
   let streams := LeanAgent.Models.ProviderStreams.lazy (throw (IO.userError "load failed"))
   let stream ← streams.streamSimple fakeRuntimeModel {} {}
   assertLazyErrorStream stream "load failed"
+
+def testImagesLazyProviderLoadFailureReturnsErrorResult : IO Unit := do
+  let provider := LeanAgent.AI.Images.ProviderImages.lazy (throw (IO.userError "image load failed"))
+  let result ← provider.generateImages fakeImagesModel { input := #[LeanAgent.AI.text "draw"] } {}
+  assertTrue (result.stopReason == .error) "expected image lazy provider error result"
+  assertTrue (result.errorMessage.any (fun message => message.contains "image load failed"))
+    "expected image lazy provider error message"
+  assertTrue (result.api == fakeImagesModel.api) "expected image lazy provider api"
+  assertTrue (result.provider == fakeImagesModel.provider) "expected image lazy provider provider"
+  assertTrue (result.model == fakeImagesModel.id) "expected image lazy provider model"
 
 def testModelsCalculateCost : IO Unit := do
   let model :=
@@ -11154,6 +11200,35 @@ def testCompatOpenAIResponsesTypedLegacyAliasLocal : IO Unit := do
     assertTrue (stream.result.usage.cost.output == 2.0)
       "expected compat OpenAI Responses typed alias flex output cost multiplier"
 
+def testCompatOpenAIResponsesRootLegacyAliasLocal : IO Unit := do
+  let port := 18102
+  withHttpServer port do
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := "gpt-5.4"
+        name := "GPT 5.4"
+        provider := LeanAgent.Models.openAIProviderId
+        api := "openai-responses"
+        baseUrl := s!"http://127.0.0.1:{port}/responses-stream"
+        cost := { input := 1000000.0, output := 2000000.0 }
+        contextWindow := 100000
+        maxTokens := 4096
+      }
+    let stream ← LeanAgent.AI.Compat.streamOpenAIResponses
+      model
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+      { apiKey := some "test-key"
+        serviceTier := some "flex"
+      }
+    assertTrue stream.isComplete "expected compat root OpenAI Responses typed legacy alias stream"
+    assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "streamed")
+      "expected compat root OpenAI Responses typed alias content"
+    assertTrue (stream.result.usage.cost.input == 2.0)
+      "expected compat root OpenAI Responses typed alias flex input cost multiplier"
+    assertTrue (stream.result.usage.cost.output == 2.0)
+      "expected compat root OpenAI Responses typed alias flex output cost multiplier"
+
 def testCompatOpenAIResponsesTypedLegacyAliasCompleteLocal : IO Unit := do
   let port := 18102
   withHttpServer port do
@@ -12233,6 +12308,7 @@ def main : IO UInt32 := do
     testModelsCollectionAppliesCloudflareAIGatewayAuth
     testCompatApiRegistryDispatchesAndUnregisters
     testCompatGenericStreamAndCompleteDispatch
+    testBedrockLazyApiOverride
     testCompatBuiltinDispatchUsesCloudflareGatewayAuth
     testImagesApiRegistryDispatchesAndUnregisters
     testImagesApiRegistryMissingProviderReturnsError
@@ -12255,6 +12331,7 @@ def main : IO UInt32 := do
     testModelsCreateProviderMissingApiReturnsLazyErrorStream
     testModelsCreateProviderSetupFailurePropagatesProviderError
     testModelsLazyProviderStreamsLoadFailureReturnsErrorStream
+    testImagesLazyProviderLoadFailureReturnsErrorResult
     testModelsCalculateCost
     testModelsThinkingLevelMapSupport
     testModelsClampSimpleOptionsClampsReasoning
@@ -12306,6 +12383,7 @@ def main : IO UInt32 := do
     testWrappedOpenAIResponsesCompatOptionChainPreservesResponseHook
     testBuiltinOpenAIApplyAuthPreservesResponseHook
     testCompatOpenAIResponsesTypedLegacyAliasLocal
+    testCompatOpenAIResponsesRootLegacyAliasLocal
     testCompatOpenAIResponsesTypedLegacyAliasCompleteLocal
     testOpenAIResponsesEarlyEofInvokesResponseHook
     testOpenAIResponsesProviderStreamsEarlyEofInvokesResponseHook

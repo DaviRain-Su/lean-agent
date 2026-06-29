@@ -239,6 +239,16 @@ def errorImages
       timestamp := timestamp
     }
 
+def ProviderImages.lazy (load : IO ProviderImages) : ProviderImages :=
+  { generateImages := fun model context options => do
+      let provider ←
+        try
+          load
+        catch err =>
+          return ← errorImages model err.toString
+      provider.generateImages model context options
+  }
+
 def Collection.requireProvider (collection : Collection) (model : LeanAgent.AI.ImagesModel) :
     IO ImagesProvider := do
   match ← collection.getProvider? model.provider with
