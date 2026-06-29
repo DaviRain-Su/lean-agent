@@ -7,7 +7,7 @@ TypeScript packages. `vendor/pi` is the comparison target.
 
 | Pi domain | LeanAgent modules |
 | --- | --- |
-| `packages/ai` | `LeanAgent.Http`, `LeanAgent.OpenAI`, future `LeanAgent.Provider` |
+| `packages/ai` | `LeanAgent.Http`, `LeanAgent.Models`, `LeanAgent.OpenAI` |
 | `packages/agent` | `LeanAgent.Core`, `LeanAgent.Loop`, `LeanAgent.Session` |
 | `packages/coding-agent` | `LeanAgent.CodingTools`, `LeanAgent.Project`, `Main` |
 | `packages/tui` | future `LeanAgent.Tui` |
@@ -31,6 +31,26 @@ own model/tool loop behavior.
 
 OMP functionality must be implemented as higher-level capabilities on top of
 Pi-compatible core modules.
+
+## AI Provider Catalog
+
+`LeanAgent.Models` is the first Lean port of Pi's `packages/ai` model/provider
+boundary:
+
+- `ModelInfo`: provider id, API kind, base URL, context window, output limit,
+  reasoning flag, and compatibility metadata.
+- `ProviderInfo`: provider id, display name, auth env var, model env var,
+  default model, and known static models.
+- `ProviderCatalog`: lookup by provider id, API-key env var, and model id.
+
+Current catalog scope is intentionally static:
+
+- DeepSeek: `deepseek-v4-flash`, `deepseek-v4-pro`.
+- OpenAI fallback: `gpt-4.1-mini`.
+
+Dynamic model refresh, OAuth auth, image APIs, and mixed API dispatch remain
+future work. CLI defaults must resolve through this catalog instead of hardcoded
+provider constants.
 
 ## Current Runtime Flow
 

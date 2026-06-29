@@ -208,6 +208,23 @@ def testOpenAIAssistantOmitsEmptyToolCalls : IO Unit := do
   let json := LeanAgent.OpenAI.messageToJson (AgentMessage.assistant "done" #[])
   assertTrue (LeanAgent.Json.optVal? json "tool_calls" == none) "empty tool_calls should be omitted"
 
+def testModelCatalogDeepSeekDefaults : IO Unit := do
+  let catalog := LeanAgent.Models.defaultCatalog
+  match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.deepSeekApiKeyEnv with
+  | some provider =>
+      assertTrue (provider.id == LeanAgent.Models.deepSeekProviderId) "expected DeepSeek provider for DeepSeek API key env"
+      assertTrue (provider.defaultModel == LeanAgent.Models.deepSeekDefaultModel) "expected DeepSeek default model"
+  | none => fail "expected DeepSeek provider"
+  match LeanAgent.Models.ProviderCatalog.model? catalog LeanAgent.Models.deepSeekProviderId LeanAgent.Models.deepSeekDefaultModel with
+  | some model =>
+      assertTrue (model.contextWindow == 1000000) "expected DeepSeek context window"
+      assertTrue (model.maxTokens == 384000) "expected DeepSeek max output tokens"
+      assertTrue model.reasoning "expected DeepSeek reasoning support"
+      assertTrue model.supportsToolCalls "expected DeepSeek tool-call support"
+  | none => fail "expected DeepSeek default model in catalog"
+  let rendered := LeanAgent.Models.renderCatalog catalog
+  assertTrue (rendered.contains "deepseek/deepseek-v4-pro") "expected rendered DeepSeek pro model"
+
 def continueProvider : ModelProvider :=
   { complete := fun _ => pure { content := "continued", toolCalls := #[] } }
 
@@ -392,6 +409,7 @@ def main : IO UInt32 := do
     testProjectSkillExpansion
     testSessionJsonlRoundTrip
     testOpenAIAssistantOmitsEmptyToolCalls
+    testModelCatalogDeepSeekDefaults
     testAgentSessionCreateAndContinue
     testAgentSessionRejectsAssistantContinue
     testJsonEventShape

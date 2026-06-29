@@ -43,17 +43,18 @@ Implemented:
 
 - Native libcurl HTTP client through Lean FFI.
 - OpenAI-compatible Chat Completions provider.
+- Pi-style static provider/model catalog for DeepSeek and OpenAI-compatible fallback.
 - DeepSeek-first defaults.
 - Basic model/tool loop.
 - Tools: `list`, `read`, `write`, `edit`, `bash`.
 - Line REPL.
+- JSONL session persistence/resume and JSON event output.
 - OMP-style `.omp/commands/*.md` and `.omp/skills/<name>/SKILL.md` discovery.
 
 Not yet complete:
 
-- Pi-compatible `AgentSession`.
-- JSONL session persistence/resume.
-- JSON event mode.
+- Full Pi-compatible stateful `Agent` wrapper with queues, hooks, and dynamic turn preparation.
+- Dynamic provider/model refresh, OAuth auth, and multi-API provider dispatch.
 - Tool registry and richer tools.
 - RPC/orchestrator.
 - Full-screen TUI.
@@ -62,13 +63,14 @@ Not yet complete:
 ## Roadmap
 
 1. Pin Pi reference as `vendor/pi` and document the compatibility map.
-2. Implement Pi-Agent Core in Lean: `AgentSession`, state, event sinks, JSONL sessions.
-3. Implement Pi Coding Agent mode layer: print, REPL, JSON events, session resume.
-4. Expand project customization: AGENTS.md, prompt templates, command precedence.
-5. Add tool registry and core coding tools: search, find, git status/diff.
-6. Add orchestrator primitives: process registry, JSONL RPC, spawn/status/stop.
-7. Build a minimal TUI over the stable event/session API.
-8. Add OMP advanced capabilities: hashline edit, LSP, DAP, task agents, memory, advisor.
+2. Implement Pi AI/Core in Lean: static provider catalog, `AgentSession`, state, event sinks, JSONL sessions.
+3. Implement Pi Agent runtime features: queued follow-ups, hooks, turn preparation, provider/model state.
+4. Implement Pi Coding Agent mode layer: print, REPL, JSON events, session resume.
+5. Expand project customization: AGENTS.md, prompt templates, command precedence.
+6. Add tool registry and core coding tools: search, find, git status/diff.
+7. Add orchestrator primitives: process registry, JSONL RPC, spawn/status/stop.
+8. Build a minimal TUI over the stable event/session API.
+9. Add OMP advanced capabilities: hashline edit, LSP, DAP, task agents, memory, advisor.
 
 ## Success Criteria
 

@@ -6,6 +6,7 @@ A small terminal coding agent implemented in Lean 4, using the architecture of
 - `LeanAgent.Core` owns provider-neutral messages, tools, results, and events.
 - `LeanAgent.Loop` owns the model/tool loop.
 - `LeanAgent.CodingTools` provides `list`, `read`, `write`, `edit`, and `bash`.
+- `LeanAgent.Models` owns the Pi-style provider/model catalog.
 - `LeanAgent.OpenAI` adapts OpenAI-compatible Chat Completions tool calling.
 - `Main` provides one-shot and line-REPL CLI execution.
 
@@ -91,6 +92,7 @@ Useful options:
 
 ```bash
 lake exe lean-agent --help
+lake exe lean-agent --list-models
 lake exe lean-agent --cwd /path/to/project -p "add a regression test"
 lake exe lean-agent --repl --cwd /path/to/project
 lake exe lean-agent --repl --session ./session.jsonl

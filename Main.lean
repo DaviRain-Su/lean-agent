@@ -15,18 +15,18 @@ structure CliOptions where
   noSession : Bool := false
   jsonEvents : Bool := false
   continueRun : Bool := false
+  listModels : Bool := false
   help : Bool := false
 
-def deepSeekApiKeyEnv : String := "DEEPSEEK_API_KEY"
-def deepSeekModelEnv : String := "DEEPSEEK_MODEL"
-def deepSeekDefaultModel : String := "deepseek-v4-flash"
-def deepSeekProModel : String := "deepseek-v4-pro"
-def deepSeekBaseUrl : String := "https://api.deepseek.com"
+def deepSeekApiKeyEnv : String := LeanAgent.Models.deepSeekApiKeyEnv
+def deepSeekModelEnv : String := LeanAgent.Models.deepSeekModelEnv
+def deepSeekDefaultModel : String := LeanAgent.Models.deepSeekDefaultModel
+def deepSeekBaseUrl : String := LeanAgent.Models.deepSeekBaseUrl
 
-def openAIKeyEnv : String := "OPENAI_API_KEY"
-def openAIModelEnv : String := "OPENAI_MODEL"
-def openAIDefaultModel : String := "gpt-4.1-mini"
-def openAIBaseUrl : String := "https://api.openai.com/v1"
+def openAIKeyEnv : String := LeanAgent.Models.openAIKeyEnv
+def openAIModelEnv : String := LeanAgent.Models.openAIModelEnv
+def openAIDefaultModel : String := LeanAgent.Models.openAIDefaultModel
+def openAIBaseUrl : String := LeanAgent.Models.openAIBaseUrl
 def leanAgentNoProxyEnv : String := "LEAN_AGENT_NO_PROXY"
 
 def usage : String :=
@@ -46,6 +46,7 @@ def usage : String :=
     , "  --no-session            Do not persist or resume a session."
     , "  --json-events           Emit AgentEvent values as JSONL."
     , "  --continue              Continue from the loaded session without adding a prompt."
+    , "  --list-models           List built-in provider/model catalog and exit."
     , "  --cwd PATH              Working directory for tools."
     , "  --model MODEL           Model name. Defaults to DEEPSEEK_MODEL/deepseek-v4-flash when DeepSeek is configured."
     , "  --base-url URL          OpenAI-compatible base URL. Defaults to DeepSeek first, then OpenAI."
@@ -67,6 +68,7 @@ def parseArgs (args : List String) (opts : CliOptions := {}) : Except String Cli
   | "--no-session" :: rest => parseArgs rest { opts with noSession := true }
   | "--json-events" :: rest => parseArgs rest { opts with jsonEvents := true }
   | "--continue" :: rest => parseArgs rest { opts with continueRun := true }
+  | "--list-models" :: rest => parseArgs rest { opts with listModels := true }
   | "--cwd" :: value :: rest => parseArgs rest { opts with cwd := some (System.FilePath.mk value) }
   | "--model" :: value :: rest => parseArgs rest { opts with model := some value }
   | "--base-url" :: value :: rest => parseArgs rest { opts with baseUrl := some value }
@@ -113,16 +115,20 @@ def resolveBaseUrl (opts : CliOptions) (apiKeyEnv : String) : String :=
   match opts.baseUrl with
   | some url => url
   | none =>
-      if apiKeyEnv == deepSeekApiKeyEnv then deepSeekBaseUrl else openAIBaseUrl
+      match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? LeanAgent.Models.defaultCatalog apiKeyEnv with
+      | some provider => provider.baseUrl
+      | none => openAIBaseUrl
 
 def resolveModel (opts : CliOptions) (apiKeyEnv : String) : IO String := do
   match opts.model with
   | some model => pure model
   | none =>
-      if apiKeyEnv == deepSeekApiKeyEnv then
-        envOrDefault deepSeekModelEnv deepSeekDefaultModel
-      else
-        envOrDefault openAIModelEnv openAIDefaultModel
+      match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? LeanAgent.Models.defaultCatalog apiKeyEnv with
+      | some provider =>
+          match provider.modelEnv with
+          | some modelEnv => envOrDefault modelEnv provider.defaultModel
+          | none => pure provider.defaultModel
+      | none => envOrDefault openAIModelEnv openAIDefaultModel
 
 def resolveNoProxy (baseUrl : String) : IO (Option String) := do
   match ← IO.getEnv leanAgentNoProxyEnv with
@@ -183,11 +189,7 @@ def runtimeFromOptions (opts : CliOptions) : IO (Except String Runtime) := do
     pure (.error s!"missing API key: set {apiKeyEnv} or pass --api-key-env")
   else
     let extensions ← LeanAgent.Project.loadExtensions cwd
-    let provider := LeanAgent.OpenAI.provider
-      { apiKey := apiKey
-        baseUrl := baseUrl
-        noProxy := noProxy
-      }
+    let provider := LeanAgent.Models.provider baseUrl apiKey noProxy
     let tools := LeanAgent.CodingTools.defaultTools cwd
     let system := LeanAgent.Project.applySystemAppendix defaultSystemPrompt extensions
     let agentConfig : AgentLoopConfig :=
@@ -375,6 +377,9 @@ def runOneShot (opts : CliOptions) (runtime : Runtime) : IO UInt32 := do
 def run (opts : CliOptions) : IO UInt32 := do
   if opts.help then
     IO.println usage
+    return 0
+  if opts.listModels then
+    IO.println (LeanAgent.Models.renderCatalog LeanAgent.Models.defaultCatalog)
     return 0
   match ← runtimeFromOptions opts with
   | .error message =>
