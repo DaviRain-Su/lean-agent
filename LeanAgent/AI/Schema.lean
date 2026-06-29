@@ -88,6 +88,11 @@ def numberKeyword? (schema : Lean.Json) (key : String) : Option Lean.JsonNumber 
   | some (.num value) => some value
   | _ => none
 
+def stringKeyword? (schema : Lean.Json) (key : String) : Option String :=
+  match LeanAgent.Json.optVal? schema key with
+  | some (.str value) => some value
+  | _ => none
+
 def schemaArray? (schema : Lean.Json) (key : String) : Option (Array Lean.Json) :=
   match LeanAgent.Json.optVal? schema key with
   | some (.arr values) =>
@@ -274,6 +279,9 @@ def minLengthIssue (path : String) (minLength : Nat) : ValidationIssue :=
 def maxLengthIssue (path : String) (maxLength : Nat) : ValidationIssue :=
   { path := path, message := s!"expected length <= {maxLength}" }
 
+def patternIssue (path pattern : String) : ValidationIssue :=
+  { path := path, message := s!"expected to match pattern /{pattern}/" }
+
 def minPropertiesIssue (path : String) (minProperties : Nat) : ValidationIssue :=
   { path := path, message := s!"expected object property count >= {minProperties}" }
 
@@ -310,6 +318,277 @@ def exclusiveMinimumIssue (path : String) (minimum : Lean.JsonNumber) : Validati
 def exclusiveMaximumIssue (path : String) (maximum : Lean.JsonNumber) : ValidationIssue :=
   { path := path, message := s!"expected number < {maximum}" }
 
+/-- Small JSON Schema `pattern` regex subset. Unsupported JS RegExp forms fail open. -/
+inductive PatternClassItem where
+  | single (char : Char)
+  | range (first last : Char)
+  | digit (negated : Bool)
+  | word (negated : Bool)
+  | space (negated : Bool)
+deriving Repr, BEq
+
+inductive PatternAtom where
+  | literal (char : Char)
+  | any
+  | digit (negated : Bool)
+  | word (negated : Bool)
+  | space (negated : Bool)
+  | charClass (negated : Bool) (items : List PatternClassItem)
+deriving Repr, BEq
+
+inductive PatternQuant where
+  | one
+  | zeroOrMore
+  | oneOrMore
+  | optional
+  | range (min : Nat) (max : Option Nat)
+deriving Repr, BEq
+
+structure PatternPiece where
+  atom : PatternAtom
+  quant : PatternQuant := .one
+deriving Repr, BEq
+
+structure CompiledPattern where
+  startAnchored : Bool
+  endAnchored : Bool
+  pieces : List PatternPiece
+deriving Repr, BEq
+
+def isAsciiDigit (char : Char) : Bool :=
+  '0'.toNat <= char.toNat && char.toNat <= '9'.toNat
+
+def isAsciiAlpha (char : Char) : Bool :=
+  ('a'.toNat <= char.toNat && char.toNat <= 'z'.toNat) ||
+    ('A'.toNat <= char.toNat && char.toNat <= 'Z'.toNat)
+
+def isAsciiWord (char : Char) : Bool :=
+  isAsciiAlpha char || isAsciiDigit char || char == '_'
+
+def isAsciiSpace (char : Char) : Bool :=
+  char == ' ' || char == '\t' || char == '\n' || char == '\r'
+
+def unescapePatternLiteral : Char → Char
+  | 'n' => '\n'
+  | 'r' => '\r'
+  | 't' => '\t'
+  | other => other
+
+def escapedPatternAtom? : Char → Option PatternAtom
+  | 'd' => some (.digit false)
+  | 'D' => some (.digit true)
+  | 'w' => some (.word false)
+  | 'W' => some (.word true)
+  | 's' => some (.space false)
+  | 'S' => some (.space true)
+  | other => some (.literal (unescapePatternLiteral other))
+
+def escapedClassItem? : Char → Option PatternClassItem
+  | 'd' => some (.digit false)
+  | 'D' => some (.digit true)
+  | 'w' => some (.word false)
+  | 'W' => some (.word true)
+  | 's' => some (.space false)
+  | 'S' => some (.space true)
+  | other => some (.single (unescapePatternLiteral other))
+
+def classItemSingleChar? : PatternClassItem → Option Char
+  | .single char => some char
+  | _ => none
+
+def classItemMatches (item : PatternClassItem) (char : Char) : Bool :=
+  match item with
+  | .single expected => char == expected
+  | .range first last => first.toNat <= char.toNat && char.toNat <= last.toNat
+  | .digit false => isAsciiDigit char
+  | .digit true => !isAsciiDigit char
+  | .word false => isAsciiWord char
+  | .word true => !isAsciiWord char
+  | .space false => isAsciiSpace char
+  | .space true => !isAsciiSpace char
+
+def atomMatches (atom : PatternAtom) (char : Char) : Bool :=
+  match atom with
+  | .literal expected => char == expected
+  | .any => true
+  | .digit false => isAsciiDigit char
+  | .digit true => !isAsciiDigit char
+  | .word false => isAsciiWord char
+  | .word true => !isAsciiWord char
+  | .space false => isAsciiSpace char
+  | .space true => !isAsciiSpace char
+  | .charClass negated items =>
+      let matched := items.any (fun item => classItemMatches item char)
+      if negated then !matched else matched
+
+def parseNatChars? (chars : List Char) : Option Nat :=
+  if chars.isEmpty || chars.any (fun char => !isAsciiDigit char) then
+    none
+  else
+    chars.foldl
+      (fun acc char => acc.map fun value => value * 10 + (char.toNat - '0'.toNat))
+      (some 0)
+
+partial def parseClassAtom : List Char → Option (PatternClassItem × List Char)
+  | [] => none
+  | '\\' :: escaped :: rest => do
+      let item ← escapedClassItem? escaped
+      pure (item, rest)
+  | char :: rest => some (.single char, rest)
+
+partial def parseClassItems (acc : List PatternClassItem) : List Char →
+    Option (List PatternClassItem × List Char)
+  | [] => none
+  | ']' :: rest => some (acc.reverse, rest)
+  | chars => do
+      let (firstItem, afterFirst) ← parseClassAtom chars
+      match classItemSingleChar? firstItem, afterFirst with
+      | some first, '-' :: afterDash =>
+          match afterDash with
+          | [] => none
+          | ']' :: _ => parseClassItems (firstItem :: acc) afterFirst
+          | _ => do
+              let (lastItem, afterLast) ← parseClassAtom afterDash
+              match classItemSingleChar? lastItem with
+              | some last => parseClassItems (.range first last :: acc) afterLast
+              | none => parseClassItems (lastItem :: .single '-' :: firstItem :: acc) afterLast
+      | _, _ => parseClassItems (firstItem :: acc) afterFirst
+
+def parseCharClass : List Char → Option (PatternAtom × List Char)
+  | '^' :: rest => do
+      let (items, remaining) ← parseClassItems [] rest
+      pure (.charClass true items, remaining)
+  | rest => do
+      let (items, remaining) ← parseClassItems [] rest
+      pure (.charClass false items, remaining)
+
+def unsupportedPatternChar (char : Char) : Bool :=
+  char == '(' || char == ')' || char == '|'
+
+partial def parsePatternAtom : List Char → Option (PatternAtom × List Char)
+  | [] => none
+  | '\\' :: escaped :: rest => do
+      let atom ← escapedPatternAtom? escaped
+      pure (atom, rest)
+  | '[' :: rest => parseCharClass rest
+  | '.' :: rest => some (.any, rest)
+  | char :: rest =>
+      if unsupportedPatternChar char ||
+          char == '*' || char == '+' || char == '?' || char == '{' || char == '}' then
+        none
+      else
+        some (.literal char, rest)
+
+partial def takeUntilClosingBrace (acc : List Char) : List Char → Option (List Char × List Char)
+  | [] => none
+  | '}' :: rest => some (acc.reverse, rest)
+  | char :: rest => takeUntilClosingBrace (char :: acc) rest
+
+def splitAtComma (chars : List Char) : Option (List Char × List Char) :=
+  let rec loop (acc : List Char) : List Char → Option (List Char × List Char)
+    | [] => none
+    | ',' :: rest => some (acc.reverse, rest)
+    | char :: rest => loop (char :: acc) rest
+  loop [] chars
+
+def parseRangeQuant? (body : List Char) : Option PatternQuant := do
+  match splitAtComma body with
+  | none =>
+      let count ← parseNatChars? body
+      pure (.range count (some count))
+  | some (minChars, maxChars) =>
+      let min ← parseNatChars? minChars
+      if maxChars.isEmpty then
+        pure (.range min none)
+      else
+        let max ← parseNatChars? maxChars
+        if max < min then none else pure (.range min (some max))
+
+def parsePatternQuant : List Char → Option (PatternQuant × List Char)
+  | '*' :: rest => some (.zeroOrMore, rest)
+  | '+' :: rest => some (.oneOrMore, rest)
+  | '?' :: rest => some (.optional, rest)
+  | '{' :: rest => do
+      let (body, remaining) ← takeUntilClosingBrace [] rest
+      let quant ← parseRangeQuant? body
+      pure (quant, remaining)
+  | rest => some (.one, rest)
+
+partial def parsePatternPieces (acc : List PatternPiece) : List Char →
+    Option (List PatternPiece × Bool)
+  | [] => some (acc.reverse, false)
+  | '$' :: [] => some (acc.reverse, true)
+  | chars => do
+      let (atom, afterAtom) ← parsePatternAtom chars
+      let (quant, afterQuant) ← parsePatternQuant afterAtom
+      parsePatternPieces ({ atom, quant } :: acc) afterQuant
+
+def compilePattern? (pattern : String) : Option CompiledPattern :=
+  let chars := pattern.toList
+  let (startAnchored, rest) :=
+    match chars with
+    | '^' :: rest => (true, rest)
+    | _ => (false, chars)
+  match parsePatternPieces [] rest with
+  | some (pieces, endAnchored) => some { startAnchored, endAnchored, pieces }
+  | none => none
+
+partial def consumePatternAtomMatches (atom : PatternAtom) (chars : List Char) (fuel : Nat) :
+    List (Nat × List Char) :=
+  let base := [(0, chars)]
+  match fuel, chars with
+  | 0, _ => base
+  | _ + 1, char :: rest =>
+      if atomMatches atom char then
+        base ++ (consumePatternAtomMatches atom rest fuel).map fun (count, remaining) =>
+          (count + 1, remaining)
+      else
+        base
+  | _, [] => base
+
+def quantBounds (quant : PatternQuant) : Nat × Option Nat :=
+  match quant with
+  | .one => (1, some 1)
+  | .zeroOrMore => (0, none)
+  | .oneOrMore => (1, none)
+  | .optional => (0, some 1)
+  | .range min max => (min, max)
+
+def remaindersAfterQuant (atom : PatternAtom) (quant : PatternQuant) (chars : List Char) :
+    List (List Char) :=
+  let (min, max?) := quantBounds quant
+  consumePatternAtomMatches atom chars chars.length |>.filterMap fun (count, remaining) =>
+    let underMax :=
+      match max? with
+      | some max => count <= max
+      | none => true
+    if min <= count && underMax then some remaining else none
+
+partial def matchPatternPieces (pieces : List PatternPiece) (chars : List Char) : List (List Char) :=
+  match pieces with
+  | [] => [chars]
+  | piece :: rest =>
+      remaindersAfterQuant piece.atom piece.quant chars |>.flatMap fun remaining =>
+        matchPatternPieces rest remaining
+
+def suffixes (chars : List Char) : List (List Char) :=
+  let rec loop : List Char → List (List Char)
+    | [] => [[]]
+    | current@(_ :: rest) => current :: loop rest
+  loop chars
+
+def compiledPatternMatches (compiled : CompiledPattern) (value : String) : Bool :=
+  let candidates :=
+    if compiled.startAnchored then [value.toList] else suffixes value.toList
+  candidates.any fun candidate =>
+    matchPatternPieces compiled.pieces candidate |>.any fun remaining =>
+      if compiled.endAnchored then remaining.isEmpty else true
+
+def patternMatches (pattern value : String) : Bool :=
+  match compilePattern? pattern with
+  | some compiled => compiledPatternMatches compiled value
+  | none => true
+
 def definedPropertyKeys (schema : Lean.Json) : List String :=
   propertySchemas schema |>.map Prod.fst
 
@@ -324,7 +603,12 @@ def stringBoundIssues (schema : Lean.Json) (value path : String) : List Validati
     | some maxLength =>
         if value.length > maxLength then [maxLengthIssue path maxLength] else []
     | none => []
-  minIssues ++ maxIssues
+  let patternIssues :=
+    match stringKeyword? schema "pattern" with
+    | some pattern =>
+        if patternMatches pattern value then [] else [patternIssue path pattern]
+    | none => []
+  minIssues ++ maxIssues ++ patternIssues
 
 def objectBoundIssues (schema : Lean.Json) (fieldCount : Nat) (path : String) :
     List ValidationIssue :=
