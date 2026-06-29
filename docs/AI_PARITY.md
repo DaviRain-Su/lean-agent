@@ -93,7 +93,7 @@ before expanding provider behavior.
 | Assistant stream events | `LeanAgent.AI.Types`, `LeanAgent.AI.EventStream`, `LeanAgent.AI.Util.SSE`, `LeanAgent.Loop` | partial | Event data types, stream/result container, partial snapshots, SSE parser, OpenAI streaming response parser, and agent-loop bridge exist. Async iteration and native callback-style live provider streaming are still missing. |
 | Usage and cost | `LeanAgent.AI.Types`, `LeanAgent.Core`, `LeanAgent.Models`, `LeanAgent.AI.Api.OpenAICompletions`, `LeanAgent.AI.Api.OpenAIResponses` | partial | Usage/cost types, JSON helpers, legacy provider usage bridge, OpenAI-compatible token parsing, Responses usage parsing, OpenAI-compatible model-rate cost calculation through Models runtime, and Responses service-tier cost multipliers exist. Cross-provider cost coverage is still incomplete. |
 | Stop reasons and errors | `LeanAgent.AI.Types`, `LeanAgent.AI.Util.Diagnostics`, `LeanAgent.Http` | partial | Stop reason types, assistant diagnostics, provider error extraction, and transport response header capture exist. Error stacks and provider `onResponse`/diagnostic header surfacing are incomplete. |
-| Thinking/reasoning levels | `LeanAgent.AI.Types` | partial | Thinking level types exist. Model thinking-level maps/helpers still missing. |
+| Thinking/reasoning levels | `LeanAgent.AI.Types`, `LeanAgent.Models` | partial | Thinking level types, model `thinkingLevelMap` entries, supported-level filtering, xhigh opt-in, null suppression, and simple-option reasoning clamp exist. Provider payload alias mapping and full generated metadata are still incomplete. |
 | Simple stream options | `LeanAgent.AI.Types` | partial | Core option fields exist. Callback/abort semantics and provider-specific options are missing. |
 
 ## Models Runtime
@@ -107,8 +107,8 @@ before expanding provider behavior.
 | `createProvider` | `LeanAgent.Models.Provider` | partial | Single/mapped API dispatch, refresh state, and lazy setup/load error streams exist. Full mixed-API parity is still missing. |
 | `hasApi` | `LeanAgent.Models` | implemented | Runtime API equality helper exists. |
 | `calculateCost` | `LeanAgent.Models` | implemented | Pi-style per-million token cost calculation exists, including 1h cache-write multiplier. |
-| `getSupportedThinkingLevels` | `LeanAgent.Models` | partial | Basic reasoning/off mapping exists. Model-specific thinking-level maps are missing. |
-| `clampThinkingLevel` | `LeanAgent.Models` | partial | Basic clamp exists. Model-specific map/null suppression is missing. |
+| `getSupportedThinkingLevels` | `LeanAgent.Models` | implemented | Pi-style non-reasoning/off behavior, default xhigh suppression, explicit xhigh opt-in, and null map suppression exist. |
+| `clampThinkingLevel` | `LeanAgent.Models` | implemented | Pi-style clamp over supported model thinking levels exists, including upward fallback before downward fallback. |
 | `modelsAreEqual` | `LeanAgent.Models` | implemented | Compares provider and model id. |
 
 ## Auth Layer
@@ -238,7 +238,7 @@ Initial Lean parity should port tests in this order:
 
 | Pi tests | Lean target | Status | Why first |
 | --- | --- | --- | --- |
-| `models-runtime.test.ts`, `providers.test.ts`, `supports-xhigh.test.ts`, `xhigh.test.ts` | model catalog and thinking tests | partial | Protects provider/model registry. |
+| `models-runtime.test.ts`, `providers.test.ts`, `supports-xhigh.test.ts`, `xhigh.test.ts` | model catalog and thinking tests | partial | Protects provider/model registry, cost calculation, and thinking-level map helpers. |
 | `env-api-keys.test.ts`, `compat-env.test.ts` | auth/env tests | partial | Env API-key and stored credential precedence are covered. Full provider env map and compat env tests are missing. |
 | `stream.test.ts`, `empty.test.ts`, `abort.test.ts` | event stream tests | partial | Stream result, text/thinking/tool events, partial snapshots, tool delta payloads, and empty-content completion are covered in Lean. Async iterator/backpressure, provider abort behavior, and live timing remain missing. |
 | `openai-completions-*.test.ts` | OpenAI completions tests | partial | Payload tests cover empty tools, tool history, tool choice, max tokens, temperature, reasoning effort, prompt cache key/retention, streaming payload/SSE parsing, buffered streaming runtime dispatch, request/response headers, usage parsing, provider HTTP diagnostics, repaired tool arguments, and legacy assistant tool-call omission. Network provider matrix and true live-stream timing tests are missing. |
@@ -285,7 +285,7 @@ Deliver:
 Exit criteria:
 
 - `Main.lean` no longer owns provider-specific auth/default resolution. Status: implemented for current DeepSeek/OpenAI CLI selection.
-- Tests mapped from `models-runtime.test.ts`, `env-api-keys.test.ts`, and `providers.test.ts`. Status: partial; auth resolution, stored credential precedence, runtime lookup/dispatch, and cost calculation are covered.
+- Tests mapped from `models-runtime.test.ts`, `env-api-keys.test.ts`, `providers.test.ts`, `supports-xhigh.test.ts`, and `xhigh.test.ts`. Status: partial; auth resolution, stored credential precedence, runtime lookup/dispatch, cost calculation, and thinking-level map/clamp behavior are covered.
 
 ### M4: OpenAI-Compatible API Family
 

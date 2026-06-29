@@ -57,6 +57,17 @@ structure ModelCompat where
   thinkingFormat : Option String := none
 deriving Repr, BEq
 
+instance : Repr LeanAgent.AI.ThinkingLevel where
+  reprPrec level _ := LeanAgent.AI.ThinkingLevel.toString level
+
+instance : Repr LeanAgent.AI.ModelThinkingLevel where
+  reprPrec level _ := LeanAgent.AI.ModelThinkingLevel.toString level
+
+structure ThinkingLevelMapEntry where
+  level : LeanAgent.AI.ModelThinkingLevel
+  mapped : Option String := none
+deriving Repr, BEq
+
 structure ModelInfo where
   id : String
   name : String
@@ -67,6 +78,7 @@ structure ModelInfo where
   contextWindow : Nat := 0
   maxTokens : Nat := 0
   reasoning : Bool := false
+  thinkingLevelMap : Array ThinkingLevelMapEntry := #[]
   input : Array String := #["text"]
   supportsToolCalls : Bool := true
   supportsJsonOutput : Bool := true
@@ -495,7 +507,18 @@ def extendedThinkingLevels : Array LeanAgent.AI.ModelThinkingLevel :=
    ]
 
 def getSupportedThinkingLevels (model : ModelInfo) : Array LeanAgent.AI.ModelThinkingLevel :=
-  if model.reasoning then extendedThinkingLevels else #[.off]
+  if !model.reasoning then
+    #[.off]
+  else
+    extendedThinkingLevels.filter fun level =>
+      match model.thinkingLevelMap.find? (fun entry => entry.level == level) with
+      | some { mapped := none, .. } => false
+      | some _ => true
+      | none => level != .level .xhigh
+
+def thinkingLevelMapValue? (model : ModelInfo) (level : LeanAgent.AI.ModelThinkingLevel) :
+    Option (Option String) :=
+  (model.thinkingLevelMap.find? fun entry => entry.level == level).map (fun entry => entry.mapped)
 
 def thinkingLevelIndex? : LeanAgent.AI.ModelThinkingLevel → Option Nat
   | .off => some 0
@@ -613,7 +636,14 @@ def clampSimpleOptionsToContext
     (model : ModelInfo)
     (context : LeanAgent.AI.Context)
     (options : LeanAgent.AI.SimpleStreamOptions) : LeanAgent.AI.SimpleStreamOptions :=
-  LeanAgent.AI.Api.SimpleOptions.clampStreamOptionsToContext model.contextWindow model.maxTokens context options
+  let options :=
+    LeanAgent.AI.Api.SimpleOptions.clampStreamOptionsToContext model.contextWindow model.maxTokens context options
+  match options.reasoning with
+  | none => options
+  | some level =>
+      match clampThinkingLevel model (.level level) with
+      | .off => { options with reasoning := none }
+      | .level clamped => { options with reasoning := some clamped }
 
 def openAICompatibleStreams : ProviderStreams :=
   { streamSimple := fun model context options => do

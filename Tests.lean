@@ -1680,6 +1680,57 @@ def testModelsCalculateCost : IO Unit := do
   assertTrue (cost.cacheWrite == 8.0) "expected cache write cost"
   assertTrue (cost.total == 13.5) "expected total cost"
 
+def testModelsThinkingLevelMapSupport : IO Unit := do
+  assertTrue
+    (LeanAgent.Models.getSupportedThinkingLevels fakeRuntimeModel == #[.off])
+    "expected non-reasoning model to support off only"
+  let defaultReasoning := { fakeRuntimeModel with reasoning := true }
+  assertTrue
+    (LeanAgent.Models.getSupportedThinkingLevels defaultReasoning ==
+      #[.off, .level .minimal, .level .low, .level .medium, .level .high])
+    "expected reasoning model to omit xhigh unless mapped"
+  let proModel :=
+    { defaultReasoning with
+      thinkingLevelMap :=
+        #[ { level := .off, mapped := none }
+         , { level := .level .minimal, mapped := none }
+         , { level := .level .low, mapped := none }
+         , { level := .level .xhigh, mapped := some "xhigh" }
+         ]
+    }
+  assertTrue
+    (LeanAgent.Models.getSupportedThinkingLevels proModel ==
+      #[.level .medium, .level .high, .level .xhigh])
+    "expected thinking map to suppress null levels and enable xhigh"
+  assertTrue
+    (LeanAgent.Models.clampThinkingLevel proModel (.level .low) == .level .medium)
+    "expected unsupported low to clamp upward to medium"
+  let noXHigh := { defaultReasoning with thinkingLevelMap := #[] }
+  assertTrue
+    (LeanAgent.Models.clampThinkingLevel noXHigh (.level .xhigh) == .level .high)
+    "expected unmapped xhigh to clamp downward to high"
+  assertTrue
+    (LeanAgent.Models.thinkingLevelMapValue? proModel (.level .xhigh) == some (some "xhigh"))
+    "expected mapped xhigh value"
+  assertTrue
+    (LeanAgent.Models.thinkingLevelMapValue? proModel .off == some none)
+    "expected null off mapping"
+
+def testModelsClampSimpleOptionsClampsReasoning : IO Unit := do
+  let model :=
+    { fakeRuntimeModel with
+      reasoning := true
+      maxTokens := 1000
+      thinkingLevelMap := #[{ level := .level .xhigh, mapped := some "xhigh" }]
+    }
+  let options := LeanAgent.Models.clampSimpleOptionsToContext model {} { reasoning := some .xhigh }
+  assertTrue (options.reasoning == some .xhigh) "expected mapped xhigh to be preserved"
+  let noXHigh := { model with thinkingLevelMap := #[] }
+  let downgraded := LeanAgent.Models.clampSimpleOptionsToContext noXHigh {} { reasoning := some .xhigh }
+  assertTrue (downgraded.reasoning == some .high) "expected unmapped xhigh to downgrade to high"
+  let noReasoning := LeanAgent.Models.clampSimpleOptionsToContext fakeRuntimeModel {} { reasoning := some .high }
+  assertTrue noReasoning.reasoning.isNone "expected non-reasoning model to disable reasoning"
+
 def fauxContext (text : String := "hi") : LeanAgent.AI.Context :=
   { systemPrompt := some "Be concise."
     messages := #[.user { content := #[LeanAgent.AI.text text], timestamp := 1 }]
@@ -2738,6 +2789,8 @@ def main : IO UInt32 := do
     testModelsCreateProviderSetupFailureReturnsLazyErrorStream
     testModelsLazyProviderStreamsLoadFailureReturnsErrorStream
     testModelsCalculateCost
+    testModelsThinkingLevelMapSupport
+    testModelsClampSimpleOptionsClampsReasoning
     testFauxProviderQueuesResponses
     testFauxProviderHelperBlocksAndEvents
     testFauxProviderModelsFactoriesAndCache
