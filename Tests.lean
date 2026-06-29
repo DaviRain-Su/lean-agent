@@ -2154,6 +2154,147 @@ def testImageModelCatalogOpenRouter : IO Unit := do
     ((LeanAgent.AI.Images.Models.getImageModel? "missing" "google/gemini-2.5-flash-image").isNone)
     "expected missing image provider lookup to be empty"
 
+def testImagesCollectionProviderCrudAndRefresh : IO Unit := do
+  let collection ← LeanAgent.AI.Images.createImagesModels
+  let refreshCount ← IO.mkRef 0
+  let provider ← LeanAgent.AI.Images.createImagesProvider
+    { id := "fake-images"
+      name := some "Fake Images"
+      auth := fakeProviderAuth
+      models := #[fakeImagesModel]
+      refreshModels := some (do
+        refreshCount.modify (· + 1)
+        pure #[{ fakeImagesModel with id := "refreshed-image-model" }]
+      )
+      api :=
+        { generateImages := fun model _context _options => do
+            let timestamp ← IO.monoMsNow
+            pure
+              { api := model.api
+                provider := model.provider
+                model := model.id
+                output := #[LeanAgent.AI.text "ok"]
+                timestamp := timestamp
+              }
+        }
+    }
+  collection.setProvider provider
+  assertTrue ((← collection.getProviders).size == 1) "expected image provider registration"
+  assertTrue ((← collection.getModels).size == 1) "expected image model listing"
+  assertTrue ((← collection.getModel? "fake-images" "fake-image-model").isSome)
+    "expected image model lookup"
+  collection.refresh (some "fake-images")
+  assertTrue ((← refreshCount.get) == 1) "expected targeted image refresh"
+  assertTrue ((← collection.getModel? "fake-images" "refreshed-image-model").isSome)
+    "expected refreshed image model"
+  collection.deleteProvider "fake-images"
+  assertTrue ((← collection.getProviders).isEmpty) "expected image provider deletion"
+  collection.setProvider provider
+  collection.clearProviders
+  assertTrue ((← collection.getProviders).isEmpty) "expected image provider clear"
+
+def testImagesCollectionAppliesAuthAndOptions : IO Unit := do
+  let seenApiKey ← IO.mkRef (none : Option String)
+  let seenBaseUrl ← IO.mkRef ""
+  let seenHeaders ← IO.mkRef (#[] : Array (String × Option String))
+  let seenEnv ← IO.mkRef (#[] : Array (String × String))
+  let customAuth : LeanAgent.AI.Auth.ProviderAuth :=
+    { apiKey :=
+        some
+          { name := "Image custom auth"
+            resolve := fun _ctx _credential modelBaseUrl => do
+              pure
+                (some
+                  { auth :=
+                      { apiKey := some "auth-key"
+                        baseUrl := some ((modelBaseUrl.getD "missing-base") ++ "/auth")
+                        headers := #[("X-Auth", "yes"), ("X-Trace", "auth")]
+                      }
+                    env := #[("AUTH_ENV", "auth")]
+                    source := some "image-auth"
+                  })
+          }
+    }
+  let provider ← LeanAgent.AI.Images.createImagesProvider
+    { id := "fake-images"
+      name := some "Fake Images"
+      auth := customAuth
+      models := #[fakeImagesModel]
+      api :=
+        { generateImages := fun model _context options => do
+            seenApiKey.set options.apiKey
+            seenBaseUrl.set model.baseUrl
+            seenHeaders.set options.headers
+            seenEnv.set options.env
+            let timestamp ← IO.monoMsNow
+            pure
+              { api := model.api
+                provider := model.provider
+                model := model.id
+                output := #[LeanAgent.AI.text "image-collection-ok"]
+                timestamp := timestamp
+              }
+        }
+    }
+  let collection ← LeanAgent.AI.Images.createImagesModels
+  collection.setProvider provider
+  let result ← collection.generateImages
+    fakeImagesModel
+    { input := #[LeanAgent.AI.text "draw"] }
+    { apiKey := some "request-key"
+      headers := #[("X-Trace", some "request"), ("X-Req", some "yes")]
+      env := #[("REQ_ENV", "request")]
+    }
+  assertTrue (LeanAgent.AI.contentPlainText result.output == "image-collection-ok")
+    "expected image collection dispatch"
+  assertTrue ((← seenApiKey.get) == some "request-key") "expected request API key to win"
+  assertTrue ((← seenBaseUrl.get) == fakeImagesModel.baseUrl ++ "/auth") "expected auth base URL override"
+  let headers ← seenHeaders.get
+  assertTrue (headerValueOpt? headers "X-Auth" == some (some "yes")) "expected inherited auth header"
+  assertTrue (headerValueOpt? headers "X-Trace" == some (some "request")) "expected request header override"
+  assertTrue (headerValueOpt? headers "X-Req" == some (some "yes")) "expected request header"
+  let env ← seenEnv.get
+  assertTrue (LeanAgent.AI.Auth.providerEnvGet? env "AUTH_ENV" == some "auth") "expected auth env"
+  assertTrue (LeanAgent.AI.Auth.providerEnvGet? env "REQ_ENV" == some "request") "expected request env"
+
+def testImagesCollectionUnknownProviderReturnsError : IO Unit := do
+  let collection ← LeanAgent.AI.Images.createImagesModels
+  let result ← collection.generateImages fakeImagesModel { input := #[LeanAgent.AI.text "draw"] }
+  assertTrue (result.stopReason == .error) "expected unknown image provider error result"
+  assertTrue
+    (match result.errorMessage with
+     | some message => message.contains "Unknown provider: fake-images"
+     | none => false)
+    "expected unknown provider error message"
+
+def fakeOpenRouterImagesAuthContext : LeanAgent.AI.Auth.AuthContext :=
+  { env := fun name =>
+      pure
+        (if name == LeanAgent.AI.Api.OpenRouterImages.apiKeyEnv then
+          some "openrouter-image-key"
+        else
+          none)
+    fileExists := fun _ => pure false
+  }
+
+def testOpenRouterImagesProviderFactoryAuthAndModels : IO Unit := do
+  let provider ← LeanAgent.AI.Providers.OpenRouterImages.openRouterImagesProvider
+  assertTrue (provider.id == "openrouter") "expected OpenRouter image provider id"
+  assertTrue (provider.name == "OpenRouter") "expected OpenRouter image provider name"
+  assertTrue ((← provider.getModels).size == 37) "expected OpenRouter image provider models"
+  let collection ← LeanAgent.AI.Images.createImagesModels none fakeOpenRouterImagesAuthContext
+  collection.setProvider provider
+  match ← collection.getModel? "openrouter" "openrouter/auto" with
+  | some model =>
+      match ← collection.getAuth model with
+      | some result =>
+          assertTrue (result.auth.apiKey == some "openrouter-image-key")
+            "expected OpenRouter image env auth"
+          assertTrue (result.source == some LeanAgent.AI.Api.OpenRouterImages.apiKeyEnv)
+            "expected OpenRouter image env source"
+      | none => fail "expected OpenRouter image auth"
+  | none => fail "expected OpenRouter auto image model"
+
 def testCompatInjectsEnvApiKeyForKnownProviders : IO Unit := do
   LeanAgent.AI.Compat.resetApiProviders
   let seenApiKey ← IO.mkRef (none : Option String)
@@ -3741,6 +3882,10 @@ def main : IO UInt32 := do
     testImagesApiRegistryMissingProviderReturnsError
     testImagesBuiltInRegistryRestoresOpenRouter
     testImageModelCatalogOpenRouter
+    testImagesCollectionProviderCrudAndRefresh
+    testImagesCollectionAppliesAuthAndOptions
+    testImagesCollectionUnknownProviderReturnsError
+    testOpenRouterImagesProviderFactoryAuthAndModels
     testCompatInjectsEnvApiKeyForKnownProviders
     testCompatInjectsEnvApiKeyForMappedProvidersOutsideCatalog
     testCompatMissingProviderReturnsError
