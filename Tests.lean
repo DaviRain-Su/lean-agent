@@ -2951,6 +2951,17 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
      , LeanAgent.Models.cerebrasProviderId
      , LeanAgent.Models.togetherProviderId
      , LeanAgent.Models.fireworksProviderId
+     , LeanAgent.Models.antLingProviderId
+     , LeanAgent.Models.huggingFaceProviderId
+     , LeanAgent.Models.moonshotAIProviderId
+     , LeanAgent.Models.moonshotAICNProviderId
+     , LeanAgent.Models.nvidiaProviderId
+     , LeanAgent.Models.xiaomiProviderId
+     , LeanAgent.Models.xiaomiTokenPlanAMSProviderId
+     , LeanAgent.Models.xiaomiTokenPlanCNProviderId
+     , LeanAgent.Models.xiaomiTokenPlanSGPProviderId
+     , LeanAgent.Models.zaiProviderId
+     , LeanAgent.Models.zaiCodingCNProviderId
      , LeanAgent.Models.anthropicProviderId
      , LeanAgent.Models.googleProviderId
      , LeanAgent.Models.googleVertexProviderId
@@ -2985,6 +2996,17 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
     "expected Azure OpenAI Responses model"
   assertTrue (rendered.contains "openrouter/openai/gpt-oss-120b") "expected OpenRouter model"
   assertTrue (rendered.contains "fireworks/accounts/fireworks/models/glm-5p2") "expected Fireworks OpenAI-compatible model"
+  assertTrue (rendered.contains "ant-ling/Ring-2.6-1T") "expected Ant Ling model"
+  assertTrue (rendered.contains "huggingface/zai-org/GLM-5.2") "expected Hugging Face generated model set"
+  assertTrue (rendered.contains "moonshotai/kimi-k2.7-code") "expected Moonshot AI model"
+  assertTrue (rendered.contains "moonshotai-cn/kimi-k2.7-code") "expected Moonshot AI CN model"
+  assertTrue (rendered.contains "nvidia/z-ai/glm-5.1") "expected NVIDIA model"
+  assertTrue (rendered.contains "xiaomi/mimo-v2.5-pro") "expected Xiaomi model"
+  assertTrue (rendered.contains "xiaomi-token-plan-ams/mimo-v2.5-pro") "expected Xiaomi Token Plan AMS model"
+  assertTrue (rendered.contains "xiaomi-token-plan-cn/mimo-v2.5-pro") "expected Xiaomi Token Plan CN model"
+  assertTrue (rendered.contains "xiaomi-token-plan-sgp/mimo-v2.5-pro") "expected Xiaomi Token Plan SGP model"
+  assertTrue (rendered.contains "zai/glm-5.2") "expected Z.AI model"
+  assertTrue (rendered.contains "zai-coding-cn/glm-5.2") "expected Z.AI Coding CN model"
   assertTrue (rendered.contains "anthropic/claude-sonnet-4-5") "expected Anthropic model"
   assertTrue (rendered.contains "google/gemini-2.5-flash") "expected Google Gemini model"
   assertTrue (rendered.contains "google-vertex/gemini-2.5-flash") "expected Google Vertex model"
@@ -2992,10 +3014,55 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
   assertTrue (rendered.contains "amazon-bedrock/us.anthropic.claude-opus-4-6-v1")
     "expected Amazon Bedrock model"
   assertTrue (LeanAgent.Models.amazonBedrockModels.size == 97) "expected generated Bedrock model catalog"
+  assertTrue (LeanAgent.Models.antLingModels.size == 3) "expected generated Ant Ling model catalog"
+  assertTrue (LeanAgent.Models.huggingFaceModels.size == 47) "expected generated Hugging Face model catalog"
+  assertTrue (LeanAgent.Models.moonshotAIModels.size == 9) "expected generated Moonshot AI model catalog"
+  assertTrue (LeanAgent.Models.moonshotAICNModels.size == 9) "expected generated Moonshot AI CN model catalog"
+  assertTrue (LeanAgent.Models.nvidiaModels.size == 19) "expected generated NVIDIA model catalog"
+  assertTrue (LeanAgent.Models.xiaomiModels.size == 6) "expected generated Xiaomi model catalog"
+  assertTrue (LeanAgent.Models.xiaomiTokenPlanAMSModels.size == 5)
+    "expected generated Xiaomi Token Plan AMS model catalog"
+  assertTrue (LeanAgent.Models.xiaomiTokenPlanCNModels.size == 5)
+    "expected generated Xiaomi Token Plan CN model catalog"
+  assertTrue (LeanAgent.Models.xiaomiTokenPlanSGPModels.size == 5)
+    "expected generated Xiaomi Token Plan SGP model catalog"
+  assertTrue (LeanAgent.Models.zaiModels.size == 6) "expected generated Z.AI model catalog"
+  assertTrue (LeanAgent.Models.zaiCodingCNModels.size == 6) "expected generated Z.AI Coding CN model catalog"
+  match LeanAgent.Models.ProviderCatalog.model? catalog LeanAgent.Models.antLingProviderId "Ring-2.6-1T" with
+  | some model =>
+      assertTrue model.reasoning "expected Ant Ling Ring reasoning metadata"
+      assertTrue ((LeanAgent.Models.thinkingLevelMapValue? model (.level .xhigh)) == some (some "xhigh"))
+        "expected Ant Ling xhigh mapping"
+  | none => fail "expected Ant Ling reasoning model"
+  match LeanAgent.Models.ProviderCatalog.model? catalog LeanAgent.Models.zaiProviderId "glm-5.2" with
+  | some model =>
+      assertTrue (LeanAgent.Models.thinkingLevelPayloadValueD model (.level .xhigh) "xhigh" == "max")
+        "expected Z.AI xhigh mapping"
+      assertTrue (!((LeanAgent.Models.getSupportedThinkingLevels model).contains (.level .minimal)))
+        "expected Z.AI minimal reasoning to be suppressed"
+  | none => fail "expected Z.AI reasoning model"
   match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.anthropicOAuthTokenEnv with
   | some provider =>
       assertTrue (provider.id == LeanAgent.Models.anthropicProviderId) "expected Anthropic OAuth token env"
   | none => fail "expected Anthropic OAuth token env"
+  match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.antLingApiKeyEnv with
+  | some provider =>
+      assertTrue (provider.id == LeanAgent.Models.antLingProviderId) "expected Ant Ling provider by env"
+      assertTrue (provider.defaultModel == LeanAgent.Models.antLingDefaultModel) "expected Ant Ling default model"
+  | none => fail "expected Ant Ling provider by env"
+  match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.moonshotAIApiKeyEnv with
+  | some provider =>
+      assertTrue (provider.id == LeanAgent.Models.moonshotAIProviderId)
+        "expected Moonshot AI provider to own shared env lookup"
+      assertTrue (provider.defaultModel == LeanAgent.Models.moonshotAIDefaultModel)
+        "expected Moonshot AI default model"
+  | none => fail "expected Moonshot AI provider by env"
+  match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.zaiCodingCNApiKeyEnv with
+  | some provider =>
+      assertTrue (provider.id == LeanAgent.Models.zaiCodingCNProviderId) "expected Z.AI Coding CN provider by env"
+      assertTrue (provider.defaultModel == LeanAgent.Models.zaiCodingCNDefaultModel)
+        "expected Z.AI Coding CN default model"
+  | none => fail "expected Z.AI Coding CN provider by env"
   match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.googleApiKeyEnv with
   | some provider =>
       assertTrue (provider.id == LeanAgent.Models.googleProviderId) "expected Google provider by env"
@@ -3030,7 +3097,7 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
 def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
   let collection ← LeanAgent.Models.createDefaultModels
   let providers ← collection.getProviders
-  assertTrue (providers.size == 15) "expected default provider family"
+  assertTrue (providers.size == 26) "expected default provider family"
   match ← collection.getModel? LeanAgent.Models.openAIProviderId LeanAgent.Models.openAIDefaultModel with
   | some model =>
       assertTrue (model.api == "openai-responses") "expected OpenAI Responses API"
@@ -3064,6 +3131,32 @@ def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
   | some model =>
       assertTrue (model.baseUrl == LeanAgent.Models.fireworksBaseUrl) "expected Fireworks OpenAI-compatible base URL"
   | none => fail "expected Fireworks model in default runtime collection"
+  match ← collection.getModel? LeanAgent.Models.huggingFaceProviderId "zai-org/GLM-5.2" with
+  | some model =>
+      assertTrue (model.api == "openai-completions") "expected Hugging Face OpenAI-compatible API"
+      assertTrue (model.baseUrl == LeanAgent.Models.huggingFaceBaseUrl) "expected Hugging Face router base URL"
+  | none => fail "expected Hugging Face model in default runtime collection"
+  match ← collection.getModel? LeanAgent.Models.moonshotAIProviderId "kimi-k2.7-code" with
+  | some model =>
+      assertTrue (model.compat.thinkingFormat == some "deepseek") "expected Moonshot AI DeepSeek thinking compat"
+      assertTrue (model.input.contains "image") "expected Moonshot AI image input metadata"
+  | none => fail "expected Moonshot AI model in default runtime collection"
+  match ← collection.getModel? LeanAgent.Models.nvidiaProviderId LeanAgent.Models.nvidiaDefaultModel with
+  | some model =>
+      assertTrue (model.baseUrl == LeanAgent.Models.nvidiaBaseUrl) "expected NVIDIA base URL"
+      assertTrue (!model.compat.supportsStore) "expected NVIDIA store compat metadata"
+  | none => fail "expected NVIDIA model in default runtime collection"
+  match ← collection.getModel? LeanAgent.Models.xiaomiProviderId "mimo-v2.5" with
+  | some model =>
+      assertTrue model.compat.requiresReasoningContentOnAssistantMessages
+        "expected Xiaomi reasoning-content compat metadata"
+      assertTrue (model.input.contains "image") "expected Xiaomi image input metadata"
+  | none => fail "expected Xiaomi model in default runtime collection"
+  match ← collection.getModel? LeanAgent.Models.zaiCodingCNProviderId "glm-5.2" with
+  | some model =>
+      assertTrue (model.compat.thinkingFormat == some "zai") "expected Z.AI Coding CN thinking compat"
+      assertTrue (model.maxTokens == 131072) "expected Z.AI Coding CN max tokens"
+  | none => fail "expected Z.AI Coding CN model in default runtime collection"
   match ← collection.getModel? LeanAgent.Models.anthropicProviderId LeanAgent.Models.anthropicDefaultModel with
   | some model =>
       assertTrue (model.api == LeanAgent.AI.Api.AnthropicMessages.api) "expected Anthropic Messages API"
@@ -3191,6 +3284,23 @@ def testOpenAICompatibleProviderFactoriesMatchCatalog : IO Unit := do
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Cerebras.provider LeanAgent.Models.cerebrasProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Together.provider LeanAgent.Models.togetherProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Fireworks.provider LeanAgent.Models.fireworksProviderInfo
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.AntLing.provider LeanAgent.Models.antLingProviderInfo
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.HuggingFace.provider LeanAgent.Models.huggingFaceProviderInfo
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.MoonshotAI.provider LeanAgent.Models.moonshotAIProviderInfo
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.MoonshotAICN.provider LeanAgent.Models.moonshotAICNProviderInfo
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.NVIDIA.provider LeanAgent.Models.nvidiaProviderInfo
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Xiaomi.provider LeanAgent.Models.xiaomiProviderInfo
+  assertProviderFactoryMatchesInfo
+    LeanAgent.AI.Providers.XiaomiTokenPlanAMS.provider
+    LeanAgent.Models.xiaomiTokenPlanAMSProviderInfo
+  assertProviderFactoryMatchesInfo
+    LeanAgent.AI.Providers.XiaomiTokenPlanCN.provider
+    LeanAgent.Models.xiaomiTokenPlanCNProviderInfo
+  assertProviderFactoryMatchesInfo
+    LeanAgent.AI.Providers.XiaomiTokenPlanSGP.provider
+    LeanAgent.Models.xiaomiTokenPlanSGPProviderInfo
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.ZAI.provider LeanAgent.Models.zaiProviderInfo
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.ZAICodingCN.provider LeanAgent.Models.zaiCodingCNProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Anthropic.provider LeanAgent.Models.anthropicProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Google.provider LeanAgent.Models.googleProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.GoogleVertex.provider LeanAgent.Models.googleVertexProviderInfo
@@ -4022,6 +4132,22 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
     "expected all providers to include Mistral catalog provider"
   assertTrue (providerIds.contains LeanAgent.Models.amazonBedrockProviderId)
     "expected all providers to include Amazon Bedrock catalog provider"
+  let openAICompatibleAdditions :=
+    #[ LeanAgent.Models.antLingProviderId
+     , LeanAgent.Models.huggingFaceProviderId
+     , LeanAgent.Models.moonshotAIProviderId
+     , LeanAgent.Models.moonshotAICNProviderId
+     , LeanAgent.Models.nvidiaProviderId
+     , LeanAgent.Models.xiaomiProviderId
+     , LeanAgent.Models.xiaomiTokenPlanAMSProviderId
+     , LeanAgent.Models.xiaomiTokenPlanCNProviderId
+     , LeanAgent.Models.xiaomiTokenPlanSGPProviderId
+     , LeanAgent.Models.zaiProviderId
+     , LeanAgent.Models.zaiCodingCNProviderId
+     ]
+  for providerId in openAICompatibleAdditions do
+    assertTrue (providerIds.contains providerId)
+      s!"expected all providers to include OpenAI-compatible catalog provider {providerId}"
   assertTrue (providerIds.contains LeanAgent.AI.Providers.CloudflareWorkersAI.providerId)
     "expected all providers to include Cloudflare Workers AI"
   assertTrue (providerIds.contains LeanAgent.AI.Providers.CloudflareAIGateway.providerId)
@@ -4076,6 +4202,18 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
       assertTrue (model.api == LeanAgent.AI.Api.BedrockConverseStream.api) "expected Bedrock builtin model"
   | none => fail "expected Bedrock builtin model lookup"
   match LeanAgent.AI.Providers.All.getBuiltinModel?
+    LeanAgent.Models.xiaomiTokenPlanAMSProviderId
+    LeanAgent.Models.xiaomiTokenPlanAMSDefaultModel with
+  | some model =>
+      assertTrue (model.api == "openai-completions") "expected Xiaomi Token Plan AMS builtin model"
+  | none => fail "expected Xiaomi Token Plan AMS builtin model lookup"
+  match LeanAgent.AI.Providers.All.getBuiltinModel?
+    LeanAgent.Models.zaiProviderId
+    LeanAgent.Models.zaiDefaultModel with
+  | some model =>
+      assertTrue (model.provider == LeanAgent.Models.zaiProviderId) "expected Z.AI builtin model"
+  | none => fail "expected Z.AI builtin model lookup"
+  match LeanAgent.AI.Providers.All.getBuiltinModel?
     LeanAgent.AI.Providers.CloudflareAIGateway.providerId
     "gpt-4o-mini" with
   | some model =>
@@ -4083,7 +4221,7 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
   | none => fail "expected Cloudflare AI Gateway builtin model lookup"
   let collection ← LeanAgent.AI.Providers.All.builtinModels none fakeCloudflareAuthContext
   let providers ← collection.getProviders
-  assertTrue (providers.size == 17) "expected implemented builtin text providers"
+  assertTrue (providers.size == 28) "expected implemented builtin text providers"
   match ← collection.getProvider? LeanAgent.AI.Providers.CloudflareWorkersAI.providerId with
   | some _ => pure ()
   | none => fail "expected Workers AI provider in builtin collection"
@@ -4110,6 +4248,39 @@ def testEnvApiKeysProviderMap : IO Unit := do
       some #[LeanAgent.Models.azureOpenAIResponsesApiKeyEnv])
     "expected Azure OpenAI Responses env var"
   assertTrue
+    (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "ant-ling" == some #[LeanAgent.Models.antLingApiKeyEnv])
+    "expected Ant Ling env var"
+  assertTrue
+    (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "huggingface" == some #[LeanAgent.Models.huggingFaceApiKeyEnv])
+    "expected Hugging Face env var"
+  assertTrue
+    (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "moonshotai" == some #[LeanAgent.Models.moonshotAIApiKeyEnv])
+    "expected Moonshot AI env var"
+  assertTrue
+    (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "moonshotai-cn" == some #[LeanAgent.Models.moonshotAICNApiKeyEnv])
+    "expected Moonshot AI CN env var"
+  assertTrue
+    (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "nvidia" == some #[LeanAgent.Models.nvidiaApiKeyEnv])
+    "expected NVIDIA env var"
+  assertTrue
+    (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "xiaomi" == some #[LeanAgent.Models.xiaomiApiKeyEnv])
+    "expected Xiaomi env var"
+  assertTrue
+    (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "xiaomi-token-plan-ams" ==
+      some #[LeanAgent.Models.xiaomiTokenPlanAMSApiKeyEnv])
+    "expected Xiaomi Token Plan AMS env var"
+  assertTrue
+    (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "xiaomi-token-plan-cn" ==
+      some #[LeanAgent.Models.xiaomiTokenPlanCNApiKeyEnv])
+    "expected Xiaomi Token Plan CN env var"
+  assertTrue
+    (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "xiaomi-token-plan-sgp" ==
+      some #[LeanAgent.Models.xiaomiTokenPlanSGPApiKeyEnv])
+    "expected Xiaomi Token Plan SGP env var"
+  assertTrue
+    (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "zai" == some #[LeanAgent.Models.zaiApiKeyEnv])
+    "expected Z.AI env var"
+  assertTrue
     (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "zai-coding-cn" == some #["ZAI_CODING_CN_API_KEY"])
     "expected ZAI Coding CN env var"
   assertTrue
@@ -4132,6 +4303,15 @@ def testEnvApiKeysProviderMap : IO Unit := do
     "zai-coding-cn"
     #[("ZAI_CODING_CN_API_KEY", "zai-token")]
   assertTrue (apiKey == some "zai-token") "expected configured ZAI API key"
+  let moonshotKeys ← LeanAgent.AI.EnvApiKeys.findEnvKeys
+    "moonshotai-cn"
+    #[("MOONSHOT_API_KEY", "moonshot-token")]
+  assertTrue (moonshotKeys == some #[LeanAgent.Models.moonshotAICNApiKeyEnv])
+    "expected configured Moonshot AI CN key"
+  let xiaomiKey ← LeanAgent.AI.EnvApiKeys.getEnvApiKey
+    "xiaomi-token-plan-sgp"
+    #[("XIAOMI_TOKEN_PLAN_SGP_API_KEY", "xiaomi-token")]
+  assertTrue (xiaomiKey == some "xiaomi-token") "expected configured Xiaomi Token Plan SGP API key"
   let missing ← LeanAgent.AI.EnvApiKeys.findEnvKeys "unknown-provider" #[]
   assertTrue (missing == none) "expected stable missing provider result"
 

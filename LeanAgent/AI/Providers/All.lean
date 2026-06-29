@@ -1,6 +1,7 @@
 import LeanAgent.AI.Images
 import LeanAgent.AI.Providers.AmazonBedrock
 import LeanAgent.AI.Providers.Anthropic
+import LeanAgent.AI.Providers.AntLing
 import LeanAgent.AI.Providers.AzureOpenAIResponses
 import LeanAgent.AI.Providers.Cerebras
 import LeanAgent.AI.Providers.CloudflareAIGateway
@@ -10,13 +11,23 @@ import LeanAgent.AI.Providers.Fireworks
 import LeanAgent.AI.Providers.Google
 import LeanAgent.AI.Providers.GoogleVertex
 import LeanAgent.AI.Providers.Groq
+import LeanAgent.AI.Providers.HuggingFace
 import LeanAgent.AI.Providers.Mistral
+import LeanAgent.AI.Providers.MoonshotAI
+import LeanAgent.AI.Providers.MoonshotAICN
+import LeanAgent.AI.Providers.NVIDIA
 import LeanAgent.AI.Providers.OpenAI
 import LeanAgent.AI.Providers.OpenAICodex
 import LeanAgent.AI.Providers.OpenRouterImages
 import LeanAgent.AI.Providers.OpenRouter
 import LeanAgent.AI.Providers.Together
 import LeanAgent.AI.Providers.XAI
+import LeanAgent.AI.Providers.Xiaomi
+import LeanAgent.AI.Providers.XiaomiTokenPlanAMS
+import LeanAgent.AI.Providers.XiaomiTokenPlanCN
+import LeanAgent.AI.Providers.XiaomiTokenPlanSGP
+import LeanAgent.AI.Providers.ZAI
+import LeanAgent.AI.Providers.ZAICodingCN
 import LeanAgent.Models
 
 namespace LeanAgent.AI.Providers.All
@@ -52,6 +63,17 @@ def catalogProviders : IO (Array LeanAgent.Models.Provider) := do
      , ← LeanAgent.AI.Providers.Cerebras.provider
      , ← LeanAgent.AI.Providers.Together.provider
      , ← LeanAgent.AI.Providers.Fireworks.provider
+     , ← LeanAgent.AI.Providers.AntLing.provider
+     , ← LeanAgent.AI.Providers.HuggingFace.provider
+     , ← LeanAgent.AI.Providers.MoonshotAI.provider
+     , ← LeanAgent.AI.Providers.MoonshotAICN.provider
+     , ← LeanAgent.AI.Providers.NVIDIA.provider
+     , ← LeanAgent.AI.Providers.Xiaomi.provider
+     , ← LeanAgent.AI.Providers.XiaomiTokenPlanAMS.provider
+     , ← LeanAgent.AI.Providers.XiaomiTokenPlanCN.provider
+     , ← LeanAgent.AI.Providers.XiaomiTokenPlanSGP.provider
+     , ← LeanAgent.AI.Providers.ZAI.provider
+     , ← LeanAgent.AI.Providers.ZAICodingCN.provider
      , ← LeanAgent.AI.Providers.Anthropic.provider
      , ← LeanAgent.AI.Providers.Google.provider
      , ← LeanAgent.AI.Providers.GoogleVertex.provider

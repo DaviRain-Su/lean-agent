@@ -101,6 +101,61 @@ def amazonBedrockAuthEnvs : Array String :=
    , "AWS_WEB_IDENTITY_TOKEN_FILE"
    ]
 
+def antLingProviderId : String := "ant-ling"
+def antLingApiKeyEnv : String := "ANT_LING_API_KEY"
+def antLingDefaultModel : String := "Ling-2.6-1T"
+def antLingBaseUrl : String := "https://api.ant-ling.com/v1"
+
+def huggingFaceProviderId : String := "huggingface"
+def huggingFaceApiKeyEnv : String := "HF_TOKEN"
+def huggingFaceDefaultModel : String := "MiniMaxAI/MiniMax-M2"
+def huggingFaceBaseUrl : String := "https://router.huggingface.co/v1"
+
+def moonshotAIProviderId : String := "moonshotai"
+def moonshotAIApiKeyEnv : String := "MOONSHOT_API_KEY"
+def moonshotAIDefaultModel : String := "kimi-k2-0711-preview"
+def moonshotAIBaseUrl : String := "https://api.moonshot.ai/v1"
+
+def moonshotAICNProviderId : String := "moonshotai-cn"
+def moonshotAICNApiKeyEnv : String := "MOONSHOT_API_KEY"
+def moonshotAICNDefaultModel : String := "kimi-k2-0711-preview"
+def moonshotAICNBaseUrl : String := "https://api.moonshot.cn/v1"
+
+def nvidiaProviderId : String := "nvidia"
+def nvidiaApiKeyEnv : String := "NVIDIA_API_KEY"
+def nvidiaDefaultModel : String := "meta/llama-3.1-70b-instruct"
+def nvidiaBaseUrl : String := "https://integrate.api.nvidia.com/v1"
+
+def xiaomiProviderId : String := "xiaomi"
+def xiaomiApiKeyEnv : String := "XIAOMI_API_KEY"
+def xiaomiDefaultModel : String := "mimo-v2-flash"
+def xiaomiBaseUrl : String := "https://api.xiaomimimo.com/v1"
+
+def xiaomiTokenPlanAMSProviderId : String := "xiaomi-token-plan-ams"
+def xiaomiTokenPlanAMSApiKeyEnv : String := "XIAOMI_TOKEN_PLAN_AMS_API_KEY"
+def xiaomiTokenPlanAMSDefaultModel : String := "mimo-v2-omni"
+def xiaomiTokenPlanAMSBaseUrl : String := "https://token-plan-ams.xiaomimimo.com/v1"
+
+def xiaomiTokenPlanCNProviderId : String := "xiaomi-token-plan-cn"
+def xiaomiTokenPlanCNApiKeyEnv : String := "XIAOMI_TOKEN_PLAN_CN_API_KEY"
+def xiaomiTokenPlanCNDefaultModel : String := "mimo-v2-omni"
+def xiaomiTokenPlanCNBaseUrl : String := "https://token-plan-cn.xiaomimimo.com/v1"
+
+def xiaomiTokenPlanSGPProviderId : String := "xiaomi-token-plan-sgp"
+def xiaomiTokenPlanSGPApiKeyEnv : String := "XIAOMI_TOKEN_PLAN_SGP_API_KEY"
+def xiaomiTokenPlanSGPDefaultModel : String := "mimo-v2-omni"
+def xiaomiTokenPlanSGPBaseUrl : String := "https://token-plan-sgp.xiaomimimo.com/v1"
+
+def zaiProviderId : String := "zai"
+def zaiApiKeyEnv : String := "ZAI_API_KEY"
+def zaiDefaultModel : String := "glm-4.5-air"
+def zaiBaseUrl : String := "https://api.z.ai/api/coding/paas/v4"
+
+def zaiCodingCNProviderId : String := "zai-coding-cn"
+def zaiCodingCNApiKeyEnv : String := "ZAI_CODING_CN_API_KEY"
+def zaiCodingCNDefaultModel : String := "glm-4.5-air"
+def zaiCodingCNBaseUrl : String := "https://open.bigmodel.cn/api/coding/paas/v4"
+
 structure ModelCompat where
   supportsStore : Bool := true
   supportsDeveloperRole : Bool := true
@@ -185,6 +240,28 @@ def cost (input output cacheRead cacheWrite : Float) : LeanAgent.AI.UsageCost :=
     output := output
     cacheRead := cacheRead
     cacheWrite := cacheWrite
+  }
+
+def catalogOpenAICompatibleModel
+    (providerId baseUrl id name : String)
+    (inputCost outputCost cacheReadCost cacheWriteCost : Float)
+    (contextWindow maxTokens : Nat)
+    (reasoning : Bool := false)
+    (compat : ModelCompat := {})
+    (thinkingLevelMap : Array LeanAgent.AI.ThinkingLevelMapEntry := #[])
+    (input : Array String := #["text"]) : ModelInfo :=
+  { id := id
+    name := name
+    provider := providerId
+    api := "openai-completions"
+    baseUrl := baseUrl
+    cost := cost inputCost outputCost cacheReadCost cacheWriteCost
+    contextWindow := contextWindow
+    maxTokens := maxTokens
+    reasoning := reasoning
+    compat := compat
+    thinkingLevelMap := thinkingLevelMap
+    input := input
   }
 
 def openAIModel
@@ -414,6 +491,207 @@ def fireworksGlm52 : ModelInfo :=
     reasoning := true
     compat := fireworksCompat
   }
+
+def antLingCompat : ModelCompat :=
+  { supportsStore := false
+    supportsDeveloperRole := false
+    thinkingFormat := some "ant-ling"
+  }
+
+def huggingFaceCompat : ModelCompat :=
+  { supportsDeveloperRole := false
+  }
+
+def moonshotAICompat : ModelCompat :=
+  { supportsStore := false
+    supportsDeveloperRole := false
+    thinkingFormat := some "deepseek"
+  }
+
+def nvidiaCompat : ModelCompat :=
+  { supportsStore := false
+    supportsDeveloperRole := false
+  }
+
+def xiaomiCompat : ModelCompat :=
+  { requiresReasoningContentOnAssistantMessages := true
+    thinkingFormat := some "deepseek"
+  }
+
+def zaiCompat : ModelCompat :=
+  { supportsStore := false
+    supportsDeveloperRole := false
+    thinkingFormat := some "zai"
+  }
+
+def antLingModels : Array ModelInfo :=
+  #[ catalogOpenAICompatibleModel antLingProviderId antLingBaseUrl "Ling-2.6-1T" "Ling 2.6 1T" 0.06 0.25 0.0 0.0 262144 65536 false antLingCompat #[] #["text"]
+   , catalogOpenAICompatibleModel antLingProviderId antLingBaseUrl "Ling-2.6-flash" "Ling 2.6 Flash" 0.01 0.02 0.0 0.0 262144 65536 false antLingCompat #[] #["text"]
+   , catalogOpenAICompatibleModel antLingProviderId antLingBaseUrl "Ring-2.6-1T" "Ring 2.6 1T" 0.06 0.25 0.0 0.0 262144 65536 true antLingCompat #[ { level := .off, mapped := none }
+   , { level := .level .minimal, mapped := none }
+   , { level := .level .low, mapped := none }
+   , { level := .level .medium, mapped := none }
+   , { level := .level .high, mapped := some "high" }
+   , { level := .level .xhigh, mapped := some "xhigh" }
+   ] #["text"]
+   ]
+
+def huggingFaceModels : Array ModelInfo :=
+  #[ catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "MiniMaxAI/MiniMax-M2" "MiniMax-M2" 0.3 1.2 0.0 0.0 204800 128000 true huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "MiniMaxAI/MiniMax-M2.1" "MiniMax-M2.1" 0.3 1.2 0.0 0.0 204800 131072 true huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "MiniMaxAI/MiniMax-M2.5" "MiniMax-M2.5" 0.3 1.2 0.03 0.0 204800 131072 true huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "MiniMaxAI/MiniMax-M2.7" "MiniMax-M2.7" 0.3 1.2 0.06 0.0 204800 131072 true huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "MiniMaxAI/MiniMax-M3" "MiniMax-M3" 0.3 1.2 0.0 0.0 524288 128000 true huggingFaceCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "Qwen/Qwen3-235B-A22B" "Qwen3 235B-A22B" 0.2 0.8 0.0 0.0 40960 16384 true huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "Qwen/Qwen3-235B-A22B-Thinking-2507" "Qwen3-235B-A22B-Thinking-2507" 0.3 3.0 0.0 0.0 262144 131072 true huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "Qwen/Qwen3-32B" "Qwen3 32B" 0.29 0.59 0.0 0.0 131072 16384 true huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "Qwen/Qwen3-Coder-30B-A3B-Instruct" "Qwen3-Coder 30B-A3B Instruct" 0.07 0.26 0.0 0.0 262144 65536 false huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "Qwen/Qwen3-Coder-480B-A35B-Instruct" "Qwen3-Coder-480B-A35B-Instruct" 2.0 2.0 0.0 0.0 262144 66536 false huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "Qwen/Qwen3-Coder-Next" "Qwen3-Coder-Next" 0.2 1.5 0.0 0.0 262144 65536 false huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "Qwen/Qwen3-Next-80B-A3B-Instruct" "Qwen3-Next-80B-A3B-Instruct" 0.25 1.0 0.0 0.0 262144 66536 false huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "Qwen/Qwen3-Next-80B-A3B-Thinking" "Qwen3-Next-80B-A3B-Thinking" 0.3 2.0 0.0 0.0 262144 131072 false huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "Qwen/Qwen3.5-122B-A10B" "Qwen3.5 122B-A10B" 0.4 3.2 0.0 0.0 262144 65536 true huggingFaceCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "Qwen/Qwen3.5-27B" "Qwen3.5 27B" 0.3 2.4 0.0 0.0 262144 65536 true huggingFaceCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "Qwen/Qwen3.5-35B-A3B" "Qwen3.5 35B-A3B" 0.25 2.0 0.0 0.0 262144 65536 true huggingFaceCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "Qwen/Qwen3.5-397B-A17B" "Qwen3.5-397B-A17B" 0.6 3.6 0.0 0.0 262144 32768 true huggingFaceCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "Qwen/Qwen3.5-9B" "Qwen3.5 9B" 0.17 0.25 0.0 0.0 262144 65536 true huggingFaceCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "Qwen/Qwen3.6-27B" "Qwen3.6 27B" 0.47 3.19 0.0 0.0 262144 65536 true huggingFaceCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "Qwen/Qwen3.6-35B-A3B" "Qwen3.6 35B-A3B" 0.15 0.95 0.0 0.0 262144 65536 true huggingFaceCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "XiaomiMiMo/MiMo-V2-Flash" "MiMo-V2-Flash" 0.1 0.3 0.0 0.0 262144 4096 true huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "XiaomiMiMo/MiMo-V2.5-Pro" "MiMo-V2.5-Pro" 1.0 3.0 0.0 0.0 1048576 131072 true huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "deepseek-ai/DeepSeek-R1" "DeepSeek-R1" 0.7 2.5 0.0 0.0 64000 32768 true huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "deepseek-ai/DeepSeek-R1-0528" "DeepSeek-R1-0528" 3.0 5.0 0.0 0.0 163840 163840 true huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "deepseek-ai/DeepSeek-V3.2" "DeepSeek-V3.2" 0.28 0.4 0.0 0.0 163840 65536 true huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "deepseek-ai/DeepSeek-V4-Flash" "DeepSeek V4 Flash" 0.14 0.28 0.0 0.0 1048576 384000 true huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "deepseek-ai/DeepSeek-V4-Pro" "DeepSeek V4 Pro" 0.435 0.87 0.003625 0.0 1048576 393216 true huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "google/gemma-4-26B-A4B-it" "Gemma 4 26B A4B IT" 0.13 0.4 0.0 0.0 262144 32768 true huggingFaceCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "google/gemma-4-31B-it" "Gemma 4 31B IT" 0.14 0.4 0.0 0.0 262144 32768 true huggingFaceCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "meta-llama/Llama-3.3-70B-Instruct" "Llama-3.3-70B-Instruct" 0.59 0.79 0.0 0.0 131072 4096 false huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "moonshotai/Kimi-K2-Instruct" "Kimi-K2-Instruct" 1.0 3.0 0.0 0.0 131072 16384 false huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "moonshotai/Kimi-K2-Instruct-0905" "Kimi-K2-Instruct-0905" 1.0 3.0 0.0 0.0 262144 16384 false huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "moonshotai/Kimi-K2-Thinking" "Kimi-K2-Thinking" 0.6 2.5 0.15 0.0 262144 262144 true huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "moonshotai/Kimi-K2.5" "Kimi-K2.5" 0.6 3.0 0.1 0.0 262144 262144 true huggingFaceCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "moonshotai/Kimi-K2.6" "Kimi-K2.6" 0.95 4.0 0.16 0.0 262144 262144 true huggingFaceCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "moonshotai/Kimi-K2.7-Code" "Kimi K2.7 Code" 0.95 4.0 0.0 0.0 262144 262144 true huggingFaceCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "stepfun-ai/Step-3.5-Flash" "Step 3.5 Flash" 0.1 0.3 0.0 0.0 262144 256000 true huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "stepfun-ai/Step-3.7-Flash" "Step 3.7 Flash" 0.2 1.15 0.0 0.0 262144 256000 true huggingFaceCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "zai-org/GLM-4.5" "GLM-4.5" 0.6 2.2 0.0 0.0 131072 98304 true huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "zai-org/GLM-4.5-Air" "GLM-4.5-Air" 0.13 0.85 0.0 0.0 131072 98304 true huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "zai-org/GLM-4.5V" "GLM-4.5V" 0.6 1.8 0.0 0.0 65536 16384 true huggingFaceCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "zai-org/GLM-4.6" "GLM-4.6" 0.55 2.2 0.0 0.0 204800 131072 true huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "zai-org/GLM-4.7" "GLM-4.7" 0.6 2.2 0.11 0.0 204800 131072 true huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "zai-org/GLM-4.7-Flash" "GLM-4.7-Flash" 0.0 0.0 0.0 0.0 200000 128000 true huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "zai-org/GLM-5" "GLM-5" 1.0 3.2 0.2 0.0 202752 131072 true huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "zai-org/GLM-5.1" "GLM-5.1" 1.0 3.2 0.2 0.0 202752 131072 true huggingFaceCompat #[] #["text"]
+   , catalogOpenAICompatibleModel huggingFaceProviderId huggingFaceBaseUrl "zai-org/GLM-5.2" "GLM-5.2" 1.4 4.4 0.0 0.0 262144 131072 true huggingFaceCompat #[] #["text"]
+   ]
+
+def moonshotAIModels : Array ModelInfo :=
+  #[ catalogOpenAICompatibleModel moonshotAIProviderId moonshotAIBaseUrl "kimi-k2-0711-preview" "Kimi K2 0711" 0.6 2.5 0.15 0.0 131072 16384 false moonshotAICompat #[] #["text"]
+   , catalogOpenAICompatibleModel moonshotAIProviderId moonshotAIBaseUrl "kimi-k2-0905-preview" "Kimi K2 0905" 0.6 2.5 0.15 0.0 262144 262144 false moonshotAICompat #[] #["text"]
+   , catalogOpenAICompatibleModel moonshotAIProviderId moonshotAIBaseUrl "kimi-k2-thinking" "Kimi K2 Thinking" 0.6 2.5 0.15 0.0 262144 262144 true moonshotAICompat #[] #["text"]
+   , catalogOpenAICompatibleModel moonshotAIProviderId moonshotAIBaseUrl "kimi-k2-thinking-turbo" "Kimi K2 Thinking Turbo" 1.15 8.0 0.15 0.0 262144 262144 true moonshotAICompat #[] #["text"]
+   , catalogOpenAICompatibleModel moonshotAIProviderId moonshotAIBaseUrl "kimi-k2-turbo-preview" "Kimi K2 Turbo" 2.4 10.0 0.6 0.0 262144 262144 false moonshotAICompat #[] #["text"]
+   , catalogOpenAICompatibleModel moonshotAIProviderId moonshotAIBaseUrl "kimi-k2.5" "Kimi K2.5" 0.6 3.0 0.1 0.0 262144 262144 true moonshotAICompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel moonshotAIProviderId moonshotAIBaseUrl "kimi-k2.6" "Kimi K2.6" 0.95 4.0 0.16 0.0 262144 262144 true moonshotAICompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel moonshotAIProviderId moonshotAIBaseUrl "kimi-k2.7-code" "Kimi K2.7 Code" 0.95 4.0 0.19 0.0 262144 262144 true moonshotAICompat #[{ level := .off, mapped := none }] #["text", "image"]
+   , catalogOpenAICompatibleModel moonshotAIProviderId moonshotAIBaseUrl "kimi-k2.7-code-highspeed" "Kimi K2.7 Code HighSpeed" 1.9 8.0 0.38 0.0 262144 262144 true moonshotAICompat #[{ level := .off, mapped := none }] #["text", "image"]
+   ]
+
+def moonshotAICNModels : Array ModelInfo :=
+  #[ catalogOpenAICompatibleModel moonshotAICNProviderId moonshotAICNBaseUrl "kimi-k2-0711-preview" "Kimi K2 0711" 0.6 2.5 0.15 0.0 131072 16384 false moonshotAICompat #[] #["text"]
+   , catalogOpenAICompatibleModel moonshotAICNProviderId moonshotAICNBaseUrl "kimi-k2-0905-preview" "Kimi K2 0905" 0.6 2.5 0.15 0.0 262144 262144 false moonshotAICompat #[] #["text"]
+   , catalogOpenAICompatibleModel moonshotAICNProviderId moonshotAICNBaseUrl "kimi-k2-thinking" "Kimi K2 Thinking" 0.6 2.5 0.15 0.0 262144 262144 true moonshotAICompat #[] #["text"]
+   , catalogOpenAICompatibleModel moonshotAICNProviderId moonshotAICNBaseUrl "kimi-k2-thinking-turbo" "Kimi K2 Thinking Turbo" 1.15 8.0 0.15 0.0 262144 262144 true moonshotAICompat #[] #["text"]
+   , catalogOpenAICompatibleModel moonshotAICNProviderId moonshotAICNBaseUrl "kimi-k2-turbo-preview" "Kimi K2 Turbo" 2.4 10.0 0.6 0.0 262144 262144 false moonshotAICompat #[] #["text"]
+   , catalogOpenAICompatibleModel moonshotAICNProviderId moonshotAICNBaseUrl "kimi-k2.5" "Kimi K2.5" 0.6 3.0 0.1 0.0 262144 262144 true moonshotAICompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel moonshotAICNProviderId moonshotAICNBaseUrl "kimi-k2.6" "Kimi K2.6" 0.95 4.0 0.16 0.0 262144 262144 true moonshotAICompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel moonshotAICNProviderId moonshotAICNBaseUrl "kimi-k2.7-code" "Kimi K2.7 Code" 0.95 4.0 0.19 0.0 262144 262144 true moonshotAICompat #[{ level := .off, mapped := none }] #["text", "image"]
+   , catalogOpenAICompatibleModel moonshotAICNProviderId moonshotAICNBaseUrl "kimi-k2.7-code-highspeed" "Kimi K2.7 Code HighSpeed" 1.9 8.0 0.38 0.0 262144 262144 true moonshotAICompat #[{ level := .off, mapped := none }] #["text", "image"]
+   ]
+
+def nvidiaModels : Array ModelInfo :=
+  #[ catalogOpenAICompatibleModel nvidiaProviderId nvidiaBaseUrl "meta/llama-3.1-70b-instruct" "Llama 3.1 70b Instruct" 0.0 0.0 0.0 0.0 128000 4096 false nvidiaCompat #[] #["text"]
+   , catalogOpenAICompatibleModel nvidiaProviderId nvidiaBaseUrl "meta/llama-3.1-8b-instruct" "Llama 3.1 8B Instruct" 0.0 0.0 0.0 0.0 16000 4096 false nvidiaCompat #[] #["text"]
+   , catalogOpenAICompatibleModel nvidiaProviderId nvidiaBaseUrl "meta/llama-3.2-11b-vision-instruct" "Llama 3.2 11b Vision Instruct" 0.0 0.0 0.0 0.0 128000 4096 false nvidiaCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel nvidiaProviderId nvidiaBaseUrl "meta/llama-3.2-90b-vision-instruct" "Llama-3.2-90B-Vision-Instruct" 0.0 0.0 0.0 0.0 128000 8192 false nvidiaCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel nvidiaProviderId nvidiaBaseUrl "meta/llama-3.3-70b-instruct" "Llama 3.3 70b Instruct" 0.0 0.0 0.0 0.0 128000 4096 false nvidiaCompat #[] #["text"]
+   , catalogOpenAICompatibleModel nvidiaProviderId nvidiaBaseUrl "mistralai/mistral-large-3-675b-instruct-2512" "Mistral Large 3 675B Instruct 2512" 0.0 0.0 0.0 0.0 262144 262144 false nvidiaCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel nvidiaProviderId nvidiaBaseUrl "mistralai/mistral-small-4-119b-2603" "mistral-small-4-119b-2603" 0.0 0.0 0.0 0.0 128000 8192 true nvidiaCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel nvidiaProviderId nvidiaBaseUrl "moonshotai/kimi-k2.6" "Kimi K2.6" 0.0 0.0 0.0 0.0 262144 262144 true nvidiaCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel nvidiaProviderId nvidiaBaseUrl "nvidia/nemotron-3-nano-30b-a3b" "nemotron-3-nano-30b-a3b" 0.0 0.0 0.0 0.0 131072 131072 true nvidiaCompat #[] #["text"]
+   , catalogOpenAICompatibleModel nvidiaProviderId nvidiaBaseUrl "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning" "Nemotron 3 Nano Omni" 0.0 0.0 0.0 0.0 256000 65536 true nvidiaCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel nvidiaProviderId nvidiaBaseUrl "nvidia/nemotron-3-super-120b-a12b" "Nemotron 3 Super" 0.2 0.8 0.0 0.0 262144 262144 true nvidiaCompat #[] #["text"]
+   , catalogOpenAICompatibleModel nvidiaProviderId nvidiaBaseUrl "nvidia/nemotron-3-ultra-550b-a55b" "Nemotron 3 Ultra 550B A55B" 0.5 2.5 0.15 0.0 1000000 65536 true nvidiaCompat #[] #["text"]
+   , catalogOpenAICompatibleModel nvidiaProviderId nvidiaBaseUrl "nvidia/nvidia-nemotron-nano-9b-v2" "nvidia-nemotron-nano-9b-v2" 0.0 0.0 0.0 0.0 131072 131072 true nvidiaCompat #[] #["text"]
+   , catalogOpenAICompatibleModel nvidiaProviderId nvidiaBaseUrl "openai/gpt-oss-120b" "GPT-OSS-120B" 0.0 0.0 0.0 0.0 128000 8192 true nvidiaCompat #[] #["text"]
+   , catalogOpenAICompatibleModel nvidiaProviderId nvidiaBaseUrl "openai/gpt-oss-20b" "GPT OSS 20B" 0.0 0.0 0.0 0.0 131072 32768 true nvidiaCompat #[] #["text"]
+   , catalogOpenAICompatibleModel nvidiaProviderId nvidiaBaseUrl "qwen/qwen3.5-122b-a10b" "Qwen3.5 122B-A10B" 0.0 0.0 0.0 0.0 262144 65536 true nvidiaCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel nvidiaProviderId nvidiaBaseUrl "stepfun-ai/step-3.5-flash" "Step 3.5 Flash" 0.0 0.0 0.0 0.0 256000 16384 true nvidiaCompat #[] #["text"]
+   , catalogOpenAICompatibleModel nvidiaProviderId nvidiaBaseUrl "stepfun-ai/step-3.7-flash" "Step 3.7 Flash" 0.0 0.0 0.0 0.0 256000 16384 true nvidiaCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel nvidiaProviderId nvidiaBaseUrl "z-ai/glm-5.1" "GLM-5.1" 0.0 0.0 0.0 0.0 131072 131072 true nvidiaCompat #[] #["text"]
+   ]
+
+def xiaomiModels : Array ModelInfo :=
+  #[ catalogOpenAICompatibleModel xiaomiProviderId xiaomiBaseUrl "mimo-v2-flash" "MiMo-V2-Flash" 0.1 0.3 0.01 0.0 262144 65536 true xiaomiCompat #[] #["text"]
+   , catalogOpenAICompatibleModel xiaomiProviderId xiaomiBaseUrl "mimo-v2-omni" "MiMo-V2-Omni" 0.4 2.0 0.08 0.0 262144 131072 true xiaomiCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel xiaomiProviderId xiaomiBaseUrl "mimo-v2-pro" "MiMo-V2-Pro" 1.0 3.0 0.2 0.0 1048576 131072 true xiaomiCompat #[] #["text"]
+   , catalogOpenAICompatibleModel xiaomiProviderId xiaomiBaseUrl "mimo-v2.5" "MiMo-V2.5" 0.4 2.0 0.08 0.0 1048576 131072 true xiaomiCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel xiaomiProviderId xiaomiBaseUrl "mimo-v2.5-pro" "MiMo-V2.5-Pro" 1.0 3.0 0.2 0.0 1048576 131072 true xiaomiCompat #[] #["text"]
+   , catalogOpenAICompatibleModel xiaomiProviderId xiaomiBaseUrl "mimo-v2.5-pro-ultraspeed" "MiMo-V2.5-Pro-UltraSpeed" 1.305 2.61 0.0108 0.0 1048576 131072 true xiaomiCompat #[] #["text"]
+   ]
+
+def xiaomiTokenPlanAMSModels : Array ModelInfo :=
+  #[ catalogOpenAICompatibleModel xiaomiTokenPlanAMSProviderId xiaomiTokenPlanAMSBaseUrl "mimo-v2-omni" "MiMo-V2-Omni" 0.4 2.0 0.08 0.0 262144 131072 true xiaomiCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel xiaomiTokenPlanAMSProviderId xiaomiTokenPlanAMSBaseUrl "mimo-v2-pro" "MiMo-V2-Pro" 1.0 3.0 0.2 0.0 1048576 131072 true xiaomiCompat #[] #["text"]
+   , catalogOpenAICompatibleModel xiaomiTokenPlanAMSProviderId xiaomiTokenPlanAMSBaseUrl "mimo-v2.5" "MiMo-V2.5" 0.4 2.0 0.08 0.0 1048576 131072 true xiaomiCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel xiaomiTokenPlanAMSProviderId xiaomiTokenPlanAMSBaseUrl "mimo-v2.5-pro" "MiMo-V2.5-Pro" 1.0 3.0 0.2 0.0 1048576 131072 true xiaomiCompat #[] #["text"]
+   , catalogOpenAICompatibleModel xiaomiTokenPlanAMSProviderId xiaomiTokenPlanAMSBaseUrl "mimo-v2.5-pro-ultraspeed" "MiMo-V2.5-Pro-UltraSpeed" 1.305 2.61 0.0108 0.0 1048576 131072 true xiaomiCompat #[] #["text"]
+   ]
+
+def xiaomiTokenPlanCNModels : Array ModelInfo :=
+  #[ catalogOpenAICompatibleModel xiaomiTokenPlanCNProviderId xiaomiTokenPlanCNBaseUrl "mimo-v2-omni" "MiMo-V2-Omni" 0.4 2.0 0.08 0.0 262144 131072 true xiaomiCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel xiaomiTokenPlanCNProviderId xiaomiTokenPlanCNBaseUrl "mimo-v2-pro" "MiMo-V2-Pro" 1.0 3.0 0.2 0.0 1048576 131072 true xiaomiCompat #[] #["text"]
+   , catalogOpenAICompatibleModel xiaomiTokenPlanCNProviderId xiaomiTokenPlanCNBaseUrl "mimo-v2.5" "MiMo-V2.5" 0.4 2.0 0.08 0.0 1048576 131072 true xiaomiCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel xiaomiTokenPlanCNProviderId xiaomiTokenPlanCNBaseUrl "mimo-v2.5-pro" "MiMo-V2.5-Pro" 1.0 3.0 0.2 0.0 1048576 131072 true xiaomiCompat #[] #["text"]
+   , catalogOpenAICompatibleModel xiaomiTokenPlanCNProviderId xiaomiTokenPlanCNBaseUrl "mimo-v2.5-pro-ultraspeed" "MiMo-V2.5-Pro-UltraSpeed" 1.305 2.61 0.0108 0.0 1048576 131072 true xiaomiCompat #[] #["text"]
+   ]
+
+def xiaomiTokenPlanSGPModels : Array ModelInfo :=
+  #[ catalogOpenAICompatibleModel xiaomiTokenPlanSGPProviderId xiaomiTokenPlanSGPBaseUrl "mimo-v2-omni" "MiMo-V2-Omni" 0.4 2.0 0.08 0.0 262144 131072 true xiaomiCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel xiaomiTokenPlanSGPProviderId xiaomiTokenPlanSGPBaseUrl "mimo-v2-pro" "MiMo-V2-Pro" 1.0 3.0 0.2 0.0 1048576 131072 true xiaomiCompat #[] #["text"]
+   , catalogOpenAICompatibleModel xiaomiTokenPlanSGPProviderId xiaomiTokenPlanSGPBaseUrl "mimo-v2.5" "MiMo-V2.5" 0.4 2.0 0.08 0.0 1048576 131072 true xiaomiCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel xiaomiTokenPlanSGPProviderId xiaomiTokenPlanSGPBaseUrl "mimo-v2.5-pro" "MiMo-V2.5-Pro" 1.0 3.0 0.2 0.0 1048576 131072 true xiaomiCompat #[] #["text"]
+   , catalogOpenAICompatibleModel xiaomiTokenPlanSGPProviderId xiaomiTokenPlanSGPBaseUrl "mimo-v2.5-pro-ultraspeed" "MiMo-V2.5-Pro-UltraSpeed" 1.305 2.61 0.0108 0.0 1048576 131072 true xiaomiCompat #[] #["text"]
+   ]
+
+def zaiModels : Array ModelInfo :=
+  #[ catalogOpenAICompatibleModel zaiProviderId zaiBaseUrl "glm-4.5-air" "GLM-4.5-Air" 0.0 0.0 0.0 0.0 131072 98304 true zaiCompat #[] #["text"]
+   , catalogOpenAICompatibleModel zaiProviderId zaiBaseUrl "glm-4.7" "GLM-4.7" 0.0 0.0 0.0 0.0 204800 131072 true zaiCompat #[] #["text"]
+   , catalogOpenAICompatibleModel zaiProviderId zaiBaseUrl "glm-5-turbo" "GLM-5-Turbo" 0.0 0.0 0.0 0.0 200000 131072 true zaiCompat #[] #["text"]
+   , catalogOpenAICompatibleModel zaiProviderId zaiBaseUrl "glm-5.1" "GLM-5.1" 0.0 0.0 0.0 0.0 200000 131072 true zaiCompat #[] #["text"]
+   , catalogOpenAICompatibleModel zaiProviderId zaiBaseUrl "glm-5.2" "GLM-5.2" 0.0 0.0 0.0 0.0 1000000 131072 true zaiCompat #[ { level := .level .minimal, mapped := none }
+   , { level := .level .low, mapped := some "high" }
+   , { level := .level .medium, mapped := some "high" }
+   , { level := .level .high, mapped := some "high" }
+   , { level := .level .xhigh, mapped := some "max" }
+   ] #["text"]
+   , catalogOpenAICompatibleModel zaiProviderId zaiBaseUrl "glm-5v-turbo" "GLM-5V-Turbo" 0.0 0.0 0.0 0.0 200000 131072 true zaiCompat #[] #["text", "image"]
+   ]
+
+def zaiCodingCNModels : Array ModelInfo :=
+  #[ catalogOpenAICompatibleModel zaiCodingCNProviderId zaiCodingCNBaseUrl "glm-4.5-air" "GLM-4.5-Air" 0.0 0.0 0.0 0.0 131072 98304 true zaiCompat #[] #["text"]
+   , catalogOpenAICompatibleModel zaiCodingCNProviderId zaiCodingCNBaseUrl "glm-4.7" "GLM-4.7" 0.0 0.0 0.0 0.0 204800 131072 true zaiCompat #[] #["text"]
+   , catalogOpenAICompatibleModel zaiCodingCNProviderId zaiCodingCNBaseUrl "glm-5-turbo" "GLM-5-Turbo" 0.0 0.0 0.0 0.0 200000 131072 true zaiCompat #[] #["text"]
+   , catalogOpenAICompatibleModel zaiCodingCNProviderId zaiCodingCNBaseUrl "glm-5.1" "GLM-5.1" 0.0 0.0 0.0 0.0 200000 131072 true zaiCompat #[] #["text"]
+   , catalogOpenAICompatibleModel zaiCodingCNProviderId zaiCodingCNBaseUrl "glm-5.2" "GLM-5.2" 0.0 0.0 0.0 0.0 1000000 131072 true zaiCompat #[ { level := .level .minimal, mapped := none }
+   , { level := .level .low, mapped := some "high" }
+   , { level := .level .medium, mapped := some "high" }
+   , { level := .level .high, mapped := some "high" }
+   , { level := .level .xhigh, mapped := some "max" }
+   ] #["text"]
+   , catalogOpenAICompatibleModel zaiCodingCNProviderId zaiCodingCNBaseUrl "glm-5v-turbo" "GLM-5V-Turbo" 0.0 0.0 0.0 0.0 200000 131072 true zaiCompat #[] #["text", "image"]
+   ]
 
 def anthropicSonnet45 : ModelInfo :=
   { id := anthropicDefaultModel
@@ -998,6 +1276,105 @@ def fireworksProviderInfo : ProviderInfo :=
     models := #[fireworksGlm52]
   }
 
+def antLingProviderInfo : ProviderInfo :=
+  { id := antLingProviderId
+    name := "Ant Ling"
+    baseUrl := antLingBaseUrl
+    apiKeyEnv := antLingApiKeyEnv
+    defaultModel := antLingDefaultModel
+    models := antLingModels
+  }
+
+def huggingFaceProviderInfo : ProviderInfo :=
+  { id := huggingFaceProviderId
+    name := "Hugging Face"
+    baseUrl := huggingFaceBaseUrl
+    apiKeyEnv := huggingFaceApiKeyEnv
+    defaultModel := huggingFaceDefaultModel
+    models := huggingFaceModels
+  }
+
+def moonshotAIProviderInfo : ProviderInfo :=
+  { id := moonshotAIProviderId
+    name := "Moonshot AI"
+    baseUrl := moonshotAIBaseUrl
+    apiKeyEnv := moonshotAIApiKeyEnv
+    defaultModel := moonshotAIDefaultModel
+    models := moonshotAIModels
+  }
+
+def moonshotAICNProviderInfo : ProviderInfo :=
+  { id := moonshotAICNProviderId
+    name := "Moonshot AI CN"
+    baseUrl := moonshotAICNBaseUrl
+    apiKeyEnv := moonshotAICNApiKeyEnv
+    defaultModel := moonshotAICNDefaultModel
+    models := moonshotAICNModels
+  }
+
+def nvidiaProviderInfo : ProviderInfo :=
+  { id := nvidiaProviderId
+    name := "NVIDIA"
+    baseUrl := nvidiaBaseUrl
+    apiKeyEnv := nvidiaApiKeyEnv
+    defaultModel := nvidiaDefaultModel
+    models := nvidiaModels
+  }
+
+def xiaomiProviderInfo : ProviderInfo :=
+  { id := xiaomiProviderId
+    name := "Xiaomi"
+    baseUrl := xiaomiBaseUrl
+    apiKeyEnv := xiaomiApiKeyEnv
+    defaultModel := xiaomiDefaultModel
+    models := xiaomiModels
+  }
+
+def xiaomiTokenPlanAMSProviderInfo : ProviderInfo :=
+  { id := xiaomiTokenPlanAMSProviderId
+    name := "Xiaomi Token Plan AMS"
+    baseUrl := xiaomiTokenPlanAMSBaseUrl
+    apiKeyEnv := xiaomiTokenPlanAMSApiKeyEnv
+    defaultModel := xiaomiTokenPlanAMSDefaultModel
+    models := xiaomiTokenPlanAMSModels
+  }
+
+def xiaomiTokenPlanCNProviderInfo : ProviderInfo :=
+  { id := xiaomiTokenPlanCNProviderId
+    name := "Xiaomi Token Plan CN"
+    baseUrl := xiaomiTokenPlanCNBaseUrl
+    apiKeyEnv := xiaomiTokenPlanCNApiKeyEnv
+    defaultModel := xiaomiTokenPlanCNDefaultModel
+    models := xiaomiTokenPlanCNModels
+  }
+
+def xiaomiTokenPlanSGPProviderInfo : ProviderInfo :=
+  { id := xiaomiTokenPlanSGPProviderId
+    name := "Xiaomi Token Plan SGP"
+    baseUrl := xiaomiTokenPlanSGPBaseUrl
+    apiKeyEnv := xiaomiTokenPlanSGPApiKeyEnv
+    defaultModel := xiaomiTokenPlanSGPDefaultModel
+    models := xiaomiTokenPlanSGPModels
+  }
+
+def zaiProviderInfo : ProviderInfo :=
+  { id := zaiProviderId
+    name := "Z.AI"
+    baseUrl := zaiBaseUrl
+    apiKeyEnv := zaiApiKeyEnv
+    defaultModel := zaiDefaultModel
+    models := zaiModels
+  }
+
+def zaiCodingCNProviderInfo : ProviderInfo :=
+  { id := zaiCodingCNProviderId
+    name := "Z.AI Coding CN"
+    baseUrl := zaiCodingCNBaseUrl
+    apiKeyEnv := zaiCodingCNApiKeyEnv
+    defaultModel := zaiCodingCNDefaultModel
+    models := zaiCodingCNModels
+  }
+
 def anthropicProviderInfo : ProviderInfo :=
   { id := anthropicProviderId
     name := "Anthropic"
@@ -1057,10 +1434,21 @@ def defaultCatalog : ProviderCatalog :=
      , azureOpenAIResponsesProviderInfo
      , openRouterProviderInfo
      , groqProviderInfo
-       , xaiProviderInfo
-       , cerebrasProviderInfo
-       , togetherProviderInfo
-       , fireworksProviderInfo
+     , xaiProviderInfo
+     , cerebrasProviderInfo
+     , togetherProviderInfo
+     , fireworksProviderInfo
+     , antLingProviderInfo
+     , huggingFaceProviderInfo
+     , moonshotAIProviderInfo
+     , moonshotAICNProviderInfo
+     , nvidiaProviderInfo
+     , xiaomiProviderInfo
+     , xiaomiTokenPlanAMSProviderInfo
+     , xiaomiTokenPlanCNProviderInfo
+     , xiaomiTokenPlanSGPProviderInfo
+     , zaiProviderInfo
+     , zaiCodingCNProviderInfo
      , anthropicProviderInfo
      , googleProviderInfo
      , googleVertexProviderInfo
