@@ -225,6 +225,66 @@ def testModelCatalogDeepSeekDefaults : IO Unit := do
   let rendered := LeanAgent.Models.renderCatalog catalog
   assertTrue (rendered.contains "deepseek/deepseek-v4-pro") "expected rendered DeepSeek pro model"
 
+def testAIContentBlockJsonRoundTrip : IO Unit := do
+  let block : LeanAgent.AI.ContentBlock :=
+    .toolCall
+      { id := "call-1"
+        name := "read"
+        arguments := LeanAgent.Json.obj [("path", LeanAgent.Json.str "README.md")]
+      }
+  match LeanAgent.AI.contentBlockFromJson (LeanAgent.AI.contentBlockToJson block) with
+  | .ok parsed =>
+      match parsed with
+      | .toolCall call =>
+          assertTrue (call.id == "call-1") "expected tool call id"
+          assertTrue (call.name == "read") "expected tool call name"
+      | _ => fail "expected tool call block"
+  | .error err => fail s!"content block round-trip failed: {err}"
+
+def testAIMessageJsonRoundTrip : IO Unit := do
+  let usage : LeanAgent.AI.Usage :=
+    { input := 11
+      output := 7
+      cacheRead := 3
+      cacheWrite := 2
+      totalTokens := 20
+      cost := { input := 0.1, output := 0.2, cacheRead := 0.03, cacheWrite := 0.04, total := 0.37 }
+    }
+  let message : LeanAgent.AI.Message :=
+    .assistant
+      { content := #[LeanAgent.AI.text "hello", LeanAgent.AI.thinking "scratch"]
+        api := "openai-completions"
+        provider := "deepseek"
+        model := "deepseek-v4-flash"
+        usage := usage
+        stopReason := .stop
+        timestamp := 123
+      }
+  match LeanAgent.AI.messageFromJson (LeanAgent.AI.messageToJson message) with
+  | .ok (.assistant parsed) =>
+      assertTrue (parsed.provider == "deepseek") "expected provider to round-trip"
+      assertTrue (parsed.usage.totalTokens == 20) "expected usage to round-trip"
+      assertTrue (LeanAgent.AI.contentPlainText parsed.content == "hello\nscratch") "expected text content"
+  | .ok _ => fail "expected assistant message"
+  | .error err => fail s!"message round-trip failed: {err}"
+
+def testAIMessageLegacyConversion : IO Unit := do
+  let legacy : AgentMessage :=
+    .assistant
+      "need file"
+      #[{ id := "call-read", name := "read", arguments := LeanAgent.Json.obj [("path", LeanAgent.Json.str "README.md")] }]
+  let ai := LeanAgent.AI.fromLegacyMessage "openai-completions" "deepseek" "deepseek-v4-flash" 42 legacy
+  match ai with
+  | .assistant message =>
+      assertTrue (message.stopReason == .toolUse) "expected toolUse stop reason for assistant with tool calls"
+      assertTrue ((LeanAgent.AI.contentToolCalls message.content).size == 1) "expected one tool call"
+  | _ => fail "expected assistant conversion"
+  match LeanAgent.AI.toLegacyMessage ai with
+  | .assistant content calls =>
+      assertTrue (content == "need file") "expected assistant text to convert back"
+      assertTrue (calls.size == 1) "expected tool call to convert back"
+  | _ => fail "expected legacy assistant"
+
 def continueProvider : ModelProvider :=
   { complete := fun _ => pure { content := "continued", toolCalls := #[] } }
 
@@ -410,6 +470,9 @@ def main : IO UInt32 := do
     testSessionJsonlRoundTrip
     testOpenAIAssistantOmitsEmptyToolCalls
     testModelCatalogDeepSeekDefaults
+    testAIContentBlockJsonRoundTrip
+    testAIMessageJsonRoundTrip
+    testAIMessageLegacyConversion
     testAgentSessionCreateAndContinue
     testAgentSessionRejectsAssistantContinue
     testJsonEventShape

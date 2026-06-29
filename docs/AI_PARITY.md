@@ -26,8 +26,8 @@ Every row must move through this ledger before it is considered complete.
 | OpenAI-compatible chat completions | `LeanAgent.OpenAI` | partial | Non-streaming Chat Completions with tool calls exists. No streaming events, prompt cache, reasoning details, images, retries, or Responses API. |
 | Static model catalog | `LeanAgent.Models` | partial | DeepSeek and OpenAI fallback only. No generated full catalog or dynamic refresh. |
 | Provider/model collection | `LeanAgent.Models` | partial | Static lookup only. No `Models` runtime collection, auth application, or mixed API dispatch. |
-| Agent-facing messages | `LeanAgent.Core` | partial | Simplified user/assistant/toolResult strings. Missing Pi content blocks, usage, image content, thinking, stop reasons, diagnostics. |
-| Images | none | missing | No image input or image generation API. |
+| Agent-facing messages | `LeanAgent.Core`, `LeanAgent.AI.Types` | partial | Pi-style message/content/usage types and legacy conversions exist. Runtime still uses simplified `Core.AgentMessage`. Diagnostics are missing. |
+| Images | `LeanAgent.AI.Types` | partial | Image content types exist. Image generation APIs and image model catalog are missing. |
 | OAuth/auth store | none | missing | Env lookup exists in CLI only, not Pi-style auth resolution. |
 | Compat/global API registry | none | missing | No `compat` registry or legacy global entrypoint. |
 
@@ -67,7 +67,7 @@ Before starting OMP advanced work:
 | `src/cli.ts` | future `lean-agent ai ...` commands | missing | Not needed for core loop yet. |
 | `src/models.ts` | `LeanAgent.Models` | partial | Static catalog only. Runtime `Models` collection missing. |
 | `src/models.generated.ts` | generated Lean catalog or checked-in catalog | missing | Current catalog has only DeepSeek and OpenAI fallback. |
-| `src/types.ts` | `LeanAgent.AI.Types` | missing | Current `Core` types are too simplified. |
+| `src/types.ts` | `LeanAgent.AI.Types` | partial | Core content/message/usage/stream-option types exist. Provider-specific compat and full stream runtime still missing. |
 | `src/env-api-keys.ts` | `LeanAgent.AI.Auth.Env` | missing | Env lookup is still in CLI. |
 | `src/session-resources.ts` | `LeanAgent.AI.SessionResources` | missing | Needed for cross-provider handoff and session resources. |
 | `src/legacy-api-aliases.ts` | `LeanAgent.AI.Compat.Aliases` | missing | Needed only when compat API is implemented. |
@@ -86,15 +86,15 @@ before expanding provider behavior.
 
 | Contract | Lean target | Status | Notes |
 | --- | --- | --- | --- |
-| API/provider identifiers | `LeanAgent.AI.Types` | partial | String ids exist in `Models`, not as a central AI type. |
-| Text/image content blocks | `LeanAgent.AI.Types` | missing | Required for image inputs and tool-result images. |
-| User/assistant/tool result messages | `LeanAgent.AI.Types` | partial | `Core.AgentMessage` is string-only and lacks timestamps/usage/content arrays. |
+| API/provider identifiers | `LeanAgent.AI.Types` | implemented | Central string aliases exist for text and image APIs/providers. |
+| Text/image content blocks | `LeanAgent.AI.Types` | implemented | Text, thinking, image, and tool-call content blocks exist with JSON helpers. |
+| User/assistant/tool result messages | `LeanAgent.AI.Types` | partial | Pi-style messages exist with JSON helpers. Runtime migration from `Core.AgentMessage` is not complete. |
 | Tool schema and tool call content | `LeanAgent.AI.Types` | partial | Tool call exists, but schema validation/typebox parity is missing. |
-| Assistant stream events | `LeanAgent.AI.EventStream` | missing | Required to match Pi streaming contract. |
-| Usage and cost | `LeanAgent.AI.Types`, `LeanAgent.AI.Usage` | missing | No token/cost accounting. |
-| Stop reasons and errors | `LeanAgent.AI.Types` | partial | Only finish reason string exists on provider response. |
-| Thinking/reasoning levels | `LeanAgent.AI.Types` | partial | Model metadata has reasoning bool only. |
-| Simple stream options | `LeanAgent.AI.Types` | missing | Need max tokens, temperature, cache retention, headers, retry limits, session id. |
+| Assistant stream events | `LeanAgent.AI.Types` | partial | Event data types exist. Stream/result abstraction is still M2. |
+| Usage and cost | `LeanAgent.AI.Types` | partial | Usage/cost types and JSON helpers exist. Token accounting is not wired into providers. |
+| Stop reasons and errors | `LeanAgent.AI.Types` | partial | Stop reason types exist. Provider error diagnostics still missing. |
+| Thinking/reasoning levels | `LeanAgent.AI.Types` | partial | Thinking level types exist. Model thinking-level maps/helpers still missing. |
+| Simple stream options | `LeanAgent.AI.Types` | partial | Core option fields exist. Callback/abort semantics and provider-specific options are missing. |
 
 ## Models Runtime
 
@@ -253,9 +253,9 @@ Initial Lean parity should port tests in this order:
 
 Deliver:
 
-- `LeanAgent.AI.Types` for content blocks, messages, tools, usage, stop reasons, stream options.
-- Migration path from old `LeanAgent.Core.AgentMessage` to AI message types.
-- Tests for serialization and basic content filtering.
+- `LeanAgent.AI.Types` for content blocks, messages, tools, usage, stop reasons, stream options. Status: partial.
+- Migration path from old `LeanAgent.Core.AgentMessage` to AI message types. Status: partial.
+- Tests for serialization and basic content filtering. Status: partial.
 
 Exit criteria:
 

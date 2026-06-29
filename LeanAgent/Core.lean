@@ -15,6 +15,11 @@ structure AgentToolResult where
   data : Option Lean.Json := none
   error : Option String := none
 
+/--
+Legacy message shape used by the current agent loop and session JSONL format.
+Pi-compatible AI code should use `LeanAgent.AI.Message`; conversion helpers live
+in `LeanAgent.AI.Types` while the runtime migration is staged.
+-/
 inductive AgentMessage where
   | user (content : String)
   | assistant (content : String) (toolCalls : Array ToolCall)

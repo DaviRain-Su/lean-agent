@@ -1,3 +1,4 @@
+import LeanAgent.AI.Types
 import LeanAgent.CodingTools
 import LeanAgent.Core
 import LeanAgent.Http
