@@ -816,6 +816,212 @@ def testOpenAIResponsesSharedConvertsTools : IO Unit := do
       assertTrue (LeanAgent.Json.optVal? encoded "strict" == some (LeanAgent.Json.bool true)) "expected strict flag"
   | none => fail "expected encoded tool"
 
+def anthropicModelRef : LeanAgent.AI.ModelRef :=
+  { id := LeanAgent.Models.anthropicDefaultModel
+    api := LeanAgent.AI.Api.AnthropicMessages.api
+    provider := LeanAgent.Models.anthropicProviderId
+    baseUrl := some LeanAgent.Models.anthropicBaseUrl
+  }
+
+def jsonArrayField? (json : Lean.Json) (key : String) : Option (Array Lean.Json) :=
+  match LeanAgent.Json.optVal? json key with
+  | some value =>
+      match value.getArr? with
+      | .ok arr => some arr
+      | .error _ => none
+  | none => none
+
+def testAnthropicMessagesRequestPayload : IO Unit := do
+  let assistant : LeanAgent.AI.AssistantMessage :=
+    { content :=
+        #[ .toolCall
+            { id := "call/read|item"
+              name := "read"
+              arguments := LeanAgent.Json.obj [("path", LeanAgent.Json.str "README.md")]
+            }
+         ]
+      api := "openai-responses"
+      provider := "openai"
+      model := "gpt-5"
+      stopReason := .toolUse
+      timestamp := 2
+    }
+  let context : LeanAgent.AI.Context :=
+    { systemPrompt := some "Be precise."
+      messages :=
+        #[ .user
+            { content :=
+                #[ LeanAgent.AI.text "hello"
+                 , LeanAgent.AI.image "aGVsbG8=" "image/png"
+                 ]
+              timestamp := 1
+            }
+         , .assistant assistant
+         , .toolResult
+            { toolCallId := "call/read|item"
+              toolName := "read"
+              content := #[LeanAgent.AI.text "file contents"]
+              isError := false
+              timestamp := 3
+            }
+         ]
+      tools :=
+        #[ { name := "read"
+             description := "Read a file"
+             parameters :=
+              LeanAgent.Json.obj
+                [ ("type", LeanAgent.Json.str "object")
+                , ("properties", LeanAgent.Json.obj [("path", LeanAgent.Json.obj [("type", LeanAgent.Json.str "string")])])
+                , ("required", LeanAgent.Json.arr #[LeanAgent.Json.str "path"])
+                ]
+           }
+         ]
+    }
+  let payload := LeanAgent.AI.Api.AnthropicMessages.requestToJsonWithOptions
+    anthropicModelRef
+    #["text", "image"]
+    64000
+    true
+    context
+    { maxTokens := some 123
+      temperature := some 0.2
+      thinkingEnabled := some true
+      thinkingBudgetTokens := some 2048
+      toolChoice := some .any
+      metadata := some (LeanAgent.Json.obj [("user_id", LeanAgent.Json.str "user-1")])
+    }
+  assertTrue (jsonStringField? payload "model" == some LeanAgent.Models.anthropicDefaultModel)
+    "expected Anthropic model id"
+  assertTrue (LeanAgent.Json.optVal? payload "stream" == some (LeanAgent.Json.bool false))
+    "expected non-stream Anthropic payload"
+  assertTrue (LeanAgent.Json.optVal? payload "max_tokens" == some (LeanAgent.Json.nat 123))
+    "expected Anthropic max tokens"
+  match jsonArrayField? payload "system" with
+  | some system =>
+      match system[0]? with
+      | some block => assertTrue (jsonStringField? block "text" == some "Be precise.") "expected system text"
+      | none => fail "expected system block"
+  | none => fail "expected Anthropic system array"
+  match LeanAgent.Json.optVal? payload "thinking" with
+  | some thinking =>
+      assertTrue (jsonStringField? thinking "type" == some "enabled") "expected enabled thinking"
+      assertTrue (LeanAgent.Json.optVal? thinking "budget_tokens" == some (LeanAgent.Json.nat 2048))
+        "expected thinking budget"
+  | none => fail "expected thinking object"
+  match jsonArrayField? payload "messages" with
+  | some messages =>
+      assertTrue (messages.size == 3) "expected user, assistant, tool-result messages"
+      match messages[1]? with
+      | some assistantMessage =>
+          match jsonArrayField? assistantMessage "content" with
+          | some content =>
+              match content[0]? with
+              | some toolUse =>
+                  assertTrue (jsonStringField? toolUse "type" == some "tool_use") "expected Anthropic tool_use"
+                  assertTrue (jsonStringField? toolUse "id" == some "call_read_item")
+                    "expected normalized tool id"
+              | none => fail "expected tool_use content"
+          | none => fail "expected assistant content"
+      | none => fail "expected assistant message"
+      match messages[2]? with
+      | some toolMessage =>
+          match jsonArrayField? toolMessage "content" with
+          | some content =>
+              match content[0]? with
+              | some toolResult =>
+                  assertTrue (jsonStringField? toolResult "type" == some "tool_result")
+                    "expected Anthropic tool_result"
+                  assertTrue (jsonStringField? toolResult "tool_use_id" == some "call_read_item")
+                    "expected normalized tool result id"
+              | none => fail "expected tool_result content"
+          | none => fail "expected tool result content array"
+      | none => fail "expected tool result message"
+  | none => fail "expected Anthropic messages array"
+  match jsonArrayField? payload "tools" with
+  | some tools =>
+      match tools[0]? with
+      | some tool => assertTrue (jsonStringField? tool "name" == some "read") "expected Anthropic tool"
+      | none => fail "expected Anthropic tool"
+  | none => fail "expected Anthropic tools"
+  match LeanAgent.Json.optVal? payload "tool_choice" with
+  | some toolChoice => assertTrue (jsonStringField? toolChoice "type" == some "any") "expected tool choice"
+  | none => fail "expected Anthropic tool choice"
+  match LeanAgent.Json.optVal? payload "metadata" with
+  | some metadata => assertTrue (jsonStringField? metadata "user_id" == some "user-1") "expected metadata user_id"
+  | none => fail "expected metadata"
+
+def testAnthropicMessagesHeaders : IO Unit := do
+  let headers := LeanAgent.AI.Api.AnthropicMessages.requestHeaders
+    { apiKey := "anthropic-key"
+      headers := #[("X-Custom", "custom")]
+    }
+    { headers := #[("x-api-key", some "override-key")] }
+  assertTrue (headerValueCaseInsensitive? headers "x-api-key" == some "override-key")
+    "expected request header to override Anthropic key header"
+  assertTrue (headerValueCaseInsensitive? headers "anthropic-version" == some LeanAgent.AI.Api.AnthropicMessages.anthropicVersion)
+    "expected Anthropic version header"
+  assertTrue (headerValueCaseInsensitive? headers "X-Custom" == some "custom")
+    "expected custom config header"
+  let headerAuthOnly := LeanAgent.AI.Api.AnthropicMessages.requestHeaders
+    { apiKey := "" }
+    { headers := #[("Authorization", some "Bearer external")] }
+  assertTrue (headerValueCaseInsensitive? headerAuthOnly "x-api-key" == none)
+    "expected empty Anthropic api key to omit x-api-key"
+  assertTrue (headerValueCaseInsensitive? headerAuthOnly "authorization" == some "Bearer external")
+    "expected caller-owned authorization header"
+  let oauthHeaders := LeanAgent.AI.Api.AnthropicMessages.requestHeaders
+    { apiKey := "sk-ant-oat-token" }
+    {}
+  assertTrue (headerValueCaseInsensitive? oauthHeaders "authorization" == some "Bearer sk-ant-oat-token")
+    "expected OAuth token bearer auth"
+  assertTrue (headerValueCaseInsensitive? oauthHeaders "x-api-key" == none)
+    "expected OAuth token not to use x-api-key"
+  assertTrue
+    (headerValueCaseInsensitive? oauthHeaders "anthropic-beta" == some "claude-code-20250219,oauth-2025-04-20")
+    "expected OAuth beta headers"
+
+def testAnthropicMessagesParsesResponse : IO Unit := do
+  let raw :=
+    "{ \"id\":\"msg_1\", \"model\":\"claude-sonnet-4-5\", \"stop_reason\":\"tool_use\", \"content\":[" ++
+    "{\"type\":\"thinking\",\"thinking\":\"think\",\"signature\":\"sig\"}," ++
+    "{\"type\":\"text\",\"text\":\"hello\"}," ++
+    "{\"type\":\"tool_use\",\"id\":\"tool_1\",\"name\":\"read\",\"input\":{\"path\":\"README.md\"}}" ++
+    "], \"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"cache_read_input_tokens\":2,\"cache_creation_input_tokens\":3,\"cache_creation\":{\"ephemeral_1h_input_tokens\":1},\"output_tokens_details\":{\"thinking_tokens\":4}} }"
+  match LeanAgent.AI.Api.AnthropicMessages.parseResponse
+      LeanAgent.AI.Api.AnthropicMessages.api
+      LeanAgent.Models.anthropicProviderId
+      LeanAgent.Models.anthropicDefaultModel
+      7
+      raw with
+  | .ok response =>
+      assertTrue (response.responseId == some "msg_1") "expected Anthropic response id"
+      assertTrue (response.stopReason == .toolUse) "expected Anthropic tool-use stop"
+      assertTrue (response.usage.input == 10) "expected Anthropic input tokens"
+      assertTrue (response.usage.output == 5) "expected Anthropic output tokens"
+      assertTrue (response.usage.cacheRead == 2) "expected Anthropic cache read"
+      assertTrue (response.usage.cacheWrite == 3) "expected Anthropic cache write"
+      assertTrue (response.usage.cacheWrite1h == some 1) "expected Anthropic 1h cache write"
+      assertTrue (response.usage.reasoning == some 4) "expected Anthropic thinking tokens"
+      assertTrue (response.usage.totalTokens == 20) "expected Anthropic total tokens"
+      assertTrue
+        (response.content.any fun
+          | .thinking thinking => thinking.thinking == "think" && thinking.thinkingSignature == some "sig"
+          | _ => false)
+        "expected Anthropic thinking block"
+      assertTrue
+        (response.content.any fun
+          | .text text => text.text == "hello"
+          | _ => false)
+        "expected Anthropic text block"
+      match LeanAgent.AI.contentToolCalls response.content |>.toList with
+      | [call] =>
+          assertTrue (call.id == "tool_1") "expected Anthropic tool id"
+          assertTrue (call.name == "read") "expected Anthropic tool name"
+          assertTrue (LeanAgent.Json.optVal? call.arguments "path" == some (LeanAgent.Json.str "README.md"))
+            "expected Anthropic tool input"
+      | _ => fail "expected one Anthropic tool call"
+  | .error err => fail s!"expected Anthropic parse success: {err}"
+
 def testGitHubCopilotDynamicHeaders : IO Unit := do
   let userOnly : Array LeanAgent.AI.Message :=
     #[.user { content := #[LeanAgent.AI.text "hi"], timestamp := 1 }]
@@ -1705,6 +1911,7 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
      , LeanAgent.Models.cerebrasProviderId
      , LeanAgent.Models.togetherProviderId
      , LeanAgent.Models.fireworksProviderId
+     , LeanAgent.Models.anthropicProviderId
      ]
   for providerId in expectedProviders do
     match LeanAgent.Models.ProviderCatalog.provider? catalog providerId with
@@ -1718,11 +1925,16 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
   let rendered := LeanAgent.Models.renderCatalog catalog
   assertTrue (rendered.contains "openrouter/openai/gpt-oss-120b") "expected OpenRouter model"
   assertTrue (rendered.contains "fireworks/accounts/fireworks/models/glm-5p2") "expected Fireworks OpenAI-compatible model"
+  assertTrue (rendered.contains "anthropic/claude-sonnet-4-5") "expected Anthropic model"
+  match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.anthropicOAuthTokenEnv with
+  | some provider =>
+      assertTrue (provider.id == LeanAgent.Models.anthropicProviderId) "expected Anthropic OAuth token env"
+  | none => fail "expected Anthropic OAuth token env"
 
 def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
   let collection ← LeanAgent.Models.createDefaultModels
   let providers ← collection.getProviders
-  assertTrue (providers.size == 8) "expected default provider family"
+  assertTrue (providers.size == 9) "expected default provider family"
   match ← collection.getModel? LeanAgent.Models.openRouterProviderId LeanAgent.Models.openRouterDefaultModel with
   | some model =>
       assertTrue (model.api == "openai-completions") "expected OpenRouter OpenAI-compatible API"
@@ -1732,6 +1944,11 @@ def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
   | some model =>
       assertTrue (model.baseUrl == LeanAgent.Models.fireworksBaseUrl) "expected Fireworks OpenAI-compatible base URL"
   | none => fail "expected Fireworks model in default runtime collection"
+  match ← collection.getModel? LeanAgent.Models.anthropicProviderId LeanAgent.Models.anthropicDefaultModel with
+  | some model =>
+      assertTrue (model.api == LeanAgent.AI.Api.AnthropicMessages.api) "expected Anthropic Messages API"
+      assertTrue model.reasoning "expected Anthropic reasoning metadata"
+  | none => fail "expected Anthropic model in default runtime collection"
 
 def assertProviderFactoryMatchesInfo (mkProvider : IO LeanAgent.Models.Provider)
     (info : LeanAgent.Models.ProviderInfo) : IO Unit := do
@@ -1764,6 +1981,14 @@ def testOpenAICompatibleProviderFactoriesMatchCatalog : IO Unit := do
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Cerebras.provider LeanAgent.Models.cerebrasProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Together.provider LeanAgent.Models.togetherProviderInfo
   assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Fireworks.provider LeanAgent.Models.fireworksProviderInfo
+  assertProviderFactoryMatchesInfo LeanAgent.AI.Providers.Anthropic.provider LeanAgent.Models.anthropicProviderInfo
+
+def testLegacySelectionRejectsAnthropicProvider : IO Unit := do
+  match ← LeanAgent.Models.resolveSelection { apiKeyEnv := some LeanAgent.Models.anthropicApiKeyEnv } with
+  | .ok _ => fail "expected legacy CLI selection to reject Anthropic"
+  | .error err =>
+      assertTrue (err.contains "legacy CLI path currently supports only openai-completions")
+        "expected unsupported provider API error"
 
 def fakeAuthContext : LeanAgent.AI.Auth.AuthContext :=
   { env := fun name =>
@@ -2549,6 +2774,8 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
   let providerIds := LeanAgent.AI.Providers.All.getBuiltinProviders
   assertTrue (providerIds.contains LeanAgent.Models.deepSeekProviderId)
     "expected all providers to include DeepSeek catalog provider"
+  assertTrue (providerIds.contains LeanAgent.Models.anthropicProviderId)
+    "expected all providers to include Anthropic catalog provider"
   assertTrue (providerIds.contains LeanAgent.AI.Providers.CloudflareWorkersAI.providerId)
     "expected all providers to include Cloudflare Workers AI"
   assertTrue (providerIds.contains LeanAgent.AI.Providers.CloudflareAIGateway.providerId)
@@ -2560,6 +2787,12 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
       assertTrue (model.provider == LeanAgent.Models.deepSeekProviderId) "expected DeepSeek builtin model"
   | none => fail "expected DeepSeek builtin model lookup"
   match LeanAgent.AI.Providers.All.getBuiltinModel?
+    LeanAgent.Models.anthropicProviderId
+    LeanAgent.Models.anthropicDefaultModel with
+  | some model =>
+      assertTrue (model.api == LeanAgent.AI.Api.AnthropicMessages.api) "expected Anthropic builtin model"
+  | none => fail "expected Anthropic builtin model lookup"
+  match LeanAgent.AI.Providers.All.getBuiltinModel?
     LeanAgent.AI.Providers.CloudflareAIGateway.providerId
     "gpt-4o-mini" with
   | some model =>
@@ -2567,7 +2800,7 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
   | none => fail "expected Cloudflare AI Gateway builtin model lookup"
   let collection ← LeanAgent.AI.Providers.All.builtinModels none fakeCloudflareAuthContext
   let providers ← collection.getProviders
-  assertTrue (providers.size == 10) "expected implemented builtin text providers"
+  assertTrue (providers.size == 11) "expected implemented builtin text providers"
   match ← collection.getProvider? LeanAgent.AI.Providers.CloudflareWorkersAI.providerId with
   | some _ => pure ()
   | none => fail "expected Workers AI provider in builtin collection"
@@ -4549,6 +4782,9 @@ def main : IO UInt32 := do
     testOpenAIResponsesSharedNormalizesForeignToolCallIds
     testOpenAIResponsesSharedOmitsDifferentModelFcItemId
     testOpenAIResponsesSharedConvertsTools
+    testAnthropicMessagesRequestPayload
+    testAnthropicMessagesHeaders
+    testAnthropicMessagesParsesResponse
     testGitHubCopilotDynamicHeaders
     testOpenAIResponsesRequestPayload
     testOpenAIResponsesRequestUsesThinkingLevelMap
@@ -4589,6 +4825,7 @@ def main : IO UInt32 := do
     testOpenAICompatibleProviderFamilyCatalog
     testDefaultModelsRegistersOpenAICompatibleFamily
     testOpenAICompatibleProviderFactoriesMatchCatalog
+    testLegacySelectionRejectsAnthropicProvider
     testModelsAuthEnvApiKeyResolution
     testModelsAuthStoredCredentialWins
     testFileCredentialStoreRoundTrip

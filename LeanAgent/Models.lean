@@ -1,5 +1,6 @@
 import LeanAgent.Core
 import LeanAgent.AI.Auth
+import LeanAgent.AI.Api.AnthropicMessages
 import LeanAgent.AI.Api.AzureOpenAIResponses
 import LeanAgent.AI.Api.Lazy
 import LeanAgent.AI.Api.OpenAICompletions
@@ -51,6 +52,12 @@ def fireworksProviderId : String := "fireworks"
 def fireworksApiKeyEnv : String := "FIREWORKS_API_KEY"
 def fireworksDefaultModel : String := "accounts/fireworks/models/glm-5p2"
 def fireworksBaseUrl : String := "https://api.fireworks.ai/inference/v1"
+
+def anthropicProviderId : String := "anthropic"
+def anthropicApiKeyEnv : String := "ANTHROPIC_API_KEY"
+def anthropicOAuthTokenEnv : String := "ANTHROPIC_OAUTH_TOKEN"
+def anthropicDefaultModel : String := "claude-sonnet-4-5"
+def anthropicBaseUrl : String := "https://api.anthropic.com"
 
 structure ModelCompat where
   supportsStore : Bool := true
@@ -246,18 +253,77 @@ def fireworksGlm52 : ModelInfo :=
     compat := fireworksCompat
   }
 
+def anthropicSonnet45 : ModelInfo :=
+  { id := anthropicDefaultModel
+    name := "Claude Sonnet 4.5 (latest)"
+    provider := anthropicProviderId
+    api := LeanAgent.AI.Api.AnthropicMessages.api
+    baseUrl := anthropicBaseUrl
+    cost := cost 3.0 15.0 0.3 3.75
+    contextWindow := 200000
+    maxTokens := 64000
+    reasoning := true
+    input := #["text", "image"]
+  }
+
+def anthropicHaiku45 : ModelInfo :=
+  { id := "claude-haiku-4-5"
+    name := "Claude Haiku 4.5 (latest)"
+    provider := anthropicProviderId
+    api := LeanAgent.AI.Api.AnthropicMessages.api
+    baseUrl := anthropicBaseUrl
+    cost := cost 1.0 5.0 0.1 1.25
+    contextWindow := 200000
+    maxTokens := 64000
+    reasoning := true
+    input := #["text", "image"]
+  }
+
+def anthropicOpus45 : ModelInfo :=
+  { id := "claude-opus-4-5"
+    name := "Claude Opus 4.5 (latest)"
+    provider := anthropicProviderId
+    api := LeanAgent.AI.Api.AnthropicMessages.api
+    baseUrl := anthropicBaseUrl
+    cost := cost 15.0 75.0 1.5 18.75
+    contextWindow := 200000
+    maxTokens := 64000
+    reasoning := true
+    input := #["text", "image"]
+  }
+
+def anthropicSonnet37 : ModelInfo :=
+  { id := "claude-3-7-sonnet-20250219"
+    name := "Claude Sonnet 3.7"
+    provider := anthropicProviderId
+    api := LeanAgent.AI.Api.AnthropicMessages.api
+    baseUrl := anthropicBaseUrl
+    cost := cost 3.0 15.0 0.3 3.75
+    contextWindow := 200000
+    maxTokens := 64000
+    reasoning := true
+    input := #["text", "image"]
+  }
+
 structure ProviderInfo where
   id : String
   name : String
   baseUrl : String
   apiKeyEnv : String
+  apiKeyEnvs : Array String := #[]
   modelEnv : Option String := none
   defaultModel : String
   models : Array ModelInfo := #[]
 deriving Repr, BEq
 
+def ProviderInfo.authEnvs (provider : ProviderInfo) : Array String :=
+  if provider.apiKeyEnvs.isEmpty then #[provider.apiKeyEnv] else provider.apiKeyEnvs
+
 def ProviderInfo.model? (provider : ProviderInfo) (modelId : String) : Option ModelInfo :=
   provider.models.find? (fun model => model.id == modelId)
+
+def ProviderInfo.supportsApi (provider : ProviderInfo) (api : String) : Bool :=
+  provider.models.any fun model => model.api == api
 
 def deepSeekProviderInfo : ProviderInfo :=
   { id := deepSeekProviderId
@@ -333,6 +399,16 @@ def fireworksProviderInfo : ProviderInfo :=
     models := #[fireworksGlm52]
   }
 
+def anthropicProviderInfo : ProviderInfo :=
+  { id := anthropicProviderId
+    name := "Anthropic"
+    baseUrl := anthropicBaseUrl
+    apiKeyEnv := anthropicApiKeyEnv
+    apiKeyEnvs := #[anthropicOAuthTokenEnv, anthropicApiKeyEnv]
+    defaultModel := anthropicDefaultModel
+    models := #[anthropicSonnet45, anthropicHaiku45, anthropicOpus45, anthropicSonnet37]
+  }
+
 structure ProviderCatalog where
   providers : Array ProviderInfo := #[]
 deriving Repr, BEq
@@ -347,6 +423,7 @@ def defaultCatalog : ProviderCatalog :=
        , cerebrasProviderInfo
        , togetherProviderInfo
        , fireworksProviderInfo
+       , anthropicProviderInfo
        ]
   }
 
@@ -354,7 +431,7 @@ def ProviderCatalog.provider? (catalog : ProviderCatalog) (id : String) : Option
   catalog.providers.find? (fun provider => provider.id == id)
 
 def ProviderCatalog.providerByApiKeyEnv? (catalog : ProviderCatalog) (apiKeyEnv : String) : Option ProviderInfo :=
-  catalog.providers.find? (fun provider => provider.apiKeyEnv == apiKeyEnv)
+  catalog.providers.find? (fun provider => provider.authEnvs.contains apiKeyEnv)
 
 def ProviderCatalog.model? (catalog : ProviderCatalog) (providerId modelId : String) : Option ModelInfo :=
   match catalog.provider? providerId with
@@ -756,8 +833,47 @@ def azureOpenAIResponsesStreams : ProviderStreams :=
             (LeanAgent.AI.Api.AzureOpenAIResponses.optionsFromSimple options)
   }
 
+def anthropicMessagesOptionsFromSimple
+    (model : ModelInfo)
+    (context : LeanAgent.AI.Context)
+    (options : LeanAgent.AI.SimpleStreamOptions) :
+    LeanAgent.AI.Api.AnthropicMessages.AnthropicMessagesOptions :=
+  let base := LeanAgent.AI.Api.AnthropicMessages.optionsFromSimple options
+  match options.reasoning with
+  | none =>
+      { base with thinkingEnabled := some false }
+  | some level =>
+      let maxTokens := (resolvedMaxTokens? model context options).getD model.maxTokens
+      let adjusted := LeanAgent.AI.Api.SimpleOptions.adjustMaxTokensForThinking
+        (some maxTokens) model.maxTokens level options.thinkingBudgets
+      let thinkingBudget := Nat.min adjusted.thinkingBudget (maxTokens - Nat.min maxTokens 1024)
+      { base with
+        maxTokens := some maxTokens
+        thinkingEnabled := some true
+        thinkingBudgetTokens := some thinkingBudget
+      }
+
+def anthropicMessagesStreams : ProviderStreams :=
+  { streamSimple := fun model context options => do
+      let options := clampSimpleOptionsToContext model context options
+      let apiKey ← requireApiKeyOrHeaderAuth model.provider options
+      let config : LeanAgent.AI.Api.AnthropicMessages.AnthropicMessagesConfig :=
+        { apiKey := apiKey
+          baseUrl := model.baseUrl
+        }
+      let stream ← LeanAgent.AI.Api.AnthropicMessages.completeStreamWithOptions
+        config
+        model.toModelRef
+        model.input
+        model.maxTokens
+        model.reasoning
+        context
+        (anthropicMessagesOptionsFromSimple model context options)
+      pure (applyUsageCostToStream model stream)
+  }
+
 def authForProviderInfo (info : ProviderInfo) : LeanAgent.AI.Auth.ProviderAuth :=
-  { apiKey := some (LeanAgent.AI.Auth.envApiKeyAuth (info.name ++ " API key") #[info.apiKeyEnv]) }
+  { apiKey := some (LeanAgent.AI.Auth.envApiKeyAuth (info.name ++ " API key") info.authEnvs) }
 
 def createCatalogProvider (info : ProviderInfo) : IO Provider :=
   createProvider
@@ -769,6 +885,7 @@ def createCatalogProvider (info : ProviderInfo) : IO Provider :=
       apis :=
         #[ { api := "openai-completions", streams := openAICompatibleStreams }
          , { api := "openai-responses", streams := openAIResponsesStreams }
+         , { api := LeanAgent.AI.Api.AnthropicMessages.api, streams := anthropicMessagesStreams }
          ]
     }
 
@@ -964,8 +1081,11 @@ def resolveApiKeyEnv (opts : SelectionOptions) (catalog : ProviderCatalog := def
       let mut selected := none
       for provider in catalog.providers do
         if selected.isNone then
-          if ← envIsSet provider.apiKeyEnv then
-            selected := some provider.apiKeyEnv
+          if provider.supportsApi "openai-completions" then
+            for apiKeyEnv in provider.authEnvs do
+              if selected.isNone then
+                if ← envIsSet apiKeyEnv then
+                  selected := some apiKeyEnv
       pure (selected.getD openAIKeyEnv)
 
 def resolveProviderForApiKeyEnv
@@ -1002,6 +1122,10 @@ def resolveSelection
     (catalog : ProviderCatalog := defaultCatalog) : IO (Except String ProviderSelection) := do
   let apiKeyEnv ← resolveApiKeyEnv opts catalog
   let provider := resolveProviderForApiKeyEnv apiKeyEnv catalog
+  if !provider.supportsApi "openai-completions" then
+    let providerApi := (provider.models[0]?.map (fun model => model.api)).getD "unknown"
+    return (.error
+      s!"provider {provider.id} uses {providerApi}; the legacy CLI path currently supports only openai-completions")
   let baseUrl := resolveBaseUrl opts provider
   let model ← resolveModel opts provider
   let noProxy ← resolveNoProxy baseUrl
