@@ -2184,6 +2184,29 @@ def testOAuthDeviceCodeTimeouts : IO Unit := do
   assertTrue slowTimedOut "slow_down device-code flow should time out with slow_down message"
   assertTrue ((← slowSleepsRef.get) == #[1000]) "expected slow_down sleep to be capped by deadline"
 
+def testOAuthPageHtmlEscapesDynamicContent : IO Unit := do
+  let html := LeanAgent.AI.OAuth.oauthErrorHtml
+    "Use <code> & \"quoted\" 'input'"
+    (some "token=<secret>&state='x'")
+  assertTrue (html.contains "<title>Authentication failed</title>") "expected failed auth title"
+  assertTrue (html.contains "<h1>Authentication failed</h1>") "expected failed auth heading"
+  assertTrue
+    (html.contains "Use &lt;code&gt; &amp; &quot;quoted&quot; &#39;input&#39;")
+    "expected message HTML escaping"
+  assertTrue
+    (html.contains "token=&lt;secret&gt;&amp;state=&#39;x&#39;")
+    "expected details HTML escaping"
+  assertTrue (!html.contains "Use <code> & \"quoted\" 'input'")
+    "expected raw message to be absent"
+
+def testOAuthSuccessPageOmitsDetails : IO Unit := do
+  let html := LeanAgent.AI.OAuth.oauthSuccessHtml "You can close this tab."
+  assertTrue (html.contains "<title>Authentication successful</title>") "expected success auth title"
+  assertTrue (html.contains "<h1>Authentication successful</h1>") "expected success auth heading"
+  assertTrue (html.contains "<p>You can close this tab.</p>") "expected success message"
+  assertTrue (!html.contains "class=\"details\"") "expected details block to be omitted"
+  assertTrue (html.contains "class=\"logo\"") "expected Pi OAuth logo container"
+
 def headerValueOpt? (headers : Array (String × Option String)) (name : String) : Option (Option String) :=
   headers.findSome? fun (headerName, value) =>
     if headerName.toLower == name.toLower then some value else none
@@ -4290,6 +4313,8 @@ def main : IO UInt32 := do
     testOAuthDeviceCodeSlowDownIncreasesInterval
     testOAuthDeviceCodeFailureAndCancellation
     testOAuthDeviceCodeTimeouts
+    testOAuthPageHtmlEscapesDynamicContent
+    testOAuthSuccessPageOmitsDetails
     testCloudflareWorkersAIAuthResolution
     testCloudflareAIGatewayAuthResolution
     testCloudflareStoredCredentialResolution
