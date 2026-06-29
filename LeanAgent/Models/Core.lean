@@ -94,6 +94,9 @@ def ModelsErrorCode.toString : ModelsErrorCode → String
 def modelsError (code : ModelsErrorCode) (message : String) : IO.Error :=
   IO.userError s!"ModelsError({code.toString}): {message}"
 
+def isModelsError (err : IO.Error) : Bool :=
+  err.toString.startsWith "ModelsError("
+
 structure ProviderStreams where
   streamSimple :
     ModelInfo → LeanAgent.AI.Context → LeanAgent.AI.SimpleStreamOptions →
@@ -189,10 +192,26 @@ def apiDispatchFor? (dispatches : Array ApiDispatch) (api : String) : Option Pro
 
 def createProvider (input : CreateProviderOptions) : IO Provider := do
   let modelsRef ← IO.mkRef input.models
+  let inflightRefresh ← Std.Mutex.new (none : Option (Task (Except IO.Error Unit)))
   let refreshModels :=
     input.refreshModels.map fun refresh => do
-      let refreshed ← refresh
-      modelsRef.set refreshed
+      let task ←
+        inflightRefresh.atomically fun ref => do
+          match ← ref.get with
+          | some task => pure task
+          | none =>
+              let task ← IO.asTask do
+                try
+                  let refreshed ← refresh
+                  modelsRef.set refreshed
+                finally
+                  inflightRefresh.atomically fun clearRef => do
+                    clearRef.set none
+              ref.set (some task)
+              pure task
+      match ← IO.wait task with
+      | .ok _ => pure ()
+      | .error err => throw err
   pure
     { id := input.id
       name := input.name.getD input.id
@@ -534,19 +553,27 @@ def Collection.refresh (collection : Collection) (providerId : Option String := 
       match ← collection.getProvider? id with
       | some provider =>
           match provider.refreshModels with
-          | some refresh => refresh
+          | some refresh =>
+              try
+                refresh
+              catch err =>
+                if isModelsError err then
+                  throw err
+                else
+                  throw (modelsError .modelSource s!"Model refresh failed for {id}: {err}")
           | none => pure ()
       | none => pure ()
   | none =>
       let providers ← collection.getProviders
+      let mut tasks := #[]
       for provider in providers do
         match provider.refreshModels with
-        | some refresh =>
-            try
-              refresh
-            catch _ =>
-              pure ()
+        | some refresh => tasks := tasks.push (← IO.asTask refresh)
         | none => pure ()
+      for task in tasks do
+        match ← IO.wait task with
+        | .ok _ => pure ()
+        | .error _ => pure ()
 
 def Collection.getAuth (collection : Collection) (model : ModelInfo) : IO (Option LeanAgent.AI.Auth.AuthResult) := do
   match ← collection.getProvider? model.provider with

@@ -7080,6 +7080,94 @@ def testModelsCollectionGenericStreamAndCompleteDispatchWithAuth : IO Unit := do
   assertTrue ((← seenApiKey.get) == some "env-secret")
     "expected collection generic complete to inject auth"
 
+def testModelsCreateProviderDynamicRefreshDedupes : IO Unit := do
+  let fetches ← IO.mkRef 0
+  let provider ← LeanAgent.Models.createProvider
+    { id := "dynamic"
+      name := some "Dynamic"
+      auth := fakeProviderAuth
+      models := #[]
+      refreshModels := some (do
+        fetches.modify (· + 1)
+        IO.sleep 10
+        pure #[{ fakeRuntimeModel with id := "listed" }]
+      )
+      apis := #[{ api := "fake-api", streams := fakeRuntimeStreams (← IO.mkRef none) }]
+    }
+  assertTrue ((← provider.getModels).isEmpty) "expected dynamic provider to start empty"
+  let firstTask ←
+    IO.asTask do
+      match provider.refreshModels with
+      | some refresh => refresh
+      | none => pure ()
+  let secondTask ←
+    IO.asTask do
+      match provider.refreshModels with
+      | some refresh => refresh
+      | none => pure ()
+  match ← IO.wait firstTask with
+  | .ok _ => pure ()
+  | .error err => throw err
+  match ← IO.wait secondTask with
+  | .ok _ => pure ()
+  | .error err => throw err
+  assertTrue ((← fetches.get) == 1) "expected in-flight provider refresh dedupe"
+  assertTrue ((← provider.getModels).map (·.id) == #["listed"]) "expected refreshed provider model list"
+  match provider.refreshModels with
+  | some refresh => refresh
+  | none => fail "expected dynamic refresh hook"
+  assertTrue ((← fetches.get) == 2) "expected later provider refresh to fetch again"
+
+def testModelsCollectionRefreshAndFailureSemantics : IO Unit := do
+  let collection ← LeanAgent.Models.createModels
+  let refreshes ← IO.mkRef 0
+  let dynamicProvider ← LeanAgent.Models.createProvider
+    { id := "dyn"
+      name := some "Dynamic"
+      auth := fakeProviderAuth
+      models := #[{ fakeRuntimeModel with provider := "dyn", id := "before" }]
+      refreshModels := some (do
+        refreshes.modify (· + 1)
+        pure #[{ fakeRuntimeModel with provider := "dyn", id := "after" }]
+      )
+      apis := #[{ api := "fake-api", streams := fakeRuntimeStreams (← IO.mkRef none) }]
+    }
+  let staticProvider ← LeanAgent.Models.createProvider
+    { id := "static"
+      name := some "Static"
+      auth := fakeProviderAuth
+      models := #[{ fakeRuntimeModel with provider := "static", id := "s1" }]
+      apis := #[{ api := "fake-api", streams := fakeRuntimeStreams (← IO.mkRef none) }]
+    }
+  let flakyProvider ← LeanAgent.Models.createProvider
+    { id := "flaky"
+      name := some "Flaky"
+      auth := fakeProviderAuth
+      refreshModels := some (throw (IO.userError "fetch failed"))
+      apis := #[{ api := "fake-api", streams := fakeRuntimeStreams (← IO.mkRef none) }]
+    }
+  collection.setProvider dynamicProvider
+  collection.setProvider staticProvider
+  assertTrue ((← collection.getModel? "dyn" "before").isSome) "expected pre-refresh dynamic model"
+  collection.refresh (some "dyn")
+  assertTrue ((← refreshes.get) == 1) "expected targeted collection refresh"
+  assertTrue ((← collection.getModel? "dyn" "after").isSome) "expected refreshed dynamic model"
+  assertTrue ((← collection.getModel? "dyn" "before").isNone) "expected old dynamic model removal"
+  collection.refresh (some "static")
+  collection.refresh
+  assertTrue ((← refreshes.get) == 2) "expected refresh-all to re-run dynamic refresh"
+  collection.setProvider flakyProvider
+  let targetedFailed ←
+    try
+      collection.refresh (some "flaky")
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains "ModelsError(model_source)")
+        "expected targeted refresh failure to wrap as model_source"
+      pure true
+  assertTrue targetedFailed "expected targeted collection refresh failure"
+  collection.refresh
+
 def testModelsCollectionAppliesCloudflareAIGatewayAuth : IO Unit := do
   let seenApiKey ← IO.mkRef (some "unset" : Option String)
   let seenBaseUrl ← IO.mkRef ""
@@ -7447,11 +7535,49 @@ def testImagesCollectionProviderCrudAndRefresh : IO Unit := do
   assertTrue ((← collection.getModels).size == 1) "expected image model listing"
   assertTrue ((← collection.getModel? "fake-images" "fake-image-model").isSome)
     "expected image model lookup"
-  collection.refresh (some "fake-images")
-  assertTrue ((← refreshCount.get) == 1) "expected targeted image refresh"
+  let firstTask ← IO.asTask (collection.refresh (some "fake-images"))
+  let secondTask ← IO.asTask (collection.refresh (some "fake-images"))
+  match ← IO.wait firstTask with
+  | .ok _ => pure ()
+  | .error err => throw err
+  match ← IO.wait secondTask with
+  | .ok _ => pure ()
+  | .error err => throw err
+  assertTrue ((← refreshCount.get) == 1) "expected in-flight image refresh dedupe"
   assertTrue ((← collection.getModel? "fake-images" "refreshed-image-model").isSome)
     "expected refreshed image model"
+  collection.refresh
+  assertTrue ((← refreshCount.get) == 2) "expected refresh-all to re-run image refresh"
+  let flakyProvider ← LeanAgent.AI.Images.createImagesProvider
+    { id := "flaky-images"
+      name := some "Flaky Images"
+      auth := fakeProviderAuth
+      refreshModels := some (throw (IO.userError "fetch failed"))
+      api :=
+        { generateImages := fun model _context _options => do
+            let timestamp ← IO.monoMsNow
+            pure
+              { api := model.api
+                provider := model.provider
+                model := model.id
+                output := #[LeanAgent.AI.text "ok"]
+                timestamp := timestamp
+              }
+        }
+    }
+  collection.setProvider flakyProvider
+  let imageTargetedFailed ←
+    try
+      collection.refresh (some "flaky-images")
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains "ModelsError(model_source)")
+        "expected targeted image refresh failure to wrap as model_source"
+      pure true
+  assertTrue imageTargetedFailed "expected targeted image refresh failure"
+  collection.refresh
   collection.deleteProvider "fake-images"
+  collection.deleteProvider "flaky-images"
   assertTrue ((← collection.getProviders).isEmpty) "expected image provider deletion"
   collection.setProvider provider
   collection.clearProviders
@@ -12333,6 +12459,8 @@ def main : IO UInt32 := do
     testEnvApiKeysAmbientAuthMarkers
     testModelsCollectionDispatchesWithAuth
     testModelsCollectionGenericStreamAndCompleteDispatchWithAuth
+    testModelsCreateProviderDynamicRefreshDedupes
+    testModelsCollectionRefreshAndFailureSemantics
     testModelsCollectionAppliesCloudflareAIGatewayAuth
     testCompatApiRegistryDispatchesAndUnregisters
     testCompatGenericStreamAndCompleteDispatch
