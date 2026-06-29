@@ -6193,6 +6193,23 @@ def httpServerScript : String :=
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
     , "            return"
+    , "        if self.path == '/google-typed/models/gemini-2.5-flash:streamGenerateContent?alt=sse':"
+    , "            request = json.loads(body)"
+    , "            generation = request.get('generationConfig') or {}"
+    , "            thinking = generation.get('thinkingConfig') or {}"
+    , "            tool_config = request.get('toolConfig') or {}"
+    , "            function_calling = tool_config.get('functionCallingConfig') or {}"
+    , "            text = '|'.join([str(thinking.get('includeThoughts') or ''), str(thinking.get('thinkingBudget') or ''), thinking.get('thinkingLevel') or '', function_calling.get('mode') or '', self.headers.get('x-goog-api-key') or '', self.headers.get('X-Trace') or ''])"
+    , "            payload = ("
+    , "                'data: ' + json.dumps({'responseId': 'resp_google_typed_http', 'modelVersion': 'gemini-2.5-flash', 'candidates': [{'content': {'parts': [{'text': text[:14]}]}}], 'usageMetadata': {'promptTokenCount': 4, 'cachedContentTokenCount': 1}}) + '\\n\\n' +"
+    , "                'data: ' + json.dumps({'candidates': [{'content': {'parts': [{'text': text[14:]}]}, 'finishReason': 'STOP'}], 'usageMetadata': {'promptTokenCount': 4, 'cachedContentTokenCount': 1, 'candidatesTokenCount': 2, 'thoughtsTokenCount': 3, 'totalTokenCount': 9}}) + '\\n\\n'"
+    , "            ).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'text/event-stream')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/vertex/v1/projects/project-1/locations/us-central1/publishers/google/models/gemini-2.5-flash:streamGenerateContent?alt=sse':"
     , "            request = json.loads(body)"
     , "            contents = request.get('contents') or []"
@@ -7241,6 +7258,47 @@ def testGoogleGenerativeAIStreamWithOptionsLocal : IO Unit := do
         | _ => false)
       "expected Google local text delta"
 
+def testCompatGoogleTypedLegacyAliasLocal : IO Unit := do
+  let port := 18106
+  withHttpServer port do
+    let tool : LeanAgent.AI.Tool :=
+      { name := "lookup"
+        description := "Lookup a value"
+        parameters := LeanAgent.Json.obj [("type", LeanAgent.Json.str "object")]
+      }
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := LeanAgent.Models.googleDefaultModel
+        name := "Gemini 2.5 Flash"
+        provider := LeanAgent.Models.googleProviderId
+        api := LeanAgent.AI.Api.GoogleGenerativeAI.api
+        baseUrl := s!"http://127.0.0.1:{port}/google-typed"
+        contextWindow := 1048576
+        maxTokens := 65536
+        reasoning := true
+        input := #["text", "image"]
+      }
+    let stream ← LeanAgent.AI.Compat.Aliases.streamGoogle
+      model
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+        tools := #[tool]
+      }
+      { apiKey := some "google-key"
+        thinkingEnabled := some true
+        thinkingBudgetTokens := some 1234
+        thinkingLevel := some "HIGH"
+        toolChoice := some .any
+        headers := #[("X-Trace", some "trace-google")]
+      }
+    assertTrue stream.isComplete "expected compat Google typed legacy alias stream"
+    assertTrue (stream.result.responseId == some "resp_google_typed_http")
+      "expected typed Google response id"
+    assertTrue
+      (LeanAgent.AI.contentPlainText stream.result.content ==
+        "True|1234|HIGH|ANY|google-key|trace-google")
+      "expected compat Google typed alias to preserve thinking and tool choice options"
+    assertTrue (stream.result.usage.reasoning == some 3) "expected Google typed thinking token usage"
+
 def testGoogleVertexStreamWithOptionsLocal : IO Unit := do
   let port := 18099
   withHttpServer port do
@@ -7592,6 +7650,7 @@ def main : IO UInt32 := do
     testAnthropicMessagesStreamWithOptionsLocal
     testCompatAnthropicTypedLegacyAliasLocal
     testGoogleGenerativeAIStreamWithOptionsLocal
+    testCompatGoogleTypedLegacyAliasLocal
     testGoogleVertexStreamWithOptionsLocal
     testMistralConversationsStreamWithOptionsLocal
     testCompatMistralTypedLegacyAliasLocal

@@ -31,6 +31,11 @@ abbrev AnthropicMessagesStream :=
     LeanAgent.AI.Api.AnthropicMessages.AnthropicMessagesOptions →
       IO LeanAgent.AI.AssistantMessageEventStream
 
+abbrev GoogleGenerativeAIStream :=
+  LeanAgent.Models.ModelInfo → LeanAgent.AI.Context →
+    LeanAgent.AI.Api.GoogleGenerativeAI.GoogleGenerativeAIOptions →
+      IO LeanAgent.AI.AssistantMessageEventStream
+
 def streamForApi (api : String) : AliasStream :=
   fun model context options => LeanAgent.AI.Compat.streamSimpleWithApi api model context options
 
@@ -190,6 +195,35 @@ def streamMistralWithOptions : MistralStream :=
       options
     pure (LeanAgent.Models.applyUsageCostToStream model stream)
 
+def withEnvApiKeyForGoogleGenerativeAI
+    (model : LeanAgent.Models.ModelInfo)
+    (options : LeanAgent.AI.Api.GoogleGenerativeAI.GoogleGenerativeAIOptions) :
+    IO LeanAgent.AI.Api.GoogleGenerativeAI.GoogleGenerativeAIOptions := do
+  let simple ← LeanAgent.AI.Compat.withEnvApiKey model options.toSimpleStreamOptions
+  pure { options with apiKey := simple.apiKey }
+
+def streamGoogleWithOptions : GoogleGenerativeAIStream :=
+  fun model context options => do
+    LeanAgent.AI.Compat.ensureApiMatches
+      { api := LeanAgent.AI.Api.GoogleGenerativeAI.api
+        streams := LeanAgent.Models.googleGenerativeAIStreams
+      }
+      model
+    let options ← withEnvApiKeyForGoogleGenerativeAI model options
+    let apiKey ← LeanAgent.Models.requireApiKeyOrHeaderAuth model.provider options.toSimpleStreamOptions
+    let config : LeanAgent.AI.Api.GoogleGenerativeAI.GoogleGenerativeAIConfig :=
+      { apiKey := apiKey
+        baseUrl := model.baseUrl
+      }
+    let stream ← LeanAgent.AI.Api.GoogleGenerativeAI.completeStreamWithOptions
+      config
+      model.toModelRef
+      model.input
+      model.reasoning
+      context
+      options
+    pure (LeanAgent.Models.applyUsageCostToStream model stream)
+
 def streamAnthropic : AnthropicMessagesStream :=
   streamAnthropicWithOptions
 
@@ -208,11 +242,11 @@ def streamAzureOpenAIResponses : AzureOpenAIResponsesStream :=
 def streamSimpleAzureOpenAIResponses : AliasStream :=
   streamForApi "azure-openai-responses"
 
-def streamGoogle : AliasStream :=
-  streamForApi "google-generative-ai"
+def streamGoogle : GoogleGenerativeAIStream :=
+  streamGoogleWithOptions
 
 def streamSimpleGoogle : AliasStream :=
-  streamGoogle
+  streamForApi "google-generative-ai"
 
 def streamGoogleVertex : AliasStream :=
   streamForApi "google-vertex"
