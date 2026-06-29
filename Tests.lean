@@ -3503,6 +3503,34 @@ def testSanitizeUnicodeSurrogates : IO Unit := do
       ])
     "expected unpaired surrogate code units to be removed and valid pair preserved"
 
+
+def testAnthropicMessagesPreserveUnicodePayloads : IO Unit := do
+  let raw := "🙈A🙈B"
+  let expected := LeanAgent.AI.Util.SanitizeUnicode.sanitizeSurrogates raw
+  let textPayload := LeanAgent.AI.Api.AnthropicMessages.textBlock raw
+  assertTrue (jsonStringField? textPayload "text" == some expected)
+    "expected Anthropic text payload to preserve valid Unicode"
+  let thinkingPayload := LeanAgent.AI.Api.AnthropicMessages.thinkingBlock raw "sig"
+  assertTrue (jsonStringField? thinkingPayload "thinking" == some expected)
+    "expected Anthropic thinking payload to preserve valid Unicode"
+  match LeanAgent.AI.Api.AnthropicMessages.convertToolResultContent #[LeanAgent.AI.text raw] with
+  | .str value =>
+      assertTrue (value == expected)
+        "expected Anthropic tool result text to preserve valid Unicode"
+  | _ => fail "expected Anthropic tool result content to stay scalar text"
+
+def testOpenAICompletionsPreserveUnicodeInMessages : IO Unit := do
+  let raw := "🙈A🙈B"
+  let expected := LeanAgent.AI.Util.SanitizeUnicode.sanitizeSurrogates raw
+  let userJson := LeanAgent.AI.Api.OpenAICompletions.messageToJson (.user raw)
+  assertTrue (jsonStringField? userJson "content" == some expected)
+    "expected OpenAI user payload to preserve valid Unicode"
+  let assistantJson := LeanAgent.AI.Api.OpenAICompletions.messageToJson (.assistant raw #[])
+  assertTrue (jsonStringField? assistantJson "content" == some expected)
+    "expected OpenAI assistant payload to preserve valid Unicode"
+  let toolJson := LeanAgent.AI.Api.OpenAICompletions.messageToJson (.toolResult "tool-1" "read" raw true)
+  assertTrue (jsonStringField? toolJson "content" == some expected)
+    "expected OpenAI tool payload to preserve valid Unicode"
 def overflowAssistantMessage
     (stopReason : LeanAgent.AI.StopReason)
     (errorMessage : Option String := none)
@@ -8284,6 +8312,8 @@ def main : IO UInt32 := do
     testValidationToolLookupAndRequired
     testSanitizeUnicodeSurrogates
     testOverflowClassifiesProviderErrors
+    testAnthropicMessagesPreserveUnicodePayloads
+    testOpenAICompletionsPreserveUnicodeInMessages
     testOverflowClassifiesContextWindowSignals
     testRetryClassifiesAssistantErrors
     testRetryWithRetriesSucceedsAfterTransientFailures

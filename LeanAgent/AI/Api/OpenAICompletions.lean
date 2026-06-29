@@ -7,6 +7,7 @@ import LeanAgent.AI.Util.Headers
 import LeanAgent.AI.Util.JsonParse
 import LeanAgent.AI.Util.Retry
 import LeanAgent.AI.Util.SSE
+import LeanAgent.AI.Util.SanitizeUnicode
 import LeanAgent.Core
 import LeanAgent.Http
 import LeanAgent.Json
@@ -109,10 +110,14 @@ def messageHasToolCall : LeanAgent.AgentMessage → Bool
 def hasToolHistory (messages : Array LeanAgent.AgentMessage) : Bool :=
   messages.any messageHasToolCall
 
+def sanitize (text : String) : String :=
+  LeanAgent.AI.Util.SanitizeUnicode.sanitizeSurrogates text
+
 def messageToJson : AgentMessage → Lean.Json
   | .user content =>
-      LeanAgent.Json.obj [("role", LeanAgent.Json.str "user"), ("content", LeanAgent.Json.str content)]
+      LeanAgent.Json.obj [("role", LeanAgent.Json.str "user"), ("content", LeanAgent.Json.str (sanitize content))]
   | .assistant content calls =>
+      let content := sanitize content
       let fields :=
         [ ("role", LeanAgent.Json.str "assistant")
         , ("content", if content.isEmpty then LeanAgent.Json.null else LeanAgent.Json.str content)
@@ -125,7 +130,7 @@ def messageToJson : AgentMessage → Lean.Json
       LeanAgent.Json.obj
         [ ("role", LeanAgent.Json.str "tool")
         , ("tool_call_id", LeanAgent.Json.str toolCallId)
-        , ("content", LeanAgent.Json.str content)
+        , ("content", LeanAgent.Json.str (sanitize content))
         ]
 
 def toolToJson (tool : AgentTool) : Lean.Json :=

@@ -7,6 +7,7 @@ import LeanAgent.AI.Util.Headers
 import LeanAgent.AI.Util.JsonParse
 import LeanAgent.AI.Util.Retry
 import LeanAgent.AI.Util.SSE
+import LeanAgent.AI.Util.SanitizeUnicode
 import LeanAgent.Http
 import LeanAgent.Json
 
@@ -131,7 +132,11 @@ def cacheControlFields (cacheControl? : Option Lean.Json) : List (String × Lean
   | some cacheControl => [("cache_control", cacheControl)]
   | none => []
 
+def sanitize (text : String) : String :=
+  LeanAgent.AI.Util.SanitizeUnicode.sanitizeSurrogates text
+
 def textBlock (text : String) (cacheControl? : Option Lean.Json := none) : Lean.Json :=
+  let text := sanitize text
   LeanAgent.Json.obj
     ([ ("type", LeanAgent.Json.str "text")
      , ("text", LeanAgent.Json.str text)
@@ -174,7 +179,7 @@ def convertToolResultContent (content : Array LeanAgent.AI.ContentBlock) : Lean.
     | .image _ => true
     | _ => false
   if !hasImages then
-    LeanAgent.Json.str (LeanAgent.AI.contentPlainText content)
+    Lean.Json.str (sanitize (LeanAgent.AI.contentPlainText content))
   else
     let blocks := content.filterMap toolResultContentBlock?
     let hasText := blocks.any fun block =>
@@ -186,6 +191,7 @@ def convertToolResultContent (content : Array LeanAgent.AI.ContentBlock) : Lean.
     LeanAgent.Json.arr blocks
 
 def thinkingBlock (thinking signature : String) : Lean.Json :=
+  let thinking := sanitize thinking
   LeanAgent.Json.obj
     [ ("type", LeanAgent.Json.str "thinking")
     , ("thinking", LeanAgent.Json.str thinking)
