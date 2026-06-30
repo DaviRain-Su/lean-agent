@@ -113,13 +113,44 @@ def builtInProviderById? (providers : Array OAuthProviderInterface) (id : OAuthP
   providers.findSome? fun provider =>
     if provider.id == id then some provider else none
 
+private def replaceOrPushRegisteredOAuthProvider
+    (providers : Array RegisteredOAuthProvider)
+    (provider : OAuthProviderInterface) : Array RegisteredOAuthProvider :=
+  let replacement : RegisteredOAuthProvider := { provider := provider }
+  let rec go (seen : Bool) : List RegisteredOAuthProvider → List RegisteredOAuthProvider
+    | [] => if seen then [] else [replacement]
+    | current :: rest =>
+        if current.provider.id == provider.id then
+          if seen then
+            go true rest
+          else
+            replacement :: go true rest
+        else
+          current :: go seen rest
+  (go false providers.toList).toArray
+
+private def replaceOrPushBuiltInOAuthProvider
+    (providers : Array OAuthProviderInterface)
+    (provider : OAuthProviderInterface) : Array OAuthProviderInterface :=
+  let rec go (seen : Bool) : List OAuthProviderInterface → List OAuthProviderInterface
+    | [] => if seen then [] else [provider]
+    | current :: rest =>
+        if current.id == provider.id then
+          if seen then
+            go true rest
+          else
+            provider :: go true rest
+        else
+          current :: go seen rest
+  (go false providers.toList).toArray
+
 def registerOAuthProvider (provider : OAuthProviderInterface) : IO Unit :=
   oauthProviderRegistry.modify fun providers =>
-    (providers.filter fun entry => entry.provider.id != provider.id).push { provider := provider }
+    replaceOrPushRegisteredOAuthProvider providers provider
 
 def registerBuiltInOAuthProvider (provider : OAuthProviderInterface) : IO Unit := do
   builtInOAuthProviders.modify fun providers =>
-    (providers.filter fun entry => entry.id != provider.id).push provider
+    replaceOrPushBuiltInOAuthProvider providers provider
   registerOAuthProvider provider
 
 def getOAuthProvider? (id : OAuthProviderId) : IO (Option OAuthProviderInterface) := do

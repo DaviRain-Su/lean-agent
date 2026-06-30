@@ -65,12 +65,28 @@ def builtinApiSourceId (api : String) : String :=
 def compatModels : IO LeanAgent.Models.Collection :=
   LeanAgent.AI.Providers.All.builtinModels
 
+private def replaceOrPushRegisteredApiProvider
+    (providers : Array RegisteredApiProvider)
+    (provider : ApiProvider)
+    (sourceId : Option String) : Array RegisteredApiProvider :=
+  let replacement : RegisteredApiProvider := { provider := provider, sourceId := sourceId }
+  let rec go (seen : Bool) : List RegisteredApiProvider → List RegisteredApiProvider
+    | [] => if seen then [] else [replacement]
+    | current :: rest =>
+        if current.provider.api == provider.api then
+          if seen then
+            go true rest
+          else
+            replacement :: go true rest
+        else
+          current :: go seen rest
+  (go false providers.toList).toArray
+
 def registerApiProvider
     (provider : ApiProvider)
     (sourceId : Option String := none) : IO Unit :=
   apiProviderRegistry.modify fun providers =>
-    (providers.filter fun entry => entry.provider.api != provider.api).push
-      { provider := provider, sourceId := sourceId }
+    replaceOrPushRegisteredApiProvider providers provider sourceId
 
 def getApiProvider? (api : String) : IO (Option ApiProvider) := do
   let providers ← apiProviderRegistry.get

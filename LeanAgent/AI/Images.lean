@@ -136,9 +136,24 @@ def Collection.getProvider? (collection : Collection) (id : String) : IO (Option
 def Collection.getProvider (collection : Collection) (id : String) : IO (Option ImagesProvider) :=
   collection.getProvider? id
 
+private def replaceOrPushImagesProvider
+    (providers : Array ImagesProvider)
+    (provider : ImagesProvider) : Array ImagesProvider :=
+  let rec go (seen : Bool) : List ImagesProvider → List ImagesProvider
+    | [] => if seen then [] else [provider]
+    | current :: rest =>
+        if current.id == provider.id then
+          if seen then
+            go true rest
+          else
+            provider :: go true rest
+        else
+          current :: go seen rest
+  (go false providers.toList).toArray
+
 def Collection.setProvider (collection : Collection) (provider : ImagesProvider) : IO Unit := do
   collection.providersRef.modify fun providers =>
-    (providers.filter fun current => current.id != provider.id).push provider
+    replaceOrPushImagesProvider providers provider
 
 def Collection.deleteProvider (collection : Collection) (id : String) : IO Unit := do
   collection.providersRef.modify fun providers => providers.filter fun provider => provider.id != id

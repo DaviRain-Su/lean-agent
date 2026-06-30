@@ -421,9 +421,24 @@ def Collection.getProvider? (collection : Collection) (id : String) : IO (Option
 def Collection.getProvider (collection : Collection) (id : String) : IO (Option Provider) :=
   collection.getProvider? id
 
+private def replaceOrPushProvider
+    (providers : Array Provider)
+    (provider : Provider) : Array Provider :=
+  let rec go (seen : Bool) : List Provider → List Provider
+    | [] => if seen then [] else [provider]
+    | current :: rest =>
+        if current.id == provider.id then
+          if seen then
+            go true rest
+          else
+            provider :: go true rest
+        else
+          current :: go seen rest
+  (go false providers.toList).toArray
+
 def Collection.setProvider (collection : Collection) (provider : Provider) : IO Unit := do
   collection.providersRef.modify fun providers =>
-    (providers.filter fun current => current.id != provider.id).push provider
+    replaceOrPushProvider providers provider
 
 def Collection.deleteProvider (collection : Collection) (id : String) : IO Unit := do
   collection.providersRef.modify fun providers => providers.filter fun provider => provider.id != id

@@ -34,6 +34,38 @@ def wrapGenerateImages
     ensureApiMatches api model
     generateImages model context options
 
+private def replaceOrPushRegisteredImagesApiProvider
+    (providers : Array RegisteredImagesApiProvider)
+    (provider : ImagesApiProvider)
+    (sourceId : Option String) : Array RegisteredImagesApiProvider :=
+  let replacement : RegisteredImagesApiProvider := { provider := provider, sourceId := sourceId }
+  let rec go (seen : Bool) : List RegisteredImagesApiProvider → List RegisteredImagesApiProvider
+    | [] => if seen then [] else [replacement]
+    | current :: rest =>
+        if current.provider.api == provider.api then
+          if seen then
+            go true rest
+          else
+            replacement :: go true rest
+        else
+          current :: go seen rest
+  (go false providers.toList).toArray
+
+private def replaceOrPushBuiltInImagesApiProvider
+    (providers : Array ImagesApiProvider)
+    (provider : ImagesApiProvider) : Array ImagesApiProvider :=
+  let rec go (seen : Bool) : List ImagesApiProvider → List ImagesApiProvider
+    | [] => if seen then [] else [provider]
+    | current :: rest =>
+        if current.api == provider.api then
+          if seen then
+            go true rest
+          else
+            provider :: go true rest
+        else
+          current :: go seen rest
+  (go false providers.toList).toArray
+
 def registerImagesApiProvider
     (provider : ImagesApiProvider)
     (sourceId : Option String := none) : IO Unit := do
@@ -42,12 +74,11 @@ def registerImagesApiProvider
       generateImages := wrapGenerateImages provider.api provider.generateImages
     }
   imagesApiProviderRegistry.modify fun providers =>
-    (providers.filter fun entry => entry.provider.api != provider.api).push
-      { provider := wrappedProvider, sourceId := sourceId }
+    replaceOrPushRegisteredImagesApiProvider providers wrappedProvider sourceId
 
 def registerBuiltInImagesApiProvider (provider : ImagesApiProvider) : IO Unit := do
   builtInImagesApiProviders.modify fun providers =>
-    (providers.filter fun entry => entry.api != provider.api).push provider
+    replaceOrPushBuiltInImagesApiProvider providers provider
   registerImagesApiProvider provider
 
 def getImagesApiProvider? (api : LeanAgent.AI.ImagesApi) :
