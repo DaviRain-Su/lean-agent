@@ -28,6 +28,27 @@ def headerValue? (headers : Array (String × String)) (name : String) : Option S
   headers.findSome? fun (headerName, value) =>
     if headerName == name.toLower then some value else none
 
+def jsonStringField? (json : Lean.Json) (key : String) : Option String :=
+  match LeanAgent.Json.optVal? json key with
+  | some (.str value) => some value
+  | _ => none
+
+def jsonArrayField? (json : Lean.Json) (key : String) : Option (Array Lean.Json) :=
+  match LeanAgent.Json.optVal? json key with
+  | some value =>
+      match value.getArr? with
+      | .ok arr => some arr
+      | .error _ => none
+  | none => none
+
+def jsonObjectField? (json : Lean.Json) (key : String) : Option Lean.Json :=
+  match LeanAgent.Json.optVal? json key with
+  | some value =>
+      match value.getObj? with
+      | .ok _ => some value
+      | .error _ => none
+  | none => none
+
 def silentSink : EventSink :=
   fun _ => pure ()
 
@@ -386,6 +407,61 @@ def testOpenAICompletionsCompatSuppressesUnsupportedFields : IO Unit := do
   assertTrue (LeanAgent.Json.optVal? json "prompt_cache_retention" == none)
     "expected unsupported long-cache retention to be omitted"
 
+def testOpenAICompletionsLegacyDetectsOpenRouterCompat : IO Unit := do
+  let json := LeanAgent.AI.Api.OpenAICompletions.requestToJsonWithOptions
+    (basicProviderRequest)
+    { maxTokens := some 123
+      reasoningEffort := some .high
+    }
+    LeanAgent.Models.openRouterBaseUrl
+    LeanAgent.Models.openRouterProviderId
+  assertTrue (LeanAgent.Json.optVal? json "store" == some (LeanAgent.Json.bool false))
+    "expected OpenRouter legacy request to send store=false"
+  assertTrue (LeanAgent.Json.optVal? json "max_tokens" == none)
+    "expected OpenRouter legacy request to omit max_tokens"
+  assertTrue (LeanAgent.Json.optVal? json "max_completion_tokens" == some (LeanAgent.Json.nat 123))
+    "expected OpenRouter legacy request to use max_completion_tokens"
+  assertTrue ((LeanAgent.Json.optVal? json "reasoning_effort").isNone)
+    "expected OpenRouter legacy request to omit top-level reasoning_effort"
+  match jsonObjectField? json "reasoning" with
+  | some reasoning =>
+      assertTrue (jsonStringField? reasoning "effort" == some "high")
+        "expected OpenRouter legacy reasoning object"
+  | none => fail "expected OpenRouter legacy reasoning object"
+
+def testOpenAICompletionsLegacyDetectsAntLingCompat : IO Unit := do
+  let json := LeanAgent.AI.Api.OpenAICompletions.requestToJsonWithOptions
+    (basicProviderRequest #[noopTool])
+    { maxTokens := some 123
+      reasoningEffort := some .high
+      cacheRetention := some .long
+      sessionId := some "legacy-ant-ling"
+    }
+    LeanAgent.Models.antLingBaseUrl
+    LeanAgent.Models.antLingProviderId
+  assertTrue (LeanAgent.Json.optVal? json "max_tokens" == some (LeanAgent.Json.nat 123))
+    "expected Ant Ling legacy request to use max_tokens"
+  assertTrue ((LeanAgent.Json.optVal? json "max_completion_tokens").isNone)
+    "expected Ant Ling legacy request to omit max_completion_tokens"
+  assertTrue ((LeanAgent.Json.optVal? json "store").isNone)
+    "expected Ant Ling legacy request to omit store"
+  assertTrue ((LeanAgent.Json.optVal? json "prompt_cache_key").isNone)
+    "expected Ant Ling legacy request to omit prompt cache key"
+  assertTrue ((LeanAgent.Json.optVal? json "prompt_cache_retention").isNone)
+    "expected Ant Ling legacy request to omit prompt cache retention"
+  assertTrue ((LeanAgent.Json.optVal? json "reasoning_effort").isNone)
+    "expected Ant Ling legacy request to omit top-level reasoning_effort"
+  match jsonObjectField? json "reasoning", jsonArrayField? json "tools" with
+  | some reasoning, some tools =>
+      assertTrue (jsonStringField? reasoning "effort" == some "high")
+        "expected Ant Ling legacy reasoning object"
+      match jsonObjectField? tools[0]! "function" with
+      | some fn =>
+          assertTrue (LeanAgent.Json.optVal? fn "strict" == some (LeanAgent.Json.bool false))
+            "expected Ant Ling legacy tools to keep strict=false"
+      | none => fail "expected Ant Ling legacy tool function"
+  | _, _ => fail "expected Ant Ling legacy reasoning object and tools"
+
 def testOpenAICompletionsPromptCacheKey : IO Unit := do
   let options : LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsOptions :=
     { sessionId := some "session-123" }
@@ -644,11 +720,6 @@ def azureResponsesModel : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel 
     contextWindow := 128000
     maxTokens := 16384
   }
-
-def jsonStringField? (json : Lean.Json) (key : String) : Option String :=
-  match LeanAgent.Json.optVal? json key with
-  | some (.str value) => some value
-  | _ => none
 
 def jsonNatField? (json : Lean.Json) (key : String) : Option Nat :=
   match LeanAgent.Json.optVal? json key with
@@ -1236,22 +1307,6 @@ def bedrockModelRef : LeanAgent.AI.ModelRef :=
     baseUrl := some LeanAgent.Models.amazonBedrockBaseUrl
   }
 
-def jsonArrayField? (json : Lean.Json) (key : String) : Option (Array Lean.Json) :=
-  match LeanAgent.Json.optVal? json key with
-  | some value =>
-      match value.getArr? with
-      | .ok arr => some arr
-      | .error _ => none
-  | none => none
-
-def jsonObjectField? (json : Lean.Json) (key : String) : Option Lean.Json :=
-  match LeanAgent.Json.optVal? json key with
-  | some value =>
-      match value.getObj? with
-      | .ok _ => some value
-      | .error _ => none
-  | none => none
-
 def openAICompletionsContextModel : LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsModel :=
   { id := "gpt-4o-mini"
     provider := LeanAgent.Models.openAIProviderId
@@ -1761,6 +1816,25 @@ def testOpenAICompletionsContextUsesConfigurableChatTemplateKwargs : IO Unit := 
         "expected omitWhenOff to remove disabled effort kwarg"
   | _, _ => fail "expected configurable chat_template_kwargs payloads"
 
+def testOpenAICompletionsContextOmitsChatTemplateKwargsForNonReasoningModel : IO Unit := do
+  let kwargs :=
+    LeanAgent.Json.obj
+      [ ("thinking", LeanAgent.Json.obj [("$var", LeanAgent.Json.str "thinking.enabled")])
+      , ("preserve_thinking", LeanAgent.Json.bool true)
+      ]
+  let payload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+    { openAICompletionsContextModel with
+      provider := "local-vllm"
+      id := "unsloth/gpt-oss-120b-GGUF"
+      reasoning := false
+      thinkingFormat := some "chat-template"
+      chatTemplateKwargs := some kwargs
+    }
+    { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }] }
+    { reasoning := some .high }
+  assertTrue ((LeanAgent.Json.optVal? payload "chat_template_kwargs").isNone)
+    "expected non-reasoning models to omit chat_template_kwargs"
+
 def testOpenAICompletionsContextUsesAntLingReasoningObject : IO Unit := do
   let payload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
     { openAICompletionsContextModel with
@@ -1796,6 +1870,45 @@ def testOpenAICompletionsContextUsesAntLingReasoningObject : IO Unit := do
       assertTrue ((LeanAgent.Json.optVal? payload "reasoning_effort").isNone)
         "expected Ant Ling to omit top-level reasoning_effort"
   | none => fail "expected Ant Ling reasoning object"
+
+def testOpenAICompletionsContextOmitsAntLingReasoningWhenSuppressed : IO Unit := do
+  let ringPayload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+    { openAICompletionsContextModel with
+      provider := LeanAgent.Models.antLingProviderId
+      id := "Ring-2.6-1T"
+      reasoning := true
+      supportsStore := false
+      supportsDeveloperRole := false
+      thinkingFormat := some "ant-ling"
+      thinkingLevelMap :=
+        #[ { level := .off, mapped := none }
+         , { level := .level .minimal, mapped := none }
+         , { level := .level .low, mapped := none }
+         , { level := .level .medium, mapped := none }
+         , { level := .level .high, mapped := some "high" }
+         ]
+    }
+    { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }] }
+    { reasoning := some .medium
+      supportsReasoningEffort := false
+    }
+  let lingPayload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+    { openAICompletionsContextModel with
+      provider := LeanAgent.Models.antLingProviderId
+      id := "Ling-2.6-flash"
+      reasoning := false
+      supportsStore := false
+      supportsDeveloperRole := false
+      thinkingFormat := some "ant-ling"
+    }
+    { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }] }
+    { reasoning := some .high
+      supportsReasoningEffort := false
+    }
+  assertTrue ((LeanAgent.Json.optVal? ringPayload "reasoning").isNone)
+    "expected suppressed Ant Ling level to omit reasoning payload"
+  assertTrue ((LeanAgent.Json.optVal? lingPayload "reasoning").isNone)
+    "expected non-reasoning Ant Ling model to omit reasoning payload"
 
 def testAnthropicMessagesRequestPayload : IO Unit := do
   let assistant : LeanAgent.AI.AssistantMessage :=
@@ -8453,6 +8566,7 @@ def testImagesCollectionProviderCrudAndRefresh : IO Unit := do
       models := #[fakeImagesModel]
       refreshModels := some (do
         refreshCount.modify (· + 1)
+        IO.sleep 10
         pure #[{ fakeImagesModel with id := "refreshed-image-model" }]
       )
       api :=
@@ -11735,6 +11849,115 @@ def testOpenAICompatibleStreamsApplyModelCost : IO Unit := do
         assertTrue (message.usage.cost.total == 8.0) "expected final event cost"
     | _ => fail "expected final done event"
 
+def testOpenAICompatibleStreamsDetectOpenRouterDeveloperRole : IO Unit := do
+  let port := 18113
+  withHttpServer port do
+    let deepseekModel : LeanAgent.Models.ModelInfo :=
+      { id := "deepseek/deepseek-v4-pro"
+        name := "DeepSeek via OpenRouter"
+        provider := LeanAgent.Models.openRouterProviderId
+        api := "openai-completions"
+        baseUrl := s!"http://127.0.0.1:{port}/runtime-stream-openai"
+        contextWindow := 1000000
+        maxTokens := 384000
+        reasoning := true
+        input := #["text"]
+      }
+    let openAIModel : LeanAgent.Models.ModelInfo :=
+      { id := "openai/gpt-5.2-codex"
+        name := "GPT 5.2 Codex via OpenRouter"
+        provider := LeanAgent.Models.openRouterProviderId
+        api := "openai-completions"
+        baseUrl := s!"http://127.0.0.1:{port}/runtime-stream-openai"
+        contextWindow := 400000
+        maxTokens := 128000
+        reasoning := true
+        input := #["text", "image"]
+      }
+    let context : LeanAgent.AI.Context :=
+      { systemPrompt := some "Follow instructions."
+        messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }]
+      }
+    let deepseekPayload ← IO.mkRef Lean.Json.null
+    let openAIPayload ← IO.mkRef Lean.Json.null
+    let _ ← LeanAgent.AI.Providers.Streams.openAICompatibleStreams.streamSimple
+      deepseekModel
+      context
+      { apiKey := some "test-key"
+        onPayload := some fun payload _ => do
+          deepseekPayload.set payload
+          pure none
+      }
+    let _ ← LeanAgent.AI.Providers.Streams.openAICompatibleStreams.streamSimple
+      openAIModel
+      context
+      { apiKey := some "test-key"
+        onPayload := some fun payload _ => do
+          openAIPayload.set payload
+          pure none
+      }
+    let deepseekPayload ← deepseekPayload.get
+    let openAIPayload ← openAIPayload.get
+    match jsonArrayField? deepseekPayload "messages", jsonArrayField? openAIPayload "messages" with
+    | some deepseekMessages, some openAIMessages =>
+        match deepseekMessages[0]?, openAIMessages[0]? with
+        | some deepseekInstruction, some openAIInstruction =>
+            assertTrue (jsonStringField? deepseekInstruction "role" == some "system")
+              "expected DeepSeek OpenRouter instructions to stay as system"
+            assertTrue (jsonStringField? openAIInstruction "role" == some "developer")
+              "expected OpenAI OpenRouter instructions to use developer role"
+        | _, _ => fail "expected OpenRouter instruction messages"
+    | _, _ => fail "expected OpenRouter payload messages arrays"
+
+def testOpenAICompatibleStreamsDetectMoonshotCompatDefaults : IO Unit := do
+  let port := 18114
+  withHttpServer port do
+    let tool : LeanAgent.AI.Tool :=
+      { name := "lookup"
+        description := "Lookup a value"
+        parameters := LeanAgent.Json.obj [("type", LeanAgent.Json.str "object")]
+      }
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := "kimi-k2.6"
+        name := "Kimi K2.6"
+        provider := LeanAgent.Models.moonshotAIProviderId
+        api := "openai-completions"
+        baseUrl := s!"http://127.0.0.1:{port}/runtime-stream-openai"
+        contextWindow := 262144
+        maxTokens := 262144
+        reasoning := true
+        input := #["text", "image"]
+      }
+    let payloadRef ← IO.mkRef Lean.Json.null
+    let _ ← LeanAgent.AI.Providers.Streams.openAICompatibleStreams.streamSimple
+      model
+      { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }]
+        tools := #[tool]
+      }
+      { apiKey := some "test-key"
+        maxTokens := some 123
+        onPayload := some fun payload _ => do
+          payloadRef.set payload
+          pure none
+      }
+    let payload ← payloadRef.get
+    assertTrue (LeanAgent.Json.optVal? payload "max_tokens" == some (LeanAgent.Json.nat 123))
+      "expected Moonshot auto-detect to use max_tokens"
+    assertTrue ((LeanAgent.Json.optVal? payload "max_completion_tokens").isNone)
+      "expected Moonshot auto-detect to omit max_completion_tokens"
+    assertTrue ((LeanAgent.Json.optVal? payload "reasoning_effort").isNone)
+      "expected Moonshot auto-detect to omit top-level reasoning_effort"
+    match jsonObjectField? payload "thinking", jsonArrayField? payload "tools" with
+    | some thinking, some tools =>
+        assertTrue (jsonStringField? thinking "type" == some "disabled")
+          "expected Moonshot auto-detect to keep disabled thinking payload"
+        match jsonObjectField? tools[0]! "function" with
+        | some fn =>
+            assertTrue ((LeanAgent.Json.optVal? fn "strict").isNone)
+              "expected Moonshot auto-detect to omit strict"
+        | none => fail "expected Moonshot tool function"
+    | _, _ => fail "expected Moonshot thinking object and tools array"
+
 def testOpenAICompatibleStreamsClampMaxTokens : IO Unit := do
   let port := 18091
   withHttpServer port do
@@ -13319,10 +13542,14 @@ def main : IO UInt32 := do
     testOpenAICompletionsContextUsesDeepSeekThinkingToggle
     testOpenAICompletionsContextUsesQwenThinkingFlags
     testOpenAICompletionsContextUsesConfigurableChatTemplateKwargs
+    testOpenAICompletionsContextOmitsChatTemplateKwargsForNonReasoningModel
     testOpenAICompletionsContextUsesAntLingReasoningObject
+    testOpenAICompletionsContextOmitsAntLingReasoningWhenSuppressed
     testOpenAICompletionsSerializesOptions
     testOpenAICompletionsUsesMappedReasoningEffort
     testOpenAICompletionsCompatSuppressesUnsupportedFields
+    testOpenAICompletionsLegacyDetectsOpenRouterCompat
+    testOpenAICompletionsLegacyDetectsAntLingCompat
     testOpenAICompletionsPromptCacheKey
     testOpenAICompletionsPromptCacheLongRetention
     testOpenAICompletionsPromptCacheClampsKey
@@ -13578,6 +13805,8 @@ def main : IO UInt32 := do
     testCompatOpenAICompletionsTypedLegacyAliasLocal
     testOpenAICompatibleStreamsUsesStreamingRuntime
     testOpenAICompatibleStreamsApplyModelCost
+    testOpenAICompatibleStreamsDetectOpenRouterDeveloperRole
+    testOpenAICompatibleStreamsDetectMoonshotCompatDefaults
     testOpenAICompatibleStreamsClampMaxTokens
     testCloudflareAIGatewayOpenAICompatibleHeaderAuthLocal
     testOpenRouterImagesRequestPayload

@@ -20,6 +20,7 @@ open LeanAgent
 structure OpenAICompatibleConfig where
   apiKey : String
   baseUrl : String := "https://api.openai.com/v1"
+  providerId : String := ""
   headers : Array (String × String) := #[]
   timeoutSeconds : UInt32 := 120
   connectTimeoutSeconds : UInt32 := 30
@@ -47,6 +48,7 @@ structure OpenAICompletionsOptions extends LeanAgent.AI.SimpleStreamOptions wher
 
 structure OpenAICompletionsModel extends LeanAgent.AI.Api.TransformMessages.TargetModel where
   reasoning : Bool := false
+  thinkingLevelMap : Array LeanAgent.AI.ThinkingLevelMapEntry := #[]
   supportsStore : Bool := true
   supportsDeveloperRole : Bool := true
   requiresThinkingAsText : Bool := false
@@ -57,6 +59,36 @@ structure OpenAICompletionsModel extends LeanAgent.AI.Api.TransformMessages.Targ
   supportsStrictMode : Bool := true
   cacheControlFormat : Option String := none
 deriving BEq
+
+structure OpenAICompletionsCompatOverride where
+  supportsStore : Option Bool := none
+  supportsDeveloperRole : Option Bool := none
+  requiresThinkingAsText : Option Bool := none
+  requiresReasoningContentOnAssistantMessages : Option Bool := none
+  thinkingFormat : Option String := none
+  chatTemplateKwargs : Option Lean.Json := none
+  zaiToolStream : Option Bool := none
+  supportsStrictMode : Option Bool := none
+  cacheControlFormat : Option String := none
+  supportsReasoningEffort : Option Bool := none
+  maxTokensField : Option String := none
+  supportsLongCacheRetention : Option Bool := none
+  sendSessionAffinityHeaders : Option Bool := none
+
+structure ResolvedOpenAICompletionsCompat where
+  supportsStore : Bool := true
+  supportsDeveloperRole : Bool := true
+  requiresThinkingAsText : Bool := false
+  requiresReasoningContentOnAssistantMessages : Bool := false
+  thinkingFormat : Option String := some "openai"
+  chatTemplateKwargs : Option Lean.Json := none
+  zaiToolStream : Bool := false
+  supportsStrictMode : Bool := true
+  cacheControlFormat : Option String := none
+  supportsReasoningEffort : Bool := true
+  maxTokensField : String := "max_completion_tokens"
+  supportsLongCacheRetention : Bool := true
+  sendSessionAffinityHeaders : Bool := false
 
 def optionsFromSimple (options : LeanAgent.AI.SimpleStreamOptions) : OpenAICompletionsOptions :=
   { temperature := options.temperature
@@ -77,6 +109,94 @@ def optionsFromSimple (options : LeanAgent.AI.SimpleStreamOptions) : OpenAICompl
     env := options.env
     reasoning := options.reasoning
     thinkingBudgets := options.thinkingBudgets
+  }
+
+def detectCompat
+    (provider baseUrl modelId : String) : ResolvedOpenAICompletionsCompat :=
+  let isZai :=
+    provider == "zai" || provider == "zai-coding-cn" ||
+      baseUrl.contains "api.z.ai" || baseUrl.contains "open.bigmodel.cn"
+  let isTogether :=
+    provider == "together" || baseUrl.contains "api.together.ai" || baseUrl.contains "api.together.xyz"
+  let isMoonshot :=
+    provider == "moonshotai" || provider == "moonshotai-cn" || baseUrl.contains "api.moonshot."
+  let isOpenRouter := provider == "openrouter" || baseUrl.contains "openrouter.ai"
+  let isCloudflareWorkersAI :=
+    provider == "cloudflare-workers-ai" || baseUrl.contains "api.cloudflare.com"
+  let isCloudflareAiGateway :=
+    provider == "cloudflare-ai-gateway" || baseUrl.contains "gateway.ai.cloudflare.com"
+  let isNvidia := provider == "nvidia" || baseUrl.contains "integrate.api.nvidia.com"
+  let isAntLing := provider == "ant-ling" || baseUrl.contains "api.ant-ling.com"
+  let isCerebras := provider == "cerebras" || baseUrl.contains "cerebras.ai"
+  let isGrok := provider == "xai" || baseUrl.contains "api.x.ai"
+  let isDeepSeek := provider == "deepseek" || baseUrl.contains "deepseek.com"
+  let isOpenCode := provider == "opencode" || baseUrl.contains "opencode.ai"
+  let isNonStandard :=
+    isNvidia || isCerebras || isGrok || isTogether || baseUrl.contains "chutes.ai" ||
+      baseUrl.contains "deepseek.com" || isZai || isMoonshot || isOpenCode ||
+      isCloudflareWorkersAI || isCloudflareAiGateway || isAntLing
+  let useMaxTokens :=
+    baseUrl.contains "chutes.ai" || isMoonshot || isCloudflareAiGateway ||
+      isTogether || isNvidia || isAntLing
+  let supportsDeveloperRole :=
+    (isOpenRouter && (modelId.startsWith "anthropic/" || modelId.startsWith "openai/")) ||
+      (!isNonStandard && !isOpenRouter)
+  let thinkingFormat :=
+    if isDeepSeek then
+      some "deepseek"
+    else if isZai then
+      some "zai"
+    else if isTogether then
+      some "together"
+    else if isAntLing then
+      some "ant-ling"
+    else if isOpenRouter then
+      some "openrouter"
+    else
+      some "openai"
+  let cacheControlFormat :=
+    if provider == "openrouter" && modelId.startsWith "anthropic/" then
+      some "anthropic"
+    else
+      none
+  { supportsStore := !isNonStandard
+    supportsDeveloperRole := supportsDeveloperRole
+    requiresThinkingAsText := false
+    requiresReasoningContentOnAssistantMessages := isDeepSeek
+    thinkingFormat := thinkingFormat
+    chatTemplateKwargs := none
+    zaiToolStream := false
+    supportsStrictMode := !(isMoonshot || isTogether || isCloudflareAiGateway || isNvidia)
+    cacheControlFormat := cacheControlFormat
+    supportsReasoningEffort :=
+      !(isGrok || isZai || isMoonshot || isTogether || isCloudflareAiGateway || isNvidia || isAntLing)
+    maxTokensField := if useMaxTokens then "max_tokens" else "max_completion_tokens"
+    supportsLongCacheRetention :=
+      !(isTogether || isCloudflareWorkersAI || isCloudflareAiGateway || isNvidia || isAntLing)
+    sendSessionAffinityHeaders := false
+  }
+
+def resolveCompat
+    (provider baseUrl modelId : String)
+    (override : OpenAICompletionsCompatOverride := {}) : ResolvedOpenAICompletionsCompat :=
+  let detected := detectCompat provider baseUrl modelId
+  { supportsStore := override.supportsStore.getD detected.supportsStore
+    supportsDeveloperRole := override.supportsDeveloperRole.getD detected.supportsDeveloperRole
+    requiresThinkingAsText := override.requiresThinkingAsText.getD detected.requiresThinkingAsText
+    requiresReasoningContentOnAssistantMessages :=
+      override.requiresReasoningContentOnAssistantMessages.getD
+        detected.requiresReasoningContentOnAssistantMessages
+    thinkingFormat := override.thinkingFormat <|> detected.thinkingFormat
+    chatTemplateKwargs := override.chatTemplateKwargs <|> detected.chatTemplateKwargs
+    zaiToolStream := override.zaiToolStream.getD detected.zaiToolStream
+    supportsStrictMode := override.supportsStrictMode.getD detected.supportsStrictMode
+    cacheControlFormat := override.cacheControlFormat <|> detected.cacheControlFormat
+    supportsReasoningEffort := override.supportsReasoningEffort.getD detected.supportsReasoningEffort
+    maxTokensField := override.maxTokensField.getD detected.maxTokensField
+    supportsLongCacheRetention :=
+      override.supportsLongCacheRetention.getD detected.supportsLongCacheRetention
+    sendSessionAffinityHeaders :=
+      override.sendSessionAffinityHeaders.getD detected.sendSessionAffinityHeaders
   }
 
 def chatCompletionsUrl (baseUrl : String) : String :=
@@ -493,26 +613,52 @@ def messageToJson : AgentMessage → Lean.Json
         , ("content", LeanAgent.Json.str (sanitize content))
         ]
 
-def toolToJson (tool : AgentTool) : Lean.Json :=
+def toolToJson (supportsStrictMode : Bool) (tool : AgentTool) : Lean.Json :=
+  let functionFields :=
+    [ ("name", LeanAgent.Json.str tool.name)
+    , ("description", LeanAgent.Json.str tool.description)
+    , ("parameters", tool.inputSchema)
+    ] ++ if supportsStrictMode then [("strict", LeanAgent.Json.bool false)] else []
   LeanAgent.Json.obj
     [ ("type", LeanAgent.Json.str "function")
-    , ("function",
-        LeanAgent.Json.obj
-          [ ("name", LeanAgent.Json.str tool.name)
-          , ("description", LeanAgent.Json.str tool.description)
-          , ("parameters", tool.inputSchema)
-          ])
+    , ("function", LeanAgent.Json.obj functionFields)
     ]
+
+def requestToolsForLegacy?
+    (request : ProviderRequest)
+    (supportsStrictMode : Bool) : Option (Array Lean.Json) :=
+  if !request.tools.isEmpty || hasToolHistory request.messages then
+    some (request.tools.map (toolToJson supportsStrictMode))
+  else
+    none
+
+def requestToolChoiceForLegacy?
+    (request : ProviderRequest)
+    (options : OpenAICompletionsOptions) : Option Lean.Json :=
+  if !request.tools.isEmpty || hasToolHistory request.messages then
+    some ((options.toolChoice.getD .auto).toJson)
+  else
+    none
+
+def requestToolStreamForLegacy?
+    (request : ProviderRequest)
+    (compat : ResolvedOpenAICompletionsCompat) : Option Lean.Json :=
+  if compat.zaiToolStream && !request.tools.isEmpty then
+    some (LeanAgent.Json.bool true)
+  else
+    none
 
 def requestToolFields
     (request : ProviderRequest)
     (options : OpenAICompletionsOptions) : List (String × Lean.Json) :=
-  if !request.tools.isEmpty || hasToolHistory request.messages then
-    [ ("tools", LeanAgent.Json.arr (request.tools.map toolToJson))
-    , ("tool_choice", (options.toolChoice.getD .auto).toJson)
-    ]
-  else
-    []
+  let tools? := requestToolsForLegacy? request true
+  let toolChoice? := requestToolChoiceForLegacy? request options
+  (match tools? with
+   | some tools => [("tools", LeanAgent.Json.arr tools)]
+   | none => []) ++
+    (match toolChoice? with
+     | some toolChoice => [("tool_choice", toolChoice)]
+     | none => [])
 
 def requestOptionFields (options : OpenAICompletionsOptions) : List (String × Lean.Json) :=
   let temperatureFields :=
@@ -542,6 +688,138 @@ def requestOptionFields (options : OpenAICompletionsOptions) : List (String × L
           []
   temperatureFields ++ maxTokenFields ++ reasoningFields
 
+def resolvedLegacyOptions
+    (baseUrl providerId modelId : String)
+    (options : OpenAICompletionsOptions) :
+    OpenAICompletionsOptions × Option ResolvedOpenAICompletionsCompat :=
+  if baseUrl.isEmpty && providerId.isEmpty then
+    (options, none)
+  else
+    let compat := resolveCompat providerId baseUrl modelId
+    let options :=
+      { options with
+        supportsReasoningEffort :=
+          if options.supportsReasoningEffort then compat.supportsReasoningEffort else false
+        maxTokensField :=
+          if options.maxTokensField == "max_tokens" then compat.maxTokensField else options.maxTokensField
+        supportsLongCacheRetention :=
+          if options.supportsLongCacheRetention then compat.supportsLongCacheRetention else false
+        sendSessionAffinityHeaders :=
+          if options.sendSessionAffinityHeaders then true else compat.sendSessionAffinityHeaders
+      }
+    (options, some compat)
+
+def requestCompatOptionFields
+    (compat : ResolvedOpenAICompletionsCompat)
+    (options : OpenAICompletionsOptions) : List (String × Lean.Json) :=
+  let temperatureFields :=
+    match options.temperature with
+    | some temperature => [("temperature", LeanAgent.AI.floatJson temperature)]
+    | none => []
+  let maxTokenFields :=
+    match options.maxTokens with
+    | some maxTokens => [(options.maxTokensField, LeanAgent.Json.nat maxTokens)]
+    | none => []
+  let storeFields :=
+    if compat.supportsStore then
+      [("store", LeanAgent.Json.bool false)]
+    else
+      []
+  let reasoningLevel? :=
+    match options.reasoningEffort with
+    | some effort => some effort
+    | none => options.reasoning
+  let reasoningValue? :=
+    match reasoningLevel? with
+    | some effort => some (requestReasoningEffortString options effort)
+    | none => none
+  let offThinkingEnabled :=
+    options.offThinkingEnabled || options.offReasoningEffortValue.isSome
+  let reasoningFields :=
+    match compat.thinkingFormat with
+    | some "zai" =>
+        let thinkingFields :=
+          [("thinking",
+            LeanAgent.Json.obj
+              [("type", LeanAgent.Json.str (if reasoningValue?.isSome then "enabled" else "disabled"))])]
+        let effortFields :=
+          if options.supportsReasoningEffort then
+            match reasoningValue? with
+            | some effort => [("reasoning_effort", LeanAgent.Json.str effort)]
+            | none => []
+          else
+            []
+        thinkingFields ++ effortFields
+    | some "qwen" =>
+        [("enable_thinking", LeanAgent.Json.bool reasoningValue?.isSome)]
+    | some "qwen-chat-template" =>
+        [("chat_template_kwargs",
+          LeanAgent.Json.obj
+            [ ("enable_thinking", LeanAgent.Json.bool reasoningValue?.isSome)
+            , ("preserve_thinking", LeanAgent.Json.bool true)
+            ])]
+    | some "chat-template" =>
+        []
+    | some "deepseek" =>
+        let thinkingFields :=
+          if reasoningValue?.isSome then
+            [("thinking", LeanAgent.Json.obj [("type", LeanAgent.Json.str "enabled")])]
+          else if offThinkingEnabled then
+            [("thinking", LeanAgent.Json.obj [("type", LeanAgent.Json.str "disabled")])]
+          else
+            []
+        let effortFields :=
+          if options.supportsReasoningEffort then
+            match reasoningValue? with
+            | some effort => [("reasoning_effort", LeanAgent.Json.str effort)]
+            | none => []
+          else
+            []
+        thinkingFields ++ effortFields
+    | some "openrouter" =>
+        match reasoningValue?, offThinkingEnabled with
+        | some effort, _ =>
+            [("reasoning", LeanAgent.Json.obj [("effort", LeanAgent.Json.str effort)])]
+        | none, true =>
+            [("reasoning",
+              LeanAgent.Json.obj
+                [("effort", LeanAgent.Json.str (options.offReasoningEffortValue.getD "none"))])]
+        | none, false => []
+    | some "ant-ling" =>
+        match reasoningValue? with
+        | some effort => [("reasoning", LeanAgent.Json.obj [("effort", LeanAgent.Json.str effort)])]
+        | none => []
+    | some "together" =>
+        let toggleFields :=
+          [("reasoning", LeanAgent.Json.obj [("enabled", LeanAgent.Json.bool reasoningValue?.isSome)])]
+        let effortFields :=
+          if options.supportsReasoningEffort then
+            match reasoningValue? with
+            | some effort => [("reasoning_effort", LeanAgent.Json.str effort)]
+            | none => []
+          else
+            []
+        toggleFields ++ effortFields
+    | some "string-thinking" =>
+        match reasoningValue? with
+        | some effort => [("thinking", LeanAgent.Json.str effort)]
+        | none =>
+            if offThinkingEnabled then
+              [("thinking", LeanAgent.Json.str (options.offReasoningEffortValue.getD "none"))]
+            else
+              []
+    | _ =>
+        if options.supportsReasoningEffort then
+          match reasoningValue? with
+          | some effort => [("reasoning_effort", LeanAgent.Json.str effort)]
+          | none =>
+              match options.offReasoningEffortValue with
+              | some effort => [("reasoning_effort", LeanAgent.Json.str effort)]
+              | none => []
+        else
+          []
+  temperatureFields ++ maxTokenFields ++ storeFields ++ reasoningFields
+
 def jsonStringField? (json : Lean.Json) (key : String) : Option String :=
   match LeanAgent.Json.optVal? json key with
   | some (Lean.Json.str value) => some value
@@ -558,12 +836,38 @@ def requestedReasoningLevel? (options : OpenAICompletionsOptions) :
   | some effort => some effort
   | none => options.reasoning
 
-def requestedReasoningValue? (options : OpenAICompletionsOptions) : Option String :=
+def modelThinkingLevelMapValue?
+    (model : OpenAICompletionsModel)
+    (level : LeanAgent.AI.ModelThinkingLevel) : Option (Option String) :=
+  (model.thinkingLevelMap.find? fun entry => entry.level == level).map (fun entry => entry.mapped)
+
+def requestedReasoningValue?
+    (model : OpenAICompletionsModel)
+    (options : OpenAICompletionsOptions) : Option String :=
   match requestedReasoningLevel? options with
-  | some effort => some (requestReasoningEffortString options effort)
+  | some effort =>
+      match options.reasoningEffortValue with
+      | some value => some value
+      | none =>
+          match modelThinkingLevelMapValue? model (.level effort) with
+          | some none => none
+          | some (some value) => some value
+          | none => some (reasoningEffortString effort)
   | none => none
 
+def offThinkingEnabled
+    (model : OpenAICompletionsModel)
+    (options : OpenAICompletionsOptions) : Bool :=
+  if !model.reasoning then
+    false
+  else
+    match modelThinkingLevelMapValue? model .off with
+    | some none => false
+    | some _ => true
+    | none => options.offThinkingEnabled
+
 def chatTemplateKwargValue?
+    (model : OpenAICompletionsModel)
     (options : OpenAICompletionsOptions)
     (value : Lean.Json) : Option Lean.Json :=
   match value with
@@ -576,7 +880,7 @@ def chatTemplateKwargValue?
               jsonBoolField? value "omitWhenOff" == some true then
             none
           else
-            match requestedReasoningValue? options with
+            match requestedReasoningValue? model options with
             | some effort => some (LeanAgent.Json.str effort)
             | none => options.offReasoningEffortValue.map LeanAgent.Json.str
       | _ => some value
@@ -589,7 +893,7 @@ def buildChatTemplateKwargs?
   | some (.obj kwargs) =>
       let fields :=
         kwargs.foldl (init := ([] : List (String × Lean.Json))) fun acc key value =>
-          match chatTemplateKwargValue? options value with
+          match chatTemplateKwargValue? model options value with
           | some resolved => (key, resolved) :: acc
           | none => acc
       if fields.isEmpty then
@@ -614,7 +918,8 @@ def requestContextOptionFields
       [("store", LeanAgent.Json.bool false)]
     else
       []
-  let reasoningValue? := requestedReasoningValue? options
+  let reasoningValue? := requestedReasoningValue? model options
+  let offThinkingEnabled := offThinkingEnabled model options
   let reasoningFields :=
     match model.thinkingFormat with
     | some "zai" =>
@@ -648,15 +953,18 @@ def requestContextOptionFields
         else
           []
     | some "chat-template" =>
-        match buildChatTemplateKwargs? model options with
-        | some kwargs => [("chat_template_kwargs", kwargs)]
-        | none => []
+        if model.reasoning then
+          match buildChatTemplateKwargs? model options with
+          | some kwargs => [("chat_template_kwargs", kwargs)]
+          | none => []
+        else
+          []
     | some "deepseek" =>
         let thinkingFields :=
           if model.reasoning then
             if reasoningValue?.isSome then
               [("thinking", LeanAgent.Json.obj [("type", LeanAgent.Json.str "enabled")])]
-            else if options.offThinkingEnabled then
+            else if offThinkingEnabled then
               [("thinking", LeanAgent.Json.obj [("type", LeanAgent.Json.str "disabled")])]
             else
               []
@@ -672,7 +980,7 @@ def requestContextOptionFields
         thinkingFields ++ effortFields
     | some "openrouter" =>
         if model.reasoning then
-          match reasoningValue?, options.offThinkingEnabled with
+          match reasoningValue?, offThinkingEnabled with
           | some effort, _ =>
               [("reasoning", LeanAgent.Json.obj [("effort", LeanAgent.Json.str effort)])]
           | none, true =>
@@ -708,14 +1016,14 @@ def requestContextOptionFields
           match reasoningValue? with
           | some effort => [("thinking", LeanAgent.Json.str effort)]
           | none =>
-              if options.offThinkingEnabled then
+              if offThinkingEnabled then
                 [("thinking", LeanAgent.Json.str (options.offReasoningEffortValue.getD "none"))]
               else
                 []
         else
           []
     | _ =>
-        if options.supportsReasoningEffort then
+        if model.reasoning && options.supportsReasoningEffort then
           match reasoningValue? with
           | some effort => [("reasoning_effort", LeanAgent.Json.str effort)]
           | none =>
@@ -892,6 +1200,8 @@ def modelRef
     (config : OpenAICompatibleConfig)
     (request : ProviderRequest)
     (api provider : String) : LeanAgent.AI.ModelRef :=
+  let provider :=
+    if provider.isEmpty then config.providerId else provider
   { id := request.model
     api := api
     provider := provider
@@ -921,16 +1231,50 @@ def callResponseHook
 def requestToJsonWithOptions
     (request : ProviderRequest)
     (options : OpenAICompletionsOptions := {})
-    (baseUrl : String := "") : Lean.Json :=
+    (baseUrl : String := "")
+    (providerId : String := "") : Lean.Json :=
+  let (options, compat?) := resolvedLegacyOptions baseUrl providerId request.model options
   let messages :=
     #[LeanAgent.Json.obj [("role", LeanAgent.Json.str "system"), ("content", LeanAgent.Json.str request.system)]]
       ++ request.messages.map messageToJson
+  let tools? :=
+    match compat? with
+    | some compat => requestToolsForLegacy? request compat.supportsStrictMode
+    | none => requestToolsForLegacy? request true
+  let toolChoice? := requestToolChoiceForLegacy? request options
+  let toolStream? := compat?.bind (requestToolStreamForLegacy? request)
+  let (messages, tools?) :=
+    match compat? with
+    | some compat =>
+        let cacheModel : OpenAICompletionsModel :=
+          { id := request.model
+            provider := providerId
+            api := "openai-completions"
+            input := #["text"]
+            cacheControlFormat := compat.cacheControlFormat
+          }
+        match compatCacheControlJson? cacheModel options with
+        | some cacheControl => applyAnthropicCacheControl messages tools? cacheControl
+        | none => (messages, tools?)
+    | none => (messages, tools?)
+  let optionFields :=
+    match compat? with
+    | some compat => requestCompatOptionFields compat options
+    | none => requestOptionFields options
   LeanAgent.Json.obj
     ([ ("model", LeanAgent.Json.str request.model)
      , ("messages", LeanAgent.Json.arr messages)
-     ] ++ requestOptionFields options
+     ] ++ optionFields
        ++ promptCacheFields baseUrl options
-       ++ requestToolFields request options)
+       ++ (match tools? with
+           | some tools => [("tools", LeanAgent.Json.arr tools)]
+           | none => [])
+       ++ (match toolChoice? with
+           | some toolChoice => [("tool_choice", toolChoice)]
+           | none => [])
+       ++ (match toolStream? with
+           | some toolStream => [("tool_stream", toolStream)]
+           | none => []))
 
 def requestToJson (request : ProviderRequest) : Lean.Json :=
   requestToJsonWithOptions request
@@ -938,18 +1282,52 @@ def requestToJson (request : ProviderRequest) : Lean.Json :=
 def requestToStreamingJsonWithOptions
     (request : ProviderRequest)
     (options : OpenAICompletionsOptions := {})
-    (baseUrl : String := "") : Lean.Json :=
+    (baseUrl : String := "")
+    (providerId : String := "") : Lean.Json :=
+  let (options, compat?) := resolvedLegacyOptions baseUrl providerId request.model options
   let messages :=
     #[LeanAgent.Json.obj [("role", LeanAgent.Json.str "system"), ("content", LeanAgent.Json.str request.system)]]
       ++ request.messages.map messageToJson
+  let tools? :=
+    match compat? with
+    | some compat => requestToolsForLegacy? request compat.supportsStrictMode
+    | none => requestToolsForLegacy? request true
+  let toolChoice? := requestToolChoiceForLegacy? request options
+  let toolStream? := compat?.bind (requestToolStreamForLegacy? request)
+  let (messages, tools?) :=
+    match compat? with
+    | some compat =>
+        let cacheModel : OpenAICompletionsModel :=
+          { id := request.model
+            provider := providerId
+            api := "openai-completions"
+            input := #["text"]
+            cacheControlFormat := compat.cacheControlFormat
+          }
+        match compatCacheControlJson? cacheModel options with
+        | some cacheControl => applyAnthropicCacheControl messages tools? cacheControl
+        | none => (messages, tools?)
+    | none => (messages, tools?)
+  let optionFields :=
+    match compat? with
+    | some compat => requestCompatOptionFields compat options
+    | none => requestOptionFields options
   LeanAgent.Json.obj
     ([ ("model", LeanAgent.Json.str request.model)
      , ("messages", LeanAgent.Json.arr messages)
      , ("stream", LeanAgent.Json.bool true)
      , ("stream_options", LeanAgent.Json.obj [("include_usage", LeanAgent.Json.bool true)])
-     ] ++ requestOptionFields options
+     ] ++ optionFields
        ++ promptCacheFields baseUrl options
-       ++ requestToolFields request options)
+       ++ (match tools? with
+           | some tools => [("tools", LeanAgent.Json.arr tools)]
+           | none => [])
+       ++ (match toolChoice? with
+           | some toolChoice => [("tool_choice", toolChoice)]
+           | none => [])
+       ++ (match toolStream? with
+           | some toolStream => [("tool_stream", toolStream)]
+           | none => []))
 
 def requestToJsonWithContextOptions
     (model : OpenAICompletionsModel)
@@ -1540,7 +1918,9 @@ def completeWithOptions
     (request : ProviderRequest)
   (options : OpenAICompletionsOptions := {}) : IO LeanAgent.ProviderResponse := do
   let model := modelRef config request "openai-completions" ""
-  let payload ← applyPayloadHook options model (requestToJsonWithOptions request options config.baseUrl)
+  let payload ←
+    applyPayloadHook options model
+      (requestToJsonWithOptions request options config.baseUrl config.providerId)
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
   let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
     (runHttpJson config payload (requestHeaders options) options model)
@@ -1555,7 +1935,9 @@ def streamWithOptions
     (api providerId : String)
     (options : OpenAICompletionsOptions := {}) : IO LeanAgent.AI.AssistantMessageEventStream := do
   let model := modelRef config request api providerId
-  let payload ← applyPayloadHook options model (requestToStreamingJsonWithOptions request options config.baseUrl)
+  let payload ←
+    applyPayloadHook options model
+      (requestToStreamingJsonWithOptions request options config.baseUrl providerId)
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
   let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
     (runHttpJson config payload (requestHeaders options) options model)
