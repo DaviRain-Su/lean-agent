@@ -16,17 +16,9 @@ abbrev RuntimeAgentLoopConfig := LeanAgent.Agent.AgentLoopConfig
 
 
 def currentTimestamp : IO String := do
-  let output ← IO.Process.output
-    { cmd := "date"
-      args := #["-u", "+%Y-%m-%dT%H:%M:%SZ"]
-      stdin := .null
-      stdout := .piped
-      stderr := .null
-    }
-  if output.exitCode == 0 then
-    pure output.stdout.trimAscii.toString
-  else
-    pure s!"mono:{← IO.monoMsNow}"
+  let ts ← Std.Time.Timestamp.now
+  let dt := Std.Time.DateTime.ofTimestamp ts .UTC
+  pure (Std.Time.DateTime.format dt "uuuu-MM-dd'T'HH:mm:ss'Z'")
 
 
 def newId (idPrefix : String) : IO String := do
@@ -65,14 +57,6 @@ def runtimeMessageToJson : RuntimeAgentMessage → Lean.Json
       customMessageToJson customType content display timestamp
 
 
-def messageEntryJson (id parentId timestamp : String) (message : RuntimeAgentMessage) : Lean.Json :=
-  LeanAgent.Json.obj
-    [ ("type", LeanAgent.Json.str "message")
-    , ("id", LeanAgent.Json.str id)
-    , ("parentId", if parentId.isEmpty then LeanAgent.Json.null else LeanAgent.Json.str parentId)
-    , ("timestamp", LeanAgent.Json.str timestamp)
-    , ("message", runtimeMessageToJson message)
-    ]
 
 
 def messageEntryJsonFromJson (id parentId timestamp : String) (message : Lean.Json) : Lean.Json :=
