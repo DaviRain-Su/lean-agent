@@ -439,6 +439,12 @@ def assistantThinkingText?
       (sanitize
         (String.intercalate "\n\n" (thinkingBlocks.map (·.thinking) |>.toList)))
 
+def normalizeReasoningSignature (provider signature : String) : String :=
+  if provider == "opencode-go" && signature == "reasoning" then
+    "reasoning_content"
+  else
+    signature
+
 def assistantThinkingField?
     (model : OpenAICompletionsModel)
     (content : Array LeanAgent.AI.ContentBlock) : Option (String × Lean.Json) :=
@@ -447,11 +453,7 @@ def assistantThinkingField?
   | some first =>
       match first.thinkingSignature with
       | some signature =>
-          let key :=
-            if model.provider == "opencode-go" && signature == "reasoning" then
-              "reasoning_content"
-            else
-              signature
+          let key := normalizeReasoningSignature model.provider signature
           some
             (key,
               LeanAgent.Json.str
@@ -1800,12 +1802,16 @@ def optionPrefer (first second : Option α) : Option α :=
   | some value => some value
   | none => second
 
-def reasoningDelta? (delta : Lean.Json) : Option (String × String) :=
+def reasoningDelta? (provider : String) (delta : Lean.Json) : Option (String × String) :=
   match optionalStringField delta "reasoning_content" with
   | some value => if value.isEmpty then none else some ("reasoning_content", value)
   | none =>
       match optionalStringField delta "reasoning" with
-      | some value => if value.isEmpty then none else some ("reasoning", value)
+      | some value =>
+          if value.isEmpty then
+            none
+          else
+            some (normalizeReasoningSignature provider "reasoning", value)
       | none =>
           match optionalStringField delta "reasoning_text" with
           | some value => if value.isEmpty then none else some ("reasoning_text", value)
@@ -1921,7 +1927,7 @@ def applyReasoningDetail
   | none => state
 
 def applyStreamingChunk
-    (model : String)
+    (provider model : String)
     (state : StreamingState)
     (events : Array ParsedStreamEvent)
     (chunk : Lean.Json) : StreamingState × Array ParsedStreamEvent :=
@@ -1949,7 +1955,7 @@ def applyStreamingChunk
             | some content => applyTextDelta state events content
             | none => (state, events)
           let (state, events) :=
-            match reasoningDelta? delta with
+            match reasoningDelta? provider delta with
             | some (signature, value) => applyThinkingDelta state events signature value
             | none => (state, events)
           let (state, events) :=
@@ -2003,7 +2009,7 @@ def parseStreamingEventStream
   let mut state : StreamingState := {}
   let mut parsedEvents : Array ParsedStreamEvent := #[]
   for chunk in chunks do
-    let (nextState, nextEvents) := applyStreamingChunk model state parsedEvents chunk
+    let (nextState, nextEvents) := applyStreamingChunk provider model state parsedEvents chunk
     state := nextState
     parsedEvents := nextEvents
   let finalEvents ← finalParsedEvents state

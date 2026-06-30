@@ -695,6 +695,44 @@ def testOpenAICompletionsParsesStreamingThinking : IO Unit := do
         "expected thinking block"
   | .error err => fail s!"streaming thinking parse failed: {err}"
 
+def testOpenAICompletionsParsesOpenCodeGoStreamingReasoning : IO Unit := do
+  let raw := String.intercalate "\n"
+    [ "data: {\"choices\":[{\"delta\":{\"reasoning\":\"think\"},\"finish_reason\":null}]}"
+    , ""
+    , "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}"
+    , ""
+    , "data: [DONE]"
+    , ""
+    ]
+  match LeanAgent.AI.Api.OpenAICompletions.parseStreamingEventStream
+    "openai-completions" "opencode-go" "kimi-k2.6" 10 raw with
+  | .ok stream =>
+      assertTrue
+        (stream.result.content.any fun
+          | .thinking content => content.thinking == "think" && content.thinkingSignature == some "reasoning_content"
+          | _ => false)
+        "expected OpenCode Go reasoning deltas to normalize to reasoning_content"
+  | .error err => fail s!"OpenCode Go streaming reasoning parse failed: {err}"
+
+def testOpenAICompletionsParsesGenericStreamingReasoningField : IO Unit := do
+  let raw := String.intercalate "\n"
+    [ "data: {\"choices\":[{\"delta\":{\"reasoning\":\"think\"},\"finish_reason\":null}]}"
+    , ""
+    , "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}"
+    , ""
+    , "data: [DONE]"
+    , ""
+    ]
+  match LeanAgent.AI.Api.OpenAICompletions.parseStreamingEventStream
+    "openai-completions" "openai" "gpt-4o-mini" 10 raw with
+  | .ok stream =>
+      assertTrue
+        (stream.result.content.any fun
+          | .thinking content => content.thinking == "think" && content.thinkingSignature == some "reasoning"
+          | _ => false)
+        "expected generic reasoning deltas to keep the reasoning signature"
+  | .error err => fail s!"generic streaming reasoning parse failed: {err}"
+
 def transformTarget : LeanAgent.AI.Api.TransformMessages.TargetModel :=
   { id := "claude-sonnet-4.6"
     provider := "github-copilot"
@@ -1564,6 +1602,61 @@ def testOpenAICompletionsContextAddsRoutingPreferences : IO Unit := do
       assertTrue ((LeanAgent.Json.optVal? gateway "order").isSome)
         "expected Vercel gateway order routing"
   | none => fail "expected Vercel gateway providerOptions"
+
+def testOpenAICompletionsContextReplaysXiaomiMissingThinkingAsEmptyReasoningContent : IO Unit := do
+  match LeanAgent.Models.xiaomiModels.find? (fun model => model.id == "mimo-v2.5-pro") with
+  | none => fail "expected Xiaomi MiMo V2.5 Pro model"
+  | some modelInfo =>
+      let model :=
+        LeanAgent.AI.Providers.Streams.openAICompletionsModelFromModelInfo modelInfo
+      let options :=
+        LeanAgent.AI.Providers.Streams.openAICompletionsOptionsFromSimple
+          modelInfo
+          { reasoning := some .high }
+      let assistant : LeanAgent.AI.AssistantMessage :=
+        { content :=
+            #[ .toolCall
+                { id := "call_1"
+                  name := "read"
+                  arguments := LeanAgent.Json.obj [("path", LeanAgent.Json.str "README.md")]
+                }
+             ]
+          api := model.api
+          provider := model.provider
+          model := model.id
+          stopReason := .toolUse
+          timestamp := 2
+        }
+      let payload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+        model
+        { messages :=
+            #[ .user { content := #[LeanAgent.AI.text "Read README.md"], timestamp := 1 }
+             , .assistant assistant
+             , .toolResult
+                { toolCallId := "call_1"
+                  toolName := "read"
+                  content := #[LeanAgent.AI.text "contents"]
+                  isError := false
+                  timestamp := 3
+                }
+             ]
+        }
+        options
+        modelInfo.baseUrl
+      match jsonArrayField? payload "messages", jsonObjectField? payload "thinking" with
+      | some messages, some thinking =>
+          match messages[1]? with
+          | some replayedAssistant =>
+              assertTrue (jsonStringField? replayedAssistant "role" == some "assistant")
+                "expected Xiaomi replayed assistant role"
+              assertTrue (jsonStringField? replayedAssistant "reasoning_content" == some "")
+                "expected Xiaomi replay to add empty reasoning_content"
+              assertTrue (jsonStringField? thinking "type" == some "enabled")
+                "expected Xiaomi payload to enable thinking"
+              assertTrue (jsonStringField? payload "reasoning_effort" == some "high")
+                "expected Xiaomi payload to keep reasoning_effort"
+          | none => fail "expected Xiaomi replayed assistant message"
+      | _, _ => fail "expected Xiaomi OpenAI-compatible messages and thinking payload"
 
 def testOpenAICompletionsContextReplaysThinkingAsText : IO Unit := do
   let model :=
@@ -5522,6 +5615,30 @@ def testOpenCodeCatalogMaxTokensCompat : IO Unit := do
       assertTrue ((LeanAgent.Models.thinkingLevelMapValue? model (.level .xhigh)) == some (some "xhigh"))
         "expected Ant Ling xhigh mapping"
   | none => fail "expected Ant Ling reasoning model"
+  match LeanAgent.Models.ProviderCatalog.model? catalog LeanAgent.Models.openRouterProviderId "moonshotai/kimi-k2.6" with
+  | some model =>
+      assertTrue (!model.compat.supportsDeveloperRole)
+        "expected OpenRouter Kimi K2.6 developer-role compat metadata"
+      assertTrue model.compat.requiresReasoningContentOnAssistantMessages
+        "expected OpenRouter Kimi K2.6 reasoning-content compat metadata"
+      assertTrue (model.compat.thinkingFormat == some "openrouter")
+        "expected OpenRouter Kimi K2.6 thinking format metadata"
+  | none => fail "expected OpenRouter Kimi K2.6 model"
+  for providerId in
+    #[ LeanAgent.Models.xiaomiProviderId
+     , LeanAgent.Models.xiaomiTokenPlanAMSProviderId
+     , LeanAgent.Models.xiaomiTokenPlanCNProviderId
+     , LeanAgent.Models.xiaomiTokenPlanSGPProviderId
+     ] do
+    match LeanAgent.Models.ProviderCatalog.model? catalog providerId "mimo-v2.5-pro" with
+    | some model =>
+        assertTrue model.compat.requiresReasoningContentOnAssistantMessages
+          "expected Xiaomi MiMo reasoning-content compat metadata"
+        assertTrue (model.compat.thinkingFormat == some "deepseek")
+          "expected Xiaomi MiMo deepseek thinking compat metadata"
+        assertTrue (!model.compat.supportsDeveloperRole)
+          "expected Xiaomi MiMo developer-role compat metadata"
+    | none => fail s!"expected Xiaomi MiMo model for provider {providerId}"
   match LeanAgent.Models.ProviderCatalog.model? catalog LeanAgent.Models.zaiProviderId "glm-5.2" with
   | some model =>
       assertTrue model.compat.supportsReasoningEffort "expected Z.AI GLM-5.2 reasoning-effort compat"
@@ -12305,6 +12422,57 @@ def testOpenAICompatibleStreamsUseOpenCodeGoMaxTokensCompat : IO Unit := do
     assertTrue (LeanAgent.Json.optVal? payload "enable_thinking" == some (LeanAgent.Json.bool true))
       "expected OpenCode Go qwen compat metadata to preserve qwen thinking payload"
 
+def testOpenAICompatibleStreamsOmitMoonshotDisabledThinkingForK27Code : IO Unit := do
+  let port := 18135
+  withHttpServer port do
+    for baseModel in
+      #[ LeanAgent.Models.moonshotAIModels.find? (fun model => model.id == "kimi-k2.7-code")
+       , LeanAgent.Models.moonshotAICNModels.find? (fun model => model.id == "kimi-k2.7-code")
+       ] do
+      match baseModel with
+      | none => fail "expected Moonshot Kimi K2.7 Code model"
+      | some model =>
+          let payloadRef ← IO.mkRef Lean.Json.null
+          let runtimeModel := { model with baseUrl := s!"http://127.0.0.1:{port}/runtime-stream-openai" }
+          let _ ← LeanAgent.AI.Providers.Streams.openAICompatibleStreams.streamSimple
+            runtimeModel
+            { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }] }
+            { apiKey := some "test-key"
+              onPayload := some fun payload _ => do
+                payloadRef.set payload
+                pure none
+            }
+          let payload ← payloadRef.get
+          assertTrue ((LeanAgent.Json.optVal? payload "thinking").isNone)
+            "expected Moonshot K2.7 Code builtins to omit disabled thinking"
+          assertTrue ((LeanAgent.Json.optVal? payload "reasoning_effort").isNone)
+            "expected Moonshot K2.7 Code builtins to omit reasoning_effort when thinking is off"
+
+def testOpenAICompatibleStreamsKeepMoonshotDisabledThinkingForK26 : IO Unit := do
+  let port := 18136
+  withHttpServer port do
+    match LeanAgent.Models.moonshotAICNModels.find? (fun model => model.id == "kimi-k2.6") with
+    | none => fail "expected Moonshot CN Kimi K2.6 model"
+    | some model =>
+        let payloadRef ← IO.mkRef Lean.Json.null
+        let runtimeModel := { model with baseUrl := s!"http://127.0.0.1:{port}/runtime-stream-openai" }
+        let _ ← LeanAgent.AI.Providers.Streams.openAICompatibleStreams.streamSimple
+          runtimeModel
+          { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }] }
+          { apiKey := some "test-key"
+            onPayload := some fun payload _ => do
+              payloadRef.set payload
+              pure none
+          }
+        let payload ← payloadRef.get
+        match jsonObjectField? payload "thinking" with
+        | some thinking =>
+            assertTrue (jsonStringField? thinking "type" == some "disabled")
+              "expected Moonshot K2.6 builtins to keep disabled thinking payload"
+            assertTrue ((LeanAgent.Json.optVal? payload "reasoning_effort").isNone)
+              "expected Moonshot K2.6 builtins to omit reasoning_effort when thinking is off"
+        | none => fail "expected Moonshot K2.6 builtins to include thinking payload"
+
 def testOpenAICompatibleStreamsOmitStreamingUsageWhenCompatDisablesIt : IO Unit := do
   let port := 18133
   withHttpServer port do
@@ -13997,6 +14165,7 @@ def main : IO UInt32 := do
     testOpenAICompletionsContextRequiresToolResultNameAndBridgeForImageReplay
     testOpenAICompletionsContextAddsBridgeBeforeUserAfterToolResults
     testOpenAICompletionsContextAddsRoutingPreferences
+    testOpenAICompletionsContextReplaysXiaomiMissingThinkingAsEmptyReasoningContent
     testOpenAICompletionsContextStrictCompat
     testOpenAICompletionsContextSetsZaiToolStream
     testOpenAICompletionsParsesReasoningDetailsBeforeToolCall
@@ -14026,6 +14195,8 @@ def main : IO UInt32 := do
     testOpenAICompletionsParsesStreamingText
     testOpenAICompletionsParsesStreamingToolCall
     testOpenAICompletionsParsesStreamingThinking
+    testOpenAICompletionsParsesOpenCodeGoStreamingReasoning
+    testOpenAICompletionsParsesGenericStreamingReasoningField
     testTransformMessagesCrossModelHandoff
     testTransformMessagesAddsSyntheticToolResults
     testTransformMessagesDowngradesUnsupportedImages
@@ -14277,6 +14448,8 @@ def main : IO UInt32 := do
     testOpenAICompatibleStreamsDetectTogetherReasoningOnlyCompat
     testOpenAICompatibleStreamsUseOpenCodeMaxTokensCompat
     testOpenAICompatibleStreamsUseOpenCodeGoMaxTokensCompat
+    testOpenAICompatibleStreamsOmitMoonshotDisabledThinkingForK27Code
+    testOpenAICompatibleStreamsKeepMoonshotDisabledThinkingForK26
     testOpenAICompatibleStreamsOmitStreamingUsageWhenCompatDisablesIt
     testLegacyOpenAICompletionsAliasOmitStreamingUsageWhenCompatDisablesIt
     testOpenAICompatibleStreamsKeepGitHubCopilotDetectedMaxCompletionTokens

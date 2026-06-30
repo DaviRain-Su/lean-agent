@@ -536,6 +536,12 @@ def githubCopilotModels : Array ModelInfo :=
 def openRouterCompat : ModelCompat :=
   { thinkingFormat := some "openrouter" }
 
+def openRouterKimiCompat : ModelCompat :=
+  { openRouterCompat with
+    supportsDeveloperRole := false
+    requiresReasoningContentOnAssistantMessages := true
+  }
+
 def openRouterGptOss120B : ModelInfo :=
   { id := openRouterDefaultModel
     name := "OpenAI: gpt-oss-120b"
@@ -547,6 +553,20 @@ def openRouterGptOss120B : ModelInfo :=
     maxTokens := 4096
     reasoning := true
     compat := openRouterCompat
+  }
+
+def openRouterKimiK26 : ModelInfo :=
+  { id := "moonshotai/kimi-k2.6"
+    name := "MoonshotAI: Kimi K2.6"
+    provider := openRouterProviderId
+    api := "openai-completions"
+    baseUrl := openRouterBaseUrl
+    cost := cost 0.66 3.41 0.144 0.0
+    contextWindow := 262144
+    maxTokens := 262144
+    reasoning := true
+    compat := openRouterKimiCompat
+    input := #["text", "image"]
   }
 
 def groqGptOss120B : ModelInfo :=
@@ -1748,7 +1768,7 @@ def openRouterProviderInfo : ProviderInfo :=
     baseUrl := openRouterBaseUrl
     apiKeyEnv := openRouterApiKeyEnv
     defaultModel := openRouterDefaultModel
-    models := #[openRouterGptOss120B]
+    models := #[openRouterGptOss120B, openRouterKimiK26]
   }
 
 def groqProviderInfo : ProviderInfo :=
