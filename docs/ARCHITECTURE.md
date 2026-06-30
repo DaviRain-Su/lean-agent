@@ -10,8 +10,8 @@ ledger whenever `packages/ai` coverage changes.
 
 | Pi domain | LeanAgent modules |
 | --- | --- |
-| `packages/ai` | `LeanAgent.Http`, `LeanAgent.Models`, `LeanAgent.OpenAI` |
-| `packages/agent` | `LeanAgent.Core`, `LeanAgent.Loop`, `LeanAgent.Session` |
+| `packages/ai` | `LeanAgent.Http`, `LeanAgent.AI.*` (Types, Api, Auth, OAuth, Compat, Providers, Images, Util), `LeanAgent.Models` |
+| `packages/agent` | `LeanAgent.Agent.*` (Types, Loop, Agent), `LeanAgent.Session` |
 | `packages/coding-agent` | `LeanAgent.CodingTools`, `LeanAgent.Project`, `Main` |
 | `packages/tui` | future `LeanAgent.Tui` |
 | `packages/orchestrator` | future `LeanAgent.Orchestrator` |
@@ -23,10 +23,10 @@ Dependencies must flow downward:
 
 ```text
 Distribution/Main
-  -> CodingAgent
-  -> Agent Core
-  -> AI Provider
-  -> HTTP/FFI
+  -> CodingAgent (CodingTools, Project)
+  -> Agent Core (Agent.Types, Agent.Loop, Agent.Agent, Session)
+  -> AI Provider (AI.Compat, AI.Api.*, AI.Providers.*, Models)
+  -> HTTP/FFI (Http, native http_client.c)
 ```
 
 TUI and Orchestrator must consume Agent Core events and sessions. They must not
@@ -37,46 +37,33 @@ Pi-compatible core modules.
 
 ## AI Provider Catalog
 
-`LeanAgent.Models` is the first Lean port of Pi's `packages/ai` model/provider
-boundary:
+`LeanAgent.Models` and `LeanAgent.AI.Providers.*` port Pi's `packages/ai`
+model/provider boundary. The runtime collection (`Models.Core`) supports
+provider registration, lookup, auth application, dynamic model refresh, and
+multi-API dispatch. A checked-in static catalog covers 30+ built-in providers
+including DeepSeek, OpenAI, Anthropic, Google, Bedrock, Azure, GitHub Copilot,
+Mistral, OpenRouter, and more.
 
-- `ModelInfo`: provider id, API kind, base URL, context window, output limit,
-  reasoning flag, and compatibility metadata.
-- `ProviderInfo`: provider id, display name, auth env var, model env var,
-  default model, and known static models.
-- `ProviderCatalog`: lookup by provider id, API-key env var, and model id.
-
-Current catalog scope is intentionally static:
-
-- DeepSeek: `deepseek-v4-flash`, `deepseek-v4-pro`.
-- OpenAI fallback: `gpt-4.1-mini`.
-
-Dynamic model refresh, OAuth auth, image APIs, and mixed API dispatch remain
-future work. CLI defaults must resolve through this catalog instead of hardcoded
-provider constants.
+`ModelInfo`: provider id, API kind, base URL, context window, output limit,
+reasoning flag, thinking-level map, compatibility metadata, and cost.
+`Provider`: runtime unit with auth, model listing, refresh hook, and
+`streamSimple`/`completeSimple` dispatch.
+`Collection`: mutable provider registry with auth-aware model listing.
 
 The complete `packages/ai` migration order and status lives in
 [`docs/AI_PARITY.md`](AI_PARITY.md).
 
-## Current Runtime Flow
+## Runtime Flow
 
 ```text
 Main
-  -> resolve runtime config
-  -> load project extensions
-  -> build provider + tools
-  -> run agent loop
-  -> render terminal events
-```
-
-The target flow is:
-
-```text
-Main
-  -> create AgentSession
-  -> prompt/continue session
-  -> persist JSONL entries
-  -> emit terminal or JSON events
+  -> resolve runtime config (Models.resolveSelection)
+  -> load project extensions (Project.loadExtensions)
+  -> build Agent + tools (Agent.create, CodingTools.defaultAgentTools)
+  -> create AgentSession (ephemeral / JSONL create / resume)
+  -> prompt/continue session (Agent.prompt -> Agent.Loop.runAgentLoop)
+  -> persist JSONL entries (Session.persistMessages)
+  -> emit terminal or JSON events (AgentEventSink)
 ```
 
 ## Session Model
@@ -115,18 +102,18 @@ CLI modes must call this API instead of managing `messages` directly.
 - `timestamp`: UTC ISO-like timestamp string.
 - `type`: event discriminator.
 
-Current event types:
+Current event types (see `Session.jsonEvent`):
 
 - `agent_start`
-- `agent_end`
-- `turn_start` with `turn`
-- `turn_end` with `turn`
-- `message_start` with `role`
-- `message_delta` with `delta`
-- `message_end` with serialized `message`
-- `tool_execution_start` with `tool_call`
-- `tool_execution_end` with `tool_call_id`, `name`, `ok`, `content`, `error`
-- `error` with `message`
+- `agent_end` with `messages`
+- `turn_start`
+- `turn_end`
+- `message_start`
+- `message_update`
+- `message_end`
+- `tool_execution_start`
+- `tool_execution_update`
+- `tool_execution_end`
 
 ## Orchestrator Placement
 
@@ -150,3 +137,4 @@ Implementation should use the same AgentSession API as CLI modes.
 - Do not add OMP advanced tools before their Pi dependency layer exists.
 - Do not put session, TUI, or orchestrator state in `Main.lean`.
 - Keep `vendor/pi` read-only during LeanAgent feature work.
+- `LeanAgent.Core` and `LeanAgent.Loop` are deprecated; new code must use `LeanAgent.Agent.*` and `LeanAgent.AI.*` types.

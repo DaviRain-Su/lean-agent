@@ -3,11 +3,12 @@
 A small terminal coding agent implemented in Lean 4, using the architecture of
 [`tau`](https://github.com/alejandro-ao/tau) as the reference shape:
 
-- `LeanAgent.Core` owns provider-neutral messages, tools, results, and events.
-- `LeanAgent.Loop` owns the model/tool loop.
+- `LeanAgent.Agent` owns the Pi-compatible agent runtime: messages, tools, events, hooks, queues, and the model/tool loop (`Agent.Types`, `Agent.Loop`, `Agent.Agent`).
+- `LeanAgent.AI` ports Pi's `packages/ai`: provider/model catalog, OpenAI-compatible and multi-provider API protocols, OAuth, auth, and compat dispatch.
 - `LeanAgent.CodingTools` provides `list`, `read`, `write`, `edit`, and `bash`.
-- `LeanAgent.Models` owns the Pi-style provider/model catalog.
-- `LeanAgent.OpenAI` adapts OpenAI-compatible Chat Completions tool calling.
+- `LeanAgent.Models` owns the Pi-style provider/model catalog and runtime collection.
+- `LeanAgent.Session` owns JSONL session persistence, resume, and JSON event output.
+- `LeanAgent.Http` provides the native libcurl HTTPS transport via Lean FFI.
 - `Main` provides one-shot and line-REPL CLI execution.
 
 The long-term architecture tracks Pi through the `vendor/pi` submodule. See
