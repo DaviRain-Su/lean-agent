@@ -260,6 +260,7 @@ def runHttpJson
   let response ← LeanAgent.Http.postJsonResponse
     { url := responsesUrl config.baseUrl
       apiKey := config.apiKey
+      signal := options.signal
       headers := requestHeaders config model context options
       timeoutSeconds := config.timeoutSeconds
       connectTimeoutSeconds := config.connectTimeoutSeconds
@@ -984,6 +985,7 @@ def completeWithOptions
     (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
     (context : LeanAgent.AI.Context)
     (options : OpenAIResponsesOptions := {}) : IO LeanAgent.AI.AssistantMessage := do
+  LeanAgent.AI.Util.Abort.throwIfAborted options.signal
   let ref := modelRef config model
   let payload ← applyPayloadHook options ref (requestToJsonWithOptions model context options false)
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
@@ -1000,6 +1002,7 @@ def completeStreamWithOptions
     (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
     (context : LeanAgent.AI.Context)
     (options : OpenAIResponsesOptions := {}) : IO LeanAgent.AI.AssistantMessageEventStream := do
+  LeanAgent.AI.Util.Abort.throwIfAborted options.signal
   let ref := modelRef config model
   let payload ← applyPayloadHook options ref (requestToJsonWithOptions model context options true)
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs

@@ -283,6 +283,7 @@ def runHttpJson
   let response ← LeanAgent.Http.postJsonResponse
     { url := codexResponsesUrl config.baseUrl
       apiKey := config.apiKey
+      signal := options.signal
       headers := requestHeaders config accountId options
       timeoutSeconds := config.timeoutSeconds
       connectTimeoutSeconds := config.connectTimeoutSeconds
@@ -304,6 +305,7 @@ def completeStreamWithOptions
     (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
     (context : LeanAgent.AI.Context)
     (options : OpenAICodexResponsesOptions := {}) : IO LeanAgent.AI.AssistantMessageEventStream := do
+  LeanAgent.AI.Util.Abort.throwIfAborted options.signal
   let ref := modelRef config model
   let payload ← LeanAgent.AI.Api.OpenAIResponses.applyPayloadHook
     options.toOpenAIResponsesOptions

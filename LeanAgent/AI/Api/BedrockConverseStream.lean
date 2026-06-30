@@ -1503,6 +1503,7 @@ def completeStreamWithOptions
     (reasoning : Bool)
     (context : LeanAgent.AI.Context)
     (options : BedrockOptions := {}) : IO LeanAgent.AI.AssistantMessageEventStream := do
+  LeanAgent.AI.Util.Abort.throwIfAborted options.signal
   let requestModel := modelRef config model
   let prepared ← prepareRequestWithOptions
     config

@@ -1,3 +1,5 @@
+import LeanAgent.AI.Util.Abort
+
 namespace LeanAgent.Http
 
 /--
@@ -33,6 +35,7 @@ structure RequestConfig where
   url : String
   authorization : Option String := none
   body : Option String := none
+  signal : Option LeanAgent.AI.Util.Abort.AbortSignal := none
   timeoutSeconds : UInt32 := 120
   connectTimeoutSeconds : UInt32 := 30
   maxResponseBytes : UInt64 := 33554432
@@ -43,6 +46,7 @@ structure RequestConfig where
 structure JsonPostConfig where
   url : String
   apiKey : String
+  signal : Option LeanAgent.AI.Util.Abort.AbortSignal := none
   timeoutSeconds : UInt32 := 120
   connectTimeoutSeconds : UInt32 := 30
   maxResponseBytes : UInt64 := 33554432
@@ -156,6 +160,7 @@ def encodeHeaders (headers : Array (String × String)) : String :=
   String.intercalate "\n" (headers.toList.filterMap encodeHeader?)
 
 def requestResponse (config : RequestConfig) : IO JsonPostResponse := do
+  LeanAgent.AI.Util.Abort.throwIfAborted config.signal
   let raw ← requestRaw
     config.method
     config.url
@@ -172,6 +177,7 @@ def requestResponse (config : RequestConfig) : IO JsonPostResponse := do
   | .error err => throw (IO.userError err)
 
 def requestAwsEventStreamJsonResponse (config : RequestConfig) : IO JsonPostResponse := do
+  LeanAgent.AI.Util.Abort.throwIfAborted config.signal
   let raw ← requestAwsEventStreamJsonRaw
     config.method
     config.url
@@ -213,6 +219,7 @@ def postJsonResponse (config : JsonPostConfig) (payload : String) : IO JsonPostR
         else
           some ("Bearer " ++ config.apiKey)
       body := some payload
+      signal := config.signal
       timeoutSeconds := config.timeoutSeconds
       connectTimeoutSeconds := config.connectTimeoutSeconds
       maxResponseBytes := config.maxResponseBytes

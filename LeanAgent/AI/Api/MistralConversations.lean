@@ -863,6 +863,7 @@ def completeWithOptions
     (input : Array String)
     (context : LeanAgent.AI.Context)
     (options : MistralOptions := {}) : IO LeanAgent.AI.AssistantMessage := do
+  LeanAgent.AI.Util.Abort.throwIfAborted options.signal
   let payload ← applyPayloadHook options (modelRef config model)
     (requestToJsonWithOptions model input context options false)
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
@@ -880,6 +881,7 @@ def completeStreamWithOptions
     (input : Array String)
     (context : LeanAgent.AI.Context)
     (options : MistralOptions := {}) : IO LeanAgent.AI.AssistantMessageEventStream := do
+  LeanAgent.AI.Util.Abort.throwIfAborted options.signal
   let payload ← applyPayloadHook options (modelRef config model)
     (requestToJsonWithOptions model input context options true)
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs

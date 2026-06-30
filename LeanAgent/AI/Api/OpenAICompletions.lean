@@ -1524,6 +1524,7 @@ def runHttpJson
   let response ← LeanAgent.Http.postJsonResponse
     { url := chatCompletionsUrl config.baseUrl
       apiKey := config.apiKey
+      signal := options.signal
       headers := LeanAgent.AI.Util.Headers.merge config.headers headers
       timeoutSeconds := config.timeoutSeconds
       connectTimeoutSeconds := config.connectTimeoutSeconds
@@ -2125,6 +2126,7 @@ def completeWithOptions
     (config : OpenAICompatibleConfig)
     (request : ProviderRequest)
   (options : OpenAICompletionsOptions := {}) : IO LeanAgent.ProviderResponse := do
+  LeanAgent.AI.Util.Abort.throwIfAborted options.signal
   let model := modelRef config request "openai-completions" ""
   let payload ←
     applyPayloadHook options model
@@ -2142,6 +2144,7 @@ def streamWithOptions
     (request : ProviderRequest)
     (api providerId : String)
     (options : OpenAICompletionsOptions := {}) : IO LeanAgent.AI.AssistantMessageEventStream := do
+  LeanAgent.AI.Util.Abort.throwIfAborted options.signal
   let model := modelRef config request api providerId
   let payload ←
     applyPayloadHook options model
@@ -2161,6 +2164,7 @@ def streamContextWithOptions
     (context : LeanAgent.AI.Context)
     (options : OpenAICompletionsOptions := {}) :
     IO LeanAgent.AI.AssistantMessageEventStream := do
+  LeanAgent.AI.Util.Abort.throwIfAborted options.signal
   let ref := model.toModelRef config.baseUrl
   let payload ←
     applyPayloadHook options ref

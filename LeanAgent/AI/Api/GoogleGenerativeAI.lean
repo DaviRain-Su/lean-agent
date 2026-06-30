@@ -645,6 +645,7 @@ def completeWithOptions
     (reasoning : Bool)
     (context : LeanAgent.AI.Context)
     (options : GoogleGenerativeAIOptions := {}) : IO LeanAgent.AI.AssistantMessage := do
+  LeanAgent.AI.Util.Abort.throwIfAborted options.signal
   let ref := modelRef config model
   let payload ← applyPayloadHook options ref
     (requestToJsonWithOptions ref input reasoning context options)
@@ -664,6 +665,7 @@ def completeStreamWithOptions
     (reasoning : Bool)
     (context : LeanAgent.AI.Context)
     (options : GoogleGenerativeAIOptions := {}) : IO LeanAgent.AI.AssistantMessageEventStream := do
+  LeanAgent.AI.Util.Abort.throwIfAborted options.signal
   let ref := modelRef config model
   let payload ← applyPayloadHook options ref
     (requestToJsonWithOptions ref input reasoning context options)

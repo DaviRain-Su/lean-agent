@@ -100,6 +100,7 @@ def runHttpJson
   let response ← LeanAgent.Http.postJsonResponse
     { url := chatCompletionsUrl config.baseUrl
       apiKey := config.apiKey
+      signal := options.signal
       headers :=
         LeanAgent.AI.Util.Headers.merge
           config.headers

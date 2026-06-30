@@ -282,6 +282,7 @@ def runHttpJson
   let response ← LeanAgent.Http.postJsonResponse
     { url := azureResponsesUrl resolved.baseUrl resolved.apiVersion
       apiKey := ""
+      signal := options.signal
       headers := requestHeaders config options
       timeoutSeconds := config.timeoutSeconds
       connectTimeoutSeconds := config.connectTimeoutSeconds
@@ -300,6 +301,7 @@ def completeWithOptions
     (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
     (context : LeanAgent.AI.Context)
     (options : AzureOpenAIResponsesOptions := {}) : IO LeanAgent.AI.AssistantMessage := do
+  LeanAgent.AI.Util.Abort.throwIfAborted options.signal
   let resolved ← resolveAzureConfig config options
   let deploymentName ← resolveDeploymentName model options
   let ref := modelRef resolved model
@@ -323,6 +325,7 @@ def completeStreamWithOptions
     (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
     (context : LeanAgent.AI.Context)
     (options : AzureOpenAIResponsesOptions := {}) : IO LeanAgent.AI.AssistantMessageEventStream := do
+  LeanAgent.AI.Util.Abort.throwIfAborted options.signal
   let resolved ← resolveAzureConfig config options
   let deploymentName ← resolveDeploymentName model options
   let ref := modelRef resolved model

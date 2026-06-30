@@ -6691,6 +6691,26 @@ def fakeAuthContext : LeanAgent.AI.Auth.AuthContext :=
     fileExists := fun _ => pure false
   }
 
+def authContextWithEnv (env : LeanAgent.AI.Auth.ProviderEnv := #[]) : LeanAgent.AI.Auth.AuthContext :=
+  { env := fun name => pure (LeanAgent.AI.Auth.providerEnvGet? env name)
+    fileExists := fun _ => pure false
+    nowMs := pure 1000
+  }
+
+def assertDirectApiAbortSkipsPayloadHook
+    {α : Type}
+    (label : String)
+    (calledRef : IO.Ref Bool)
+    (action : IO α) : IO Unit := do
+  let aborted ←
+    try
+      let _ ← action
+      pure false
+    catch err =>
+      pure (err.toString.contains LeanAgent.AI.Util.Abort.requestAbortedMessage)
+  assertTrue aborted s!"expected {label} to honor abort signal"
+  assertTrue (!(← calledRef.get)) s!"expected {label} abort to skip payload hook"
+
 def testAuthDefaultContextEnvAndExpandHomePath : IO Unit := do
   let ctx := LeanAgent.AI.Auth.defaultProviderAuthContext
   match ← IO.getEnv "HOME" with
@@ -12855,6 +12875,187 @@ def testOpenAICompatibleStreamsApplyModelCost : IO Unit := do
         assertTrue (message.usage.cost.total == 8.0) "expected final event cost"
     | _ => fail "expected final done event"
 
+def testAnthropicMessagesProviderStreamsApplyModelCost : IO Unit := do
+  let port := 18154
+  withHttpServer port do
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := LeanAgent.Models.anthropicDefaultModel
+        name := "Claude Sonnet"
+        provider := LeanAgent.Models.anthropicProviderId
+        api := LeanAgent.AI.Api.AnthropicMessages.api
+        baseUrl := s!"http://127.0.0.1:{port}/anthropic-stream/v1"
+        cost := { input := 1000000.0, output := 2000000.0, cacheRead := 500000.0, cacheWrite := 3000000.0 }
+        contextWindow := 200000
+        maxTokens := 64000
+        reasoning := true
+        input := #["text", "image"]
+      }
+    let context : LeanAgent.AI.Context :=
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+    let stream ← LeanAgent.AI.Providers.Streams.anthropicMessagesStreams.streamSimple
+      model
+      context
+      { apiKey := some "anthropic-key" }
+    assertTrue (stream.result.usage.input == 4) "expected Anthropic provider input usage"
+    assertTrue (stream.result.usage.output == 2) "expected Anthropic provider output usage"
+    assertTrue (stream.result.usage.cost.input == 4.0) "expected Anthropic provider input cost"
+    assertTrue (stream.result.usage.cost.output == 4.0) "expected Anthropic provider output cost"
+    assertTrue (stream.result.usage.cost.total == 8.0) "expected Anthropic provider total cost"
+    match stream.events.back? with
+    | some (.done _ message) =>
+        assertTrue (message.usage.cost.total == 8.0)
+          "expected Anthropic provider final event cost"
+    | _ => fail "expected Anthropic provider final done event"
+
+def testGoogleGenerativeAIProviderStreamsApplyModelCost : IO Unit := do
+  let port := 18155
+  withHttpServer port do
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := LeanAgent.Models.googleDefaultModel
+        name := "Gemini 2.5 Flash"
+        provider := LeanAgent.Models.googleProviderId
+        api := LeanAgent.AI.Api.GoogleGenerativeAI.api
+        baseUrl := s!"http://127.0.0.1:{port}/google-stream"
+        cost := { input := 1000000.0, output := 2000000.0, cacheRead := 500000.0, cacheWrite := 3000000.0 }
+        contextWindow := 1048576
+        maxTokens := 65536
+        reasoning := true
+        input := #["text", "image"]
+      }
+    let context : LeanAgent.AI.Context :=
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+    let stream ← LeanAgent.AI.Providers.Streams.googleGenerativeAIStreams.streamSimple
+      model
+      context
+      { apiKey := some "google-key" }
+    assertTrue (stream.result.usage.input == 3) "expected Google provider input usage"
+    assertTrue (stream.result.usage.output == 2) "expected Google provider output usage"
+    assertTrue (stream.result.usage.cacheRead == 1) "expected Google provider cache-read usage"
+    assertTrue (stream.result.usage.cost.input == 3.0) "expected Google provider input cost"
+    assertTrue (stream.result.usage.cost.output == 4.0) "expected Google provider output cost"
+    assertTrue (stream.result.usage.cost.cacheRead == 0.5) "expected Google provider cache-read cost"
+    assertTrue (stream.result.usage.cost.total == 7.5) "expected Google provider total cost"
+    match stream.events.back? with
+    | some (.done _ message) =>
+        assertTrue (message.usage.cost.total == 7.5)
+          "expected Google provider final event cost"
+    | _ => fail "expected Google provider final done event"
+
+def testGoogleVertexProviderStreamsApplyModelCost : IO Unit := do
+  let port := 18156
+  withHttpServer port do
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := LeanAgent.Models.googleVertexDefaultModel
+        name := "Gemini 2.5 Flash Vertex"
+        provider := LeanAgent.Models.googleVertexProviderId
+        api := LeanAgent.AI.Api.GoogleVertex.api
+        baseUrl := s!"http://127.0.0.1:{port}/vertex"
+        cost := { input := 1000000.0, output := 2000000.0, cacheRead := 500000.0, cacheWrite := 3000000.0 }
+        contextWindow := 1048576
+        maxTokens := 65536
+        reasoning := true
+        input := #["text", "image"]
+      }
+    let context : LeanAgent.AI.Context :=
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+    let stream ← LeanAgent.AI.Providers.Streams.googleVertexStreams.streamSimple
+      model
+      context
+      { apiKey := some LeanAgent.AI.Api.GoogleVertex.vertexCredentialsMarker
+        env := #[("GOOGLE_CLOUD_PROJECT", "project-1"), ("GOOGLE_CLOUD_LOCATION", "us-central1")]
+        headers := #[("Authorization", some "Bearer adc-token")]
+      }
+    assertTrue (stream.result.usage.input == 3) "expected Vertex provider input usage"
+    assertTrue (stream.result.usage.output == 3) "expected Vertex provider output usage"
+    assertTrue (stream.result.usage.cacheRead == 2) "expected Vertex provider cache-read usage"
+    assertTrue (stream.result.usage.cost.input == 3.0) "expected Vertex provider input cost"
+    assertTrue (stream.result.usage.cost.output == 6.0) "expected Vertex provider output cost"
+    assertTrue (stream.result.usage.cost.cacheRead == 1.0) "expected Vertex provider cache-read cost"
+    assertTrue (stream.result.usage.cost.total == 10.0) "expected Vertex provider total cost"
+    match stream.events.back? with
+    | some (.done _ message) =>
+        assertTrue (message.usage.cost.total == 10.0)
+          "expected Vertex provider final event cost"
+    | _ => fail "expected Vertex provider final done event"
+
+def testMistralConversationsProviderStreamsApplyModelCost : IO Unit := do
+  let port := 18157
+  withHttpServer port do
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := LeanAgent.Models.mistralDefaultModel
+        name := "Devstral"
+        provider := LeanAgent.Models.mistralProviderId
+        api := LeanAgent.AI.Api.MistralConversations.api
+        baseUrl := s!"http://127.0.0.1:{port}/mistral"
+        cost := { input := 1000000.0, output := 2000000.0, cacheRead := 500000.0, cacheWrite := 3000000.0 }
+        contextWindow := 128000
+        maxTokens := 65536
+        reasoning := true
+        input := #["text", "image"]
+      }
+    let context : LeanAgent.AI.Context :=
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+    let stream ← LeanAgent.AI.Providers.Streams.mistralConversationsStreams.streamSimple
+      model
+      context
+      { apiKey := some "mistral-key" }
+    assertTrue (stream.result.usage.input == 3) "expected Mistral provider input usage"
+    assertTrue (stream.result.usage.output == 3) "expected Mistral provider output usage"
+    assertTrue (stream.result.usage.cacheRead == 2) "expected Mistral provider cache-read usage"
+    assertTrue (stream.result.usage.cost.input == 3.0) "expected Mistral provider input cost"
+    assertTrue (stream.result.usage.cost.output == 6.0) "expected Mistral provider output cost"
+    assertTrue (stream.result.usage.cost.cacheRead == 1.0) "expected Mistral provider cache-read cost"
+    assertTrue (stream.result.usage.cost.total == 10.0) "expected Mistral provider total cost"
+    match stream.events.back? with
+    | some (.done _ message) =>
+        assertTrue (message.usage.cost.total == 10.0)
+          "expected Mistral provider final event cost"
+    | _ => fail "expected Mistral provider final done event"
+
+def testBedrockConverseStreamProviderStreamsApplyModelCost : IO Unit := do
+  let port := 18158
+  withHttpServer port do
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := LeanAgent.Models.amazonBedrockDefaultModel
+        name := "Claude Opus 4.6 (US)"
+        provider := LeanAgent.Models.amazonBedrockProviderId
+        api := LeanAgent.AI.Api.BedrockConverseStream.api
+        baseUrl := s!"http://127.0.0.1:{port}/bedrock"
+        cost := { input := 1000000.0, output := 2000000.0, cacheRead := 500000.0, cacheWrite := 3000000.0 }
+        contextWindow := 200000
+        maxTokens := 64000
+        reasoning := true
+        input := #["text", "image"]
+      }
+    let context : LeanAgent.AI.Context :=
+      { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }] }
+    let stream ← LeanAgent.AI.Providers.Streams.bedrockConverseStreamStreams.streamSimple
+      model
+      context
+      { apiKey := some "bedrock-test-token" }
+    assertTrue (stream.result.usage.input == 4) "expected Bedrock provider input usage"
+    assertTrue (stream.result.usage.output == 5) "expected Bedrock provider output usage"
+    assertTrue (stream.result.usage.cacheRead == 1) "expected Bedrock provider cache-read usage"
+    assertTrue (stream.result.usage.cacheWrite == 2) "expected Bedrock provider cache-write usage"
+    assertTrue (stream.result.usage.cost.input == 4.0) "expected Bedrock provider input cost"
+    assertTrue (stream.result.usage.cost.output == 10.0) "expected Bedrock provider output cost"
+    assertTrue (stream.result.usage.cost.cacheRead == 0.5) "expected Bedrock provider cache-read cost"
+    assertTrue (stream.result.usage.cost.cacheWrite == 6.0) "expected Bedrock provider cache-write cost"
+    assertTrue (stream.result.usage.cost.total == 20.5) "expected Bedrock provider total cost"
+    match stream.events.back? with
+    | some (.done _ message) =>
+        assertTrue (message.usage.cost.total == 20.5)
+          "expected Bedrock provider final event cost"
+    | _ => fail "expected Bedrock provider final done event"
+
 def testOpenAICompatibleStreamsDetectOpenRouterDeveloperRole : IO Unit := do
   let port := 18113
   withHttpServer port do
@@ -14541,6 +14742,28 @@ def testCompatAzureOpenAIResponsesTypedLegacyAliasLocal : IO Unit := do
       (LeanAgent.AI.contentPlainText stream.result.content == "mini-deployment|True|azure-key||trace-azure")
       "expected compat Azure Responses typed alias to preserve deployment options"
 
+def testAnthropicMessagesDirectAbortSkipsPayloadHook : IO Unit := do
+  let signal : LeanAgent.AI.Util.Abort.AbortSignal := { isAborted := pure true }
+  let calledRef ← IO.mkRef false
+  let action :=
+    LeanAgent.AI.Api.AnthropicMessages.completeStreamWithOptions
+      { apiKey := "anthropic-key"
+        baseUrl := "http://127.0.0.1:9/anthropic-stream/v1"
+      }
+      anthropicModelRef
+      #["text", "image"]
+      64000
+      true
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+      { signal := some signal
+        onPayload := some fun _ _ => do
+          calledRef.set true
+          pure none
+      }
+  assertDirectApiAbortSkipsPayloadHook "Anthropic direct stream API" calledRef action
+
 def testAnthropicMessagesStreamWithOptionsLocal : IO Unit := do
   let port := 18096
   withHttpServer port do
@@ -14709,6 +14932,27 @@ def testCompatAnthropicCompleteSimpleAliasLocal : IO Unit := do
       "expected compat Anthropic simple complete alias dispatch"
     LeanAgent.AI.Compat.resetApiProviders
 
+def testGoogleGenerativeAIDirectAbortSkipsPayloadHook : IO Unit := do
+  let signal : LeanAgent.AI.Util.Abort.AbortSignal := { isAborted := pure true }
+  let calledRef ← IO.mkRef false
+  let action :=
+    LeanAgent.AI.Api.GoogleGenerativeAI.completeStreamWithOptions
+      { apiKey := "google-key"
+        baseUrl := "http://127.0.0.1:9/google-stream"
+      }
+      googleModelRef
+      #["text", "image"]
+      true
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+      { signal := some signal
+        onPayload := some fun _ _ => do
+          calledRef.set true
+          pure none
+      }
+  assertDirectApiAbortSkipsPayloadHook "Google Generative AI direct stream API" calledRef action
+
 def testGoogleGenerativeAIStreamWithOptionsLocal : IO Unit := do
   let port := 18098
   withHttpServer port do
@@ -14817,6 +15061,27 @@ def testGoogleVertexResolvedRequestHeadersWithAuthorizedUserAdc : IO Unit := do
       assertTrue
         (headerValueCaseInsensitive? headers "x-trace" == some "trace-vertex")
         "expected ADC-resolved headers to keep caller headers"
+
+def testGoogleVertexDirectAbortBeatsProjectResolution : IO Unit := do
+  let signal : LeanAgent.AI.Util.Abort.AbortSignal := { isAborted := pure true }
+  let calledRef ← IO.mkRef false
+  let action :=
+    LeanAgent.AI.Api.GoogleVertex.completeStreamWithOptions
+      { apiKey := LeanAgent.AI.Api.GoogleVertex.vertexCredentialsMarker
+        baseUrl := "http://127.0.0.1:9/vertex"
+      }
+      googleVertexModelRef
+      #["text", "image"]
+      true
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+      { signal := some signal
+        onPayload := some fun _ _ => do
+          calledRef.set true
+          pure none
+      }
+  assertDirectApiAbortSkipsPayloadHook "Google Vertex direct stream API" calledRef action
 
 def testGoogleVertexStreamWithOptionsLocal : IO Unit := do
   let port := 18099
@@ -14942,6 +15207,26 @@ def testCompatGoogleVertexTypedLegacyAliasLocal : IO Unit := do
       "expected compat Vertex typed alias to preserve project/location, thinking, tool choice, and ADC auth headers"
     assertTrue (stream.result.usage.reasoning == some 5) "expected Vertex typed thinking token usage"
 
+def testMistralConversationsDirectAbortSkipsPayloadHook : IO Unit := do
+  let signal : LeanAgent.AI.Util.Abort.AbortSignal := { isAborted := pure true }
+  let calledRef ← IO.mkRef false
+  let action :=
+    LeanAgent.AI.Api.MistralConversations.completeStreamWithOptions
+      { apiKey := "mistral-key"
+        baseUrl := "http://127.0.0.1:9/mistral"
+      }
+      mistralModelRef
+      #["text", "image"]
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+      { signal := some signal
+        onPayload := some fun _ _ => do
+          calledRef.set true
+          pure none
+      }
+  assertDirectApiAbortSkipsPayloadHook "Mistral direct stream API" calledRef action
+
 def testMistralConversationsStreamWithOptionsLocal : IO Unit := do
   let port := 18100
   withHttpServer port do
@@ -15015,6 +15300,181 @@ def testCompatMistralTypedLegacyAliasLocal : IO Unit := do
       (LeanAgent.AI.contentPlainText stream.result.content ==
         "devstral-medium-latest|True|Bearer mistral-key|session-typed|session-typed|high|reasoning|trace-mistral|system")
       "expected compat Mistral typed alias to preserve provider-specific options"
+
+def testBedrockConverseStreamDirectAbortSkipsPayloadHook : IO Unit := do
+  let signal : LeanAgent.AI.Util.Abort.AbortSignal := { isAborted := pure true }
+  let calledRef ← IO.mkRef false
+  let action :=
+    LeanAgent.AI.Api.BedrockConverseStream.completeStreamWithOptions
+      { baseUrl := "http://127.0.0.1:9/bedrock" }
+      bedrockModelRef
+      #["text", "image"]
+      "Claude Opus 4.6 (US)"
+      #[]
+      true
+      { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }] }
+      { signal := some signal
+        onPayload := some fun _ _ => do
+          calledRef.set true
+          pure none
+      }
+  assertDirectApiAbortSkipsPayloadHook "Bedrock direct stream API" calledRef action
+
+def testAnthropicProviderFactoryDispatchesThroughModelsCollection : IO Unit := do
+  let port := 18159
+  withHttpServer port do
+    let collection ← LeanAgent.Models.createModels none
+      (authContextWithEnv #[(LeanAgent.Models.anthropicApiKeyEnv, "anthropic-env-key")])
+    collection.setProvider (← LeanAgent.AI.Providers.Anthropic.provider)
+    let model :=
+      { LeanAgent.Models.anthropicSonnet45 with
+        baseUrl := s!"http://127.0.0.1:{port}/anthropic-stream/v1"
+        cost := { input := 1000000.0, output := 2000000.0, cacheRead := 500000.0, cacheWrite := 3000000.0 }
+      }
+    let stream ← collection.streamSimple
+      model
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+      { headers := #[("X-Trace", some "trace-anthropic")] }
+    assertTrue
+      (LeanAgent.AI.contentPlainText stream.result.content ==
+        "claude-sonnet-4-5|True|anthropic-env-key|2023-06-01|trace-anthropic|")
+      "expected Anthropic provider factory collection dispatch to inject env auth"
+    assertTrue (stream.result.provider == LeanAgent.Models.anthropicProviderId)
+      "expected Anthropic provider id through collection dispatch"
+    assertTrue (stream.result.api == LeanAgent.AI.Api.AnthropicMessages.api)
+      "expected Anthropic provider api through collection dispatch"
+    assertTrue (stream.result.usage.cost.total == 8.0)
+      "expected Anthropic collection dispatch usage cost"
+
+def testGoogleProviderFactoryDispatchesThroughModelsCollection : IO Unit := do
+  let port := 18160
+  withHttpServer port do
+    let collection ← LeanAgent.Models.createModels none
+      (authContextWithEnv #[(LeanAgent.Models.googleApiKeyEnv, "google-env-key")])
+    collection.setProvider (← LeanAgent.AI.Providers.Google.provider)
+    let model :=
+      { LeanAgent.Models.googleGemini25Flash with
+        baseUrl := s!"http://127.0.0.1:{port}/google-stream"
+        cost := { input := 1000000.0, output := 2000000.0, cacheRead := 500000.0, cacheWrite := 3000000.0 }
+      }
+    let stream ← collection.streamSimple
+      model
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+      { headers := #[("X-Trace", some "trace-google")] }
+    assertTrue
+      (LeanAgent.AI.contentPlainText stream.result.content ==
+        "hello|True|google-env-key|trace-google")
+      "expected Google provider factory collection dispatch to inject env auth"
+    assertTrue (stream.result.provider == LeanAgent.Models.googleProviderId)
+      "expected Google provider id through collection dispatch"
+    assertTrue (stream.result.api == LeanAgent.AI.Api.GoogleGenerativeAI.api)
+      "expected Google provider api through collection dispatch"
+    assertTrue (stream.result.usage.cost.total == 7.5)
+      "expected Google collection dispatch usage cost"
+
+def testGoogleVertexProviderFactoryDispatchesThroughModelsCollection : IO Unit := do
+  let port := 18161
+  withHttpServer port do
+    let collection ← LeanAgent.Models.createModels none
+      (authContextWithEnv #[(LeanAgent.Models.googleVertexApiKeyEnv, "vertex-env-key")])
+    collection.setProvider (← LeanAgent.AI.Providers.GoogleVertex.provider)
+    let model :=
+      { LeanAgent.Models.googleVertexGemini25Flash with
+        baseUrl := s!"http://127.0.0.1:{port}/vertex"
+        cost := { input := 1000000.0, output := 2000000.0, cacheRead := 500000.0, cacheWrite := 3000000.0 }
+      }
+    let stream ← collection.streamSimple
+      model
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+      { env := #[("GOOGLE_CLOUD_PROJECT", "project-1"), ("GOOGLE_CLOUD_LOCATION", "us-central1")]
+        headers := #[("X-Trace", some "trace-vertex")]
+      }
+    assertTrue
+      (LeanAgent.AI.contentPlainText stream.result.content ==
+        "hello||vertex-env-key|trace-vertex")
+      "expected Vertex provider factory collection dispatch to inject env API key"
+    assertTrue (stream.result.provider == LeanAgent.Models.googleVertexProviderId)
+      "expected Vertex provider id through collection dispatch"
+    assertTrue (stream.result.api == LeanAgent.AI.Api.GoogleVertex.api)
+      "expected Vertex provider api through collection dispatch"
+    assertTrue (stream.result.usage.cost.total == 10.0)
+      "expected Vertex collection dispatch usage cost"
+
+def testMistralProviderFactoryDispatchesThroughModelsCollection : IO Unit := do
+  let port := 18162
+  withHttpServer port do
+    let collection ← LeanAgent.Models.createModels none
+      (authContextWithEnv #[(LeanAgent.Models.mistralApiKeyEnv, "mistral-env-key")])
+    collection.setProvider (← LeanAgent.AI.Providers.Mistral.provider)
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := LeanAgent.Models.mistralDefaultModel
+        name := "Devstral"
+        provider := LeanAgent.Models.mistralProviderId
+        api := LeanAgent.AI.Api.MistralConversations.api
+        baseUrl := s!"http://127.0.0.1:{port}/mistral"
+        cost := { input := 1000000.0, output := 2000000.0, cacheRead := 500000.0, cacheWrite := 3000000.0 }
+        contextWindow := 262144
+        maxTokens := 262144
+        reasoning := true
+        input := #["text", "image"]
+      }
+    let stream ← collection.streamSimple
+      model
+      { systemPrompt := some "system"
+        messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }]
+      }
+      { headers := #[("X-Trace", some "trace-mistral")] }
+    assertTrue
+      (LeanAgent.AI.contentPlainText stream.result.content ==
+        "devstral-medium-latest|True|Bearer mistral-env-key|||||trace-mistral|system")
+      "expected Mistral provider factory collection dispatch to inject env auth"
+    assertTrue (stream.result.provider == LeanAgent.Models.mistralProviderId)
+      "expected Mistral provider id through collection dispatch"
+    assertTrue (stream.result.api == LeanAgent.AI.Api.MistralConversations.api)
+      "expected Mistral provider api through collection dispatch"
+    assertTrue (stream.result.usage.cost.total == 10.0)
+      "expected Mistral collection dispatch usage cost"
+
+def testAmazonBedrockProviderFactoryDispatchesThroughModelsCollection : IO Unit := do
+  let port := 18163
+  withHttpServer port do
+    let store ← LeanAgent.AI.Auth.InMemoryCredentialStore.mk
+    let _ ← store.modify LeanAgent.Models.amazonBedrockProviderId fun _ =>
+      pure (some (.apiKey { key := some "bedrock-stored" }))
+    let collection ← LeanAgent.Models.createModels (some store) (authContextWithEnv)
+    collection.setProvider (← LeanAgent.AI.Providers.AmazonBedrock.provider)
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := LeanAgent.Models.amazonBedrockDefaultModel
+        name := "Claude Opus 4.6 (US)"
+        provider := LeanAgent.Models.amazonBedrockProviderId
+        api := LeanAgent.AI.Api.BedrockConverseStream.api
+        baseUrl := s!"http://127.0.0.1:{port}/bedrock"
+        cost := { input := 1000000.0, output := 2000000.0, cacheRead := 500000.0, cacheWrite := 3000000.0 }
+        contextWindow := 200000
+        maxTokens := 64000
+        reasoning := true
+        input := #["text", "image"]
+      }
+    let stream ← collection.streamSimple
+      model
+      { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }] }
+      { headers := #[("X-Trace", some "trace-bedrock")] }
+    assertTrue
+      (LeanAgent.AI.contentPlainText stream.result.content ==
+        "plan\nus.anthropic.claude-opus-4-6-v1|Bearer bedrock-stored|trace-bedrock")
+      "expected Bedrock provider factory collection dispatch to inject stored bearer auth"
+    assertTrue (stream.result.provider == LeanAgent.Models.amazonBedrockProviderId)
+      "expected Bedrock provider id through collection dispatch"
+    assertTrue (stream.result.api == LeanAgent.AI.Api.BedrockConverseStream.api)
+      "expected Bedrock provider api through collection dispatch"
+    assertTrue (stream.result.usage.cost.total == 20.5)
+      "expected Bedrock collection dispatch usage cost"
 
 def testCompatAzureOpenAIResponsesBuiltinDispatch : IO Unit := do
   let port := 18095
@@ -15484,6 +15944,11 @@ def main : IO UInt32 := do
     testOpenAICompatibleCompleteSimpleIgnoresNullStreamChunks
     testOpenAICompatibleCompleteSimpleErrorsWhenFinishReasonIsMissing
     testOpenAICompatibleStreamsApplyModelCost
+    testAnthropicMessagesProviderStreamsApplyModelCost
+    testGoogleGenerativeAIProviderStreamsApplyModelCost
+    testGoogleVertexProviderStreamsApplyModelCost
+    testMistralConversationsProviderStreamsApplyModelCost
+    testBedrockConverseStreamProviderStreamsApplyModelCost
     testOpenAICompatibleStreamsDetectOpenRouterDeveloperRole
     testOpenAICompatibleStreamsDetectMoonshotCompatDefaults
     testOpenAICompatibleStreamsUseTogetherGptOssReasoningEffort
@@ -15534,17 +15999,27 @@ def main : IO UInt32 := do
     testCompatOpenAIResponsesEarlyEofReturnsErrorStream
     testAzureOpenAIResponsesStreamWithOptionsLocal
     testCompatAzureOpenAIResponsesTypedLegacyAliasLocal
+    testAnthropicMessagesDirectAbortSkipsPayloadHook
     testAnthropicMessagesStreamWithOptionsLocal
     testCompatAnthropicBuiltinDispatch
     testCompatAnthropicTypedLegacyAliasLocal
     testCompatAnthropicCompleteSimpleAliasLocal
+    testGoogleGenerativeAIDirectAbortSkipsPayloadHook
     testGoogleGenerativeAIStreamWithOptionsLocal
     testCompatGoogleTypedLegacyAliasLocal
+    testGoogleVertexDirectAbortBeatsProjectResolution
     testGoogleVertexStreamWithOptionsLocal
     testGoogleVertexStreamWithServiceAccountAdcLocal
     testCompatGoogleVertexTypedLegacyAliasLocal
+    testMistralConversationsDirectAbortSkipsPayloadHook
     testMistralConversationsStreamWithOptionsLocal
     testCompatMistralTypedLegacyAliasLocal
+    testBedrockConverseStreamDirectAbortSkipsPayloadHook
+    testAnthropicProviderFactoryDispatchesThroughModelsCollection
+    testGoogleProviderFactoryDispatchesThroughModelsCollection
+    testGoogleVertexProviderFactoryDispatchesThroughModelsCollection
+    testMistralProviderFactoryDispatchesThroughModelsCollection
+    testAmazonBedrockProviderFactoryDispatchesThroughModelsCollection
     testCompatAzureOpenAIResponsesBuiltinDispatch
     testCompatOpenAICodexResponsesBuiltinDispatch
     testCompatOpenAICodexResponsesTypedLegacyAliasLocal
