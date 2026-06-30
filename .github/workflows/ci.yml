@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Restore Lean caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.elan
+            ~/.cache/lean
+            .lake/packages
+            .lake/build
+          key: ${{ runner.os }}-lean-${{ hashFiles('lean-toolchain', 'lakefile.lean', 'lake-manifest.json') }}
+          restore-keys: |
+            ${{ runner.os }}-lean-
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev libssl-dev
+
+      - name: Install system dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          brew install curl openssl@3
+
+      - name: Install elan
+        run: |
+          if [ ! -x "$HOME/.elan/bin/elan" ]; then
+            curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y
+          fi
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Show toolchain versions
+        run: |
+          lean --version
+          lake --version
+
+      - name: Build
+        run: lake build
+
+      - name: Test
+        run: lake test
+
+      - name: CLI smoke checks
+        run: |
+          lake exe lean-agent --help > /tmp/lean-agent-help.txt
+          lake exe lean-agent --list-models > /tmp/lean-agent-models.txt
+          test -s /tmp/lean-agent-help.txt
+          test -s /tmp/lean-agent-models.txt
+
+      - name: Import smoke checks
+        run: |
+          lake exe ai-import-smoke
+          lake exe compat-import-smoke
+          lake exe oauth-import-smoke
