@@ -2062,6 +2062,56 @@ def testOpenAICompletionsContextUsesOpenRouterReasoningObject : IO Unit := do
         "expected OpenRouter payload to omit top-level reasoning_effort"
   | none => fail "expected OpenRouter reasoning object"
 
+def testOpenAICompletionsContextUsesSystemRoleWhenDeveloperRoleUnsupported : IO Unit := do
+  let payload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+    { openAICompletionsContextModel with
+      provider := LeanAgent.Models.openRouterProviderId
+      id := "moonshotai/kimi-k2.7-code"
+      reasoning := true
+      supportsDeveloperRole := false
+      thinkingFormat := some "openrouter"
+    }
+    { systemPrompt := some "Follow instructions."
+      messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }]
+    }
+  match jsonArrayField? payload "messages" with
+  | some messages =>
+      match messages[0]? with
+      | some systemMessage =>
+          assertTrue (jsonStringField? systemMessage "role" == some "system")
+            "expected unsupported developer-role instructions to become system messages"
+      | none => fail "expected first OpenAI-compatible message"
+  | none => fail "expected OpenAI-compatible messages array"
+
+def testOpenAICompletionsContextKeepsDeveloperRoleWhenSupported : IO Unit := do
+  let cases :=
+    #[ { openAICompletionsContextModel with
+         provider := LeanAgent.Models.openAIProviderId
+         id := "gpt-5.5"
+         reasoning := true
+       }
+     , { openAICompletionsContextModel with
+         provider := LeanAgent.Models.openRouterProviderId
+         id := LeanAgent.Models.openRouterDefaultModel
+         reasoning := true
+         thinkingFormat := some "openrouter"
+       }
+     ]
+  for model in cases do
+    let payload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+      model
+      { systemPrompt := some "Follow instructions."
+        messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }]
+      }
+    match jsonArrayField? payload "messages" with
+    | some messages =>
+        match messages[0]? with
+        | some systemMessage =>
+            assertTrue (jsonStringField? systemMessage "role" == some "developer")
+              "expected supported reasoning-model instructions to stay developer messages"
+        | none => fail "expected first OpenAI-compatible message"
+    | none => fail "expected OpenAI-compatible messages array"
+
 def testOpenAICompletionsContextUsesDeepSeekThinkingToggle : IO Unit := do
   let enabledPayload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
     { openAICompletionsContextModel with
@@ -4670,6 +4720,68 @@ def testOpenAICompletionsParsesUsage : IO Unit := do
           assertTrue (assistant.usage.totalTokens == 27) "expected usage to bridge into assistant message"
       | none => fail "expected usage to parse"
   | .error err => fail s!"expected usage parse success: {err}"
+
+def testOpenAICompletionsStreamingPreservesCacheWriteUsageFromChunk : IO Unit := do
+  let raw := String.intercalate "\n"
+    [ "data: {\"id\":\"chatcmpl-cache-write\",\"choices\":[{\"delta\":{\"content\":\"OK\"},\"finish_reason\":null}]}"
+    , ""
+    , "data: {\"id\":\"chatcmpl-cache-write\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":5,\"prompt_tokens_details\":{\"cached_tokens\":50,\"cache_write_tokens\":30},\"completion_tokens_details\":{\"reasoning_tokens\":0}}}"
+    , ""
+    , "data: [DONE]"
+    , ""
+    ]
+  match LeanAgent.AI.Api.OpenAICompletions.parseStreamingEventStream
+    "openai-completions" "openai" "gpt-4o-mini" 14 raw with
+  | .ok stream =>
+      assertTrue (stream.result.stopReason == .stop) "expected stop reason"
+      assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "OK")
+        "expected streamed content to survive chunk-level usage parsing"
+      assertTrue (stream.result.usage.input == 20) "expected chunk-level uncached input tokens"
+      assertTrue (stream.result.usage.output == 5) "expected chunk-level output tokens"
+      assertTrue (stream.result.usage.cacheRead == 50) "expected chunk-level cache read tokens"
+      assertTrue (stream.result.usage.cacheWrite == 30) "expected chunk-level cache write tokens"
+      assertTrue (stream.result.usage.totalTokens == 105) "expected chunk-level total tokens"
+  | .error err => fail s!"expected chunk-level cache-write streaming parse success: {err}"
+
+def testOpenAICompletionsStreamingPreservesCacheWriteUsageFromChoice : IO Unit := do
+  let raw := String.intercalate "\n"
+    [ "data: {\"id\":\"chatcmpl-cache-write-choice\",\"choices\":[{\"delta\":{\"content\":\"OK\"},\"finish_reason\":null}]}"
+    , ""
+    , "data: {\"id\":\"chatcmpl-cache-write-choice\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\",\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":5,\"prompt_tokens_details\":{\"cached_tokens\":50,\"cache_write_tokens\":30},\"completion_tokens_details\":{\"reasoning_tokens\":0}}}]}"
+    , ""
+    , "data: [DONE]"
+    , ""
+    ]
+  match LeanAgent.AI.Api.OpenAICompletions.parseStreamingEventStream
+    "openai-completions" "openai" "gpt-4o-mini" 15 raw with
+  | .ok stream =>
+      assertTrue (stream.result.stopReason == .stop) "expected stop reason"
+      assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "OK")
+        "expected streamed content to survive choice-level usage parsing"
+      assertTrue (stream.result.usage.input == 20) "expected choice-level uncached input tokens"
+      assertTrue (stream.result.usage.output == 5) "expected choice-level output tokens"
+      assertTrue (stream.result.usage.cacheRead == 50) "expected choice-level cache read tokens"
+      assertTrue (stream.result.usage.cacheWrite == 30) "expected choice-level cache write tokens"
+      assertTrue (stream.result.usage.totalTokens == 105) "expected choice-level total tokens"
+  | .error err => fail s!"expected choice-level cache-write streaming parse success: {err}"
+
+def testOpenAICompletionsStreamingDoesNotDoubleCountReasoningTokens : IO Unit := do
+  let raw := String.intercalate "\n"
+    [ "data: {\"id\":\"chatcmpl-reasoning-usage\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":33,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{\"reasoning_tokens\":21}}}"
+    , ""
+    , "data: [DONE]"
+    , ""
+    ]
+  match LeanAgent.AI.Api.OpenAICompletions.parseStreamingEventStream
+    "openai-completions" "openai" "gpt-4o-mini" 16 raw with
+  | .ok stream =>
+      assertTrue (stream.result.stopReason == .stop) "expected stop reason"
+      assertTrue (stream.result.usage.input == 10) "expected input tokens"
+      assertTrue (stream.result.usage.output == 33) "expected output tokens"
+      assertTrue (stream.result.usage.reasoning == some 21) "expected reasoning tokens"
+      assertTrue (stream.result.usage.totalTokens == 43)
+        "expected reasoning tokens not to double-count in total usage"
+  | .error err => fail s!"expected reasoning-usage streaming parse success: {err}"
 
 def testShortHashMatchesPi : IO Unit := do
   assertTrue (LeanAgent.AI.Util.Hash.shortHash "" == "k4n83c7h0j2b") "expected empty hash"
@@ -12735,6 +12847,27 @@ def testOpenAICompatibleStreamsUseOpenCodeGoMaxTokensCompat : IO Unit := do
     assertTrue (LeanAgent.Json.optVal? payload "enable_thinking" == some (LeanAgent.Json.bool true))
       "expected OpenCode Go qwen compat metadata to preserve qwen thinking payload"
 
+def testOpenAICompatibleStreamsOmitReasoningEffortForOpenCodeGrokBuild : IO Unit := do
+  let port := 18143
+  withHttpServer port do
+    match LeanAgent.Models.opencodeModels.find? (fun model => model.id == "grok-build-0.1") with
+    | none => fail "expected OpenCode Grok Build model"
+    | some model =>
+        let payloadRef ← IO.mkRef Lean.Json.null
+        let runtimeModel := { model with baseUrl := s!"http://127.0.0.1:{port}/runtime-stream-openai" }
+        let _ ← LeanAgent.AI.Providers.Streams.openAICompatibleStreams.streamSimple
+          runtimeModel
+          { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }] }
+          { apiKey := some "test-key"
+            reasoning := some .high
+            onPayload := some fun payload _ => do
+              payloadRef.set payload
+              pure none
+          }
+        let payload ← payloadRef.get
+        assertTrue ((LeanAgent.Json.optVal? payload "reasoning_effort").isNone)
+          "expected OpenCode Grok Build compat to omit reasoning_effort"
+
 def testOpenAICompatibleStreamsOmitMoonshotDisabledThinkingForK27Code : IO Unit := do
   let port := 18135
   withHttpServer port do
@@ -14484,6 +14617,8 @@ def main : IO UInt32 := do
     testOpenAICompletionsParsesReasoningDetailsBeforeToolCall
     testOpenAICompletionsContextReplaysReasoningDetails
     testOpenAICompletionsContextUsesOpenRouterReasoningObject
+    testOpenAICompletionsContextUsesSystemRoleWhenDeveloperRoleUnsupported
+    testOpenAICompletionsContextKeepsDeveloperRoleWhenSupported
     testOpenAICompletionsContextUsesDeepSeekThinkingToggle
     testOpenAICompletionsContextUsesQwenThinkingFlags
     testOpenAICompletionsContextUsesConfigurableChatTemplateKwargs
@@ -14567,6 +14702,9 @@ def main : IO UInt32 := do
     testDiagnosticsFormatsThrownJsonValues
     testDiagnosticsProviderErrorObjectExtraction
     testOpenAICompletionsParsesUsage
+    testOpenAICompletionsStreamingPreservesCacheWriteUsageFromChunk
+    testOpenAICompletionsStreamingPreservesCacheWriteUsageFromChoice
+    testOpenAICompletionsStreamingDoesNotDoubleCountReasoningTokens
     testShortHashMatchesPi
     testEstimateUtilities
     testEstimateContextUsesRecentAssistantUsage
@@ -14769,6 +14907,7 @@ def main : IO UInt32 := do
     testOpenAICompatibleStreamsDetectTogetherReasoningOnlyCompat
     testOpenAICompatibleStreamsUseOpenCodeMaxTokensCompat
     testOpenAICompatibleStreamsUseOpenCodeGoMaxTokensCompat
+    testOpenAICompatibleStreamsOmitReasoningEffortForOpenCodeGrokBuild
     testOpenAICompatibleStreamsOmitMoonshotDisabledThinkingForK27Code
     testOpenAICompatibleStreamsKeepMoonshotDisabledThinkingForK26
     testOpenAICompatibleStreamsOmitStreamingUsageWhenCompatDisablesIt
