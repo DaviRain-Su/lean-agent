@@ -1787,6 +1787,86 @@ def testOpenAICompletionsContextReplaysXiaomiMissingThinkingAsEmptyReasoningCont
           | none => fail "expected Xiaomi replayed assistant message"
       | _, _ => fail "expected Xiaomi OpenAI-compatible messages and thinking payload"
 
+def testOpenAICompletionsContextReplaysOpenCodeGoThinkingAsReasoningContent : IO Unit := do
+  match LeanAgent.Models.opencodeGoModels.find? (fun model => model.id == "kimi-k2.6") with
+  | none => fail "expected OpenCode Go Kimi K2.6 model"
+  | some modelInfo =>
+      let model :=
+        LeanAgent.AI.Providers.Streams.openAICompletionsModelFromModelInfo modelInfo
+      let assistant : LeanAgent.AI.AssistantMessage :=
+        { content :=
+            #[ .thinking { thinking := "think", thinkingSignature := some "reasoning" }
+             , .toolCall
+                { id := "call_1"
+                  name := "read"
+                  arguments := LeanAgent.Json.obj [("path", LeanAgent.Json.str "README.md")]
+                }
+             ]
+          api := model.api
+          provider := model.provider
+          model := model.id
+          stopReason := .toolUse
+          timestamp := 2
+        }
+      let payload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+        model
+        { messages :=
+            #[ .user { content := #[LeanAgent.AI.text "Read README.md"], timestamp := 1 }
+             , .assistant assistant
+             ]
+        }
+        {}
+        modelInfo.baseUrl
+      match jsonArrayField? payload "messages" with
+      | some messages =>
+          match messages[1]? with
+          | some replayedAssistant =>
+              assertTrue (jsonStringField? replayedAssistant "role" == some "assistant")
+                "expected OpenCode Go replayed assistant role"
+              assertTrue (jsonStringField? replayedAssistant "reasoning_content" == some "think")
+                "expected OpenCode Go replay to normalize reasoning into reasoning_content"
+              assertTrue ((LeanAgent.Json.optVal? replayedAssistant "reasoning").isNone)
+                "expected OpenCode Go replay to omit the original reasoning field"
+          | none => fail "expected OpenCode Go replayed assistant message"
+      | none => fail "expected OpenCode Go OpenAI-compatible messages array"
+
+def testOpenAICompletionsContextPreservesGenericReasoningField : IO Unit := do
+  let model := openAICompletionsContextModel
+  let assistant : LeanAgent.AI.AssistantMessage :=
+    { content :=
+        #[ .thinking { thinking := "think", thinkingSignature := some "reasoning" }
+         , .toolCall
+            { id := "call_1"
+              name := "read"
+              arguments := LeanAgent.Json.obj [("path", LeanAgent.Json.str "README.md")]
+            }
+         ]
+      api := model.api
+      provider := model.provider
+      model := model.id
+      stopReason := .toolUse
+      timestamp := 2
+    }
+  let payload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+    model
+    { messages :=
+        #[ .user { content := #[LeanAgent.AI.text "Read README.md"], timestamp := 1 }
+         , .assistant assistant
+         ]
+    }
+  match jsonArrayField? payload "messages" with
+  | some messages =>
+      match messages[1]? with
+      | some replayedAssistant =>
+          assertTrue (jsonStringField? replayedAssistant "role" == some "assistant")
+            "expected replayed assistant role"
+          assertTrue (jsonStringField? replayedAssistant "reasoning" == some "think")
+            "expected generic reasoning replay to keep the reasoning field"
+          assertTrue ((LeanAgent.Json.optVal? replayedAssistant "reasoning_content").isNone)
+            "expected generic reasoning replay to omit reasoning_content"
+      | none => fail "expected replayed assistant message"
+  | none => fail "expected OpenAI-compatible messages array"
+
 def testOpenAICompletionsContextReplaysThinkingAsText : IO Unit := do
   let model :=
     { openAICompletionsContextModel with
@@ -1829,6 +1909,44 @@ def testOpenAICompletionsContextReplaysThinkingAsText : IO Unit := do
                 "expected replayed thinking text"
               assertTrue (jsonStringField? content[1]! "text" == some "visible answer")
                 "expected replayed assistant text"
+          | none => fail "expected assistant content array"
+      | none => fail "expected replayed assistant message"
+  | none => fail "expected OpenAI-compatible messages array"
+
+def testOpenAICompletionsContextReplaysThinkingOnlyAsText : IO Unit := do
+  let model :=
+    { openAICompletionsContextModel with
+      provider := "repro-provider"
+      reasoning := true
+      requiresThinkingAsText := true
+    }
+  let assistant : LeanAgent.AI.AssistantMessage :=
+    { content :=
+        #[ .thinking { thinking := "internal reasoning" } ]
+      api := model.api
+      provider := model.provider
+      model := model.id
+      stopReason := .stop
+      timestamp := 2
+    }
+  let payload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+    model
+    { messages :=
+        #[ .user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }
+         , .assistant assistant
+         ]
+    }
+  match jsonArrayField? payload "messages" with
+  | some messages =>
+      match messages[1]? with
+      | some replayedAssistant =>
+          match jsonArrayField? replayedAssistant "content" with
+          | some content =>
+              assertTrue (content.size == 1) "expected thinking-only replay block"
+              assertTrue (jsonStringField? content[0]! "type" == some "text")
+                "expected thinking-only text block"
+              assertTrue (jsonStringField? content[0]! "text" == some "internal reasoning")
+                "expected thinking-only replay text"
           | none => fail "expected assistant content array"
       | none => fail "expected replayed assistant message"
   | none => fail "expected OpenAI-compatible messages array"
@@ -5729,6 +5847,8 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
   assertTrue (rendered.contains "azure-openai-responses/gpt-4o-mini")
     "expected Azure OpenAI Responses model"
   assertTrue (rendered.contains "openrouter/openai/gpt-oss-120b") "expected OpenRouter model"
+  assertTrue (rendered.contains "groq/openai/gpt-oss-20b") "expected Groq GPT OSS 20B model"
+  assertTrue (rendered.contains "groq/qwen/qwen3-32b") "expected Groq Qwen3 reasoning model"
   assertTrue (rendered.contains "fireworks/accounts/fireworks/models/glm-5p2") "expected Fireworks OpenAI-compatible model"
   assertTrue (rendered.contains "ant-ling/Ring-2.6-1T") "expected Ant Ling model"
   assertTrue (rendered.contains "huggingface/zai-org/GLM-5.2") "expected Hugging Face generated model set"
@@ -5891,6 +6011,22 @@ def testOpenCodeCatalogMaxTokensCompat : IO Unit := do
         assertTrue (!model.compat.supportsDeveloperRole)
           "expected Xiaomi MiMo developer-role compat metadata"
     | none => fail s!"expected Xiaomi MiMo model for provider {providerId}"
+  match LeanAgent.Models.ProviderCatalog.model? catalog LeanAgent.Models.groqProviderId "qwen/qwen3-32b" with
+  | some model =>
+      assertTrue model.reasoning "expected Groq Qwen3 reasoning model"
+      assertTrue (LeanAgent.Models.thinkingLevelMapValue? model (.level .medium) == some none)
+        "expected Groq Qwen3 medium reasoning to clamp upward"
+      assertTrue (LeanAgent.Models.thinkingLevelPayloadValueD model (.level .high) "high" == "default")
+        "expected Groq Qwen3 high reasoning payload mapping"
+      assertTrue (LeanAgent.Models.clampThinkingLevel model (.level .medium) == .level .high)
+        "expected Groq Qwen3 medium reasoning to clamp to high"
+  | none => fail "expected Groq Qwen3 reasoning model"
+  match LeanAgent.Models.ProviderCatalog.model? catalog LeanAgent.Models.groqProviderId "openai/gpt-oss-20b" with
+  | some model =>
+      assertTrue model.reasoning "expected Groq GPT OSS 20B reasoning model"
+      assertTrue (LeanAgent.Models.thinkingLevelMapValue? model (.level .medium) == none)
+        "expected Groq GPT OSS 20B to keep direct reasoning_effort values"
+  | none => fail "expected Groq GPT OSS 20B model"
   match LeanAgent.Models.ProviderCatalog.model? catalog LeanAgent.Models.zaiProviderId "glm-5.2" with
   | some model =>
       assertTrue model.compat.supportsReasoningEffort "expected Z.AI GLM-5.2 reasoning-effort compat"
@@ -5906,7 +6042,13 @@ def testOpenCodeCatalogMaxTokensCompat : IO Unit := do
   | some model =>
       assertTrue (!model.compat.supportsReasoningEffort)
         "expected Z.AI GLM-5.1 to disable reasoning_effort"
+      assertTrue model.compat.zaiToolStream "expected Z.AI GLM-5.1 tool-stream compat"
   | none => fail "expected Z.AI GLM-5.1 model"
+  match LeanAgent.Models.ProviderCatalog.model? catalog LeanAgent.Models.zaiProviderId "glm-4.5-air" with
+  | some model =>
+      assertTrue (!model.compat.zaiToolStream)
+        "expected Z.AI GLM-4.5 Air to omit tool-stream compat"
+  | none => fail "expected Z.AI GLM-4.5 Air model"
   match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.anthropicOAuthTokenEnv with
   | some provider =>
       assertTrue (provider.id == LeanAgent.Models.anthropicProviderId) "expected Anthropic OAuth token env"
@@ -10574,6 +10716,23 @@ def httpServerScript : String :=
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
     , "            return"
+    , "        if self.path == '/cloudflare-openai-check/acct-env/gateway-env/chat/completions':"
+    , "            request = json.loads(body)"
+    , "            first_role = ''"
+    , "            messages = request.get('messages') or []"
+    , "            if messages:"
+    , "                first_role = messages[0].get('role') or ''"
+    , "            text = '|'.join([self.headers.get('cf-aig-authorization') or '', self.headers.get('Authorization') or '', self.headers.get('session_id') or '', self.headers.get('x-client-request-id') or '', self.headers.get('x-session-affinity') or '', request.get('model') or '', first_role, str(request.get('max_tokens') or ''), str(request.get('max_completion_tokens') or ''), request.get('reasoning_effort') or '', str(request.get('store')) if 'store' in request else ''])"
+    , "            payload = ("
+    , "                'data: ' + json.dumps({'choices': [{'delta': {'content': text}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 1, 'completion_tokens': 1}}) + '\\n\\n' +"
+    , "                'data: [DONE]\\n\\n'"
+    , "            ).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'text/event-stream')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/openrouter-images/chat/completions':"
     , "            request = json.loads(body)"
     , "            content = request.get('messages', [{}])[0].get('content', [])"
@@ -12438,6 +12597,67 @@ def testOpenAICompatibleStreamsUsesStreamingRuntime : IO Unit := do
     assertTrue (stream.result.api == "openai-completions") "expected runtime api"
     assertTrue (stream.result.provider == LeanAgent.Models.deepSeekProviderId) "expected runtime provider"
 
+def testOpenAICompatibleStreamsReplayThinkingAsTextThroughRuntime : IO Unit := do
+  let port := 18151
+  withHttpServer port do
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := "repro-thinking-text"
+        name := "Repro Thinking Text"
+        provider := "repro-provider"
+        api := "openai-completions"
+        baseUrl := s!"http://127.0.0.1:{port}/runtime-stream-openai"
+        contextWindow := 128000
+        maxTokens := 4096
+        reasoning := true
+        input := #["text"]
+        compat := { requiresThinkingAsText := true }
+      }
+    let assistant : LeanAgent.AI.AssistantMessage :=
+      { content :=
+          #[ .thinking { thinking := "internal reasoning" }
+           , .text { text := "visible answer" }
+           ]
+        api := model.api
+        provider := model.provider
+        model := model.id
+        stopReason := .stop
+        timestamp := 2
+      }
+    let payloadRef ← IO.mkRef Lean.Json.null
+    let stream ← LeanAgent.AI.Providers.Streams.openAICompatibleStreams.streamSimple
+      model
+      { messages :=
+          #[ .user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }
+           , .assistant assistant
+           , .user { content := #[LeanAgent.AI.text "continue"], timestamp := 3 }
+           ]
+      }
+      { apiKey := some "test-key"
+        onPayload := some fun payload _ => do
+          payloadRef.set payload
+          pure none
+      }
+    assertTrue stream.isComplete "expected completed thinking-as-text runtime stream"
+    assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "streamed")
+      "expected thinking-as-text runtime response text"
+    let payload ← payloadRef.get
+    match jsonArrayField? payload "messages" with
+    | some messages =>
+        match messages[1]? with
+        | some replayedAssistant =>
+            match jsonArrayField? replayedAssistant "content" with
+            | some content =>
+                assertTrue (content.size == 2) "expected runtime thinking-plus-text replay blocks"
+                assertTrue (jsonStringField? content[0]! "type" == some "text")
+                  "expected runtime thinking replay block type"
+                assertTrue (jsonStringField? content[0]! "text" == some "internal reasoning")
+                  "expected runtime thinking replay text"
+                assertTrue (jsonStringField? content[1]! "text" == some "visible answer")
+                  "expected runtime visible answer replay"
+            | none => fail "expected runtime assistant content array"
+        | none => fail "expected runtime replayed assistant message"
+    | none => fail "expected runtime OpenAI-compatible messages array"
+
 def openAICompatibleResponseModelTestModel (id baseUrl : String) : LeanAgent.Models.ModelInfo :=
   { id := id
     name := "OpenAI-compatible response-model test"
@@ -12782,6 +13002,195 @@ def testOpenAICompatibleStreamsDetectTogetherReasoningOnlyCompat : IO Unit := do
         | none => fail "expected Together reasoning-only fallback tool function"
     | none => fail "expected Together reasoning-only fallback tools array"
 
+def testOpenAICompatibleStreamsClampGroqQwenReasoningToDefault : IO Unit := do
+  let port := 18144
+  withHttpServer port do
+    match LeanAgent.Models.ProviderCatalog.model?
+        LeanAgent.Models.defaultCatalog
+        LeanAgent.Models.groqProviderId
+        "qwen/qwen3-32b" with
+    | none => fail "expected Groq Qwen3 reasoning model"
+    | some model =>
+        let payloadRef ← IO.mkRef Lean.Json.null
+        let runtimeModel := { model with baseUrl := s!"http://127.0.0.1:{port}/runtime-stream-openai" }
+        let _ ← LeanAgent.AI.Providers.Streams.openAICompatibleStreams.streamSimple
+          runtimeModel
+          { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }] }
+          { apiKey := some "test-key"
+            reasoning := some .medium
+            onPayload := some fun payload _ => do
+              payloadRef.set payload
+              pure none
+          }
+        let payload ← payloadRef.get
+        assertTrue (jsonStringField? payload "reasoning_effort" == some "default")
+          "expected Groq Qwen3 medium reasoning to clamp to default reasoning_effort"
+
+def testOpenAICompatibleStreamsKeepGroqGptOssReasoningEffort : IO Unit := do
+  let port := 18145
+  withHttpServer port do
+    match LeanAgent.Models.ProviderCatalog.model?
+        LeanAgent.Models.defaultCatalog
+        LeanAgent.Models.groqProviderId
+        "openai/gpt-oss-20b" with
+    | none => fail "expected Groq GPT OSS 20B model"
+    | some model =>
+        let payloadRef ← IO.mkRef Lean.Json.null
+        let runtimeModel := { model with baseUrl := s!"http://127.0.0.1:{port}/runtime-stream-openai" }
+        let _ ← LeanAgent.AI.Providers.Streams.openAICompatibleStreams.streamSimple
+          runtimeModel
+          { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }] }
+          { apiKey := some "test-key"
+            reasoning := some .medium
+            onPayload := some fun payload _ => do
+              payloadRef.set payload
+              pure none
+          }
+        let payload ← payloadRef.get
+        assertTrue (jsonStringField? payload "reasoning_effort" == some "medium")
+          "expected Groq GPT OSS 20B to keep direct reasoning_effort values"
+
+def testOpenAICompatibleStreamsUseZaiGLM52ReasoningEffortMappings : IO Unit := do
+  let port := 18146
+  withHttpServer port do
+    for providerId in #[LeanAgent.Models.zaiProviderId, LeanAgent.Models.zaiCodingCNProviderId] do
+      match LeanAgent.Models.ProviderCatalog.model? LeanAgent.Models.defaultCatalog providerId "glm-5.2" with
+      | none => fail s!"expected Z.AI GLM-5.2 model for provider {providerId}"
+      | some model =>
+          for (level, expectedEffort) in
+              #[ (.low, "high"), (.medium, "high"), (.high, "high"), (.xhigh, "max") ] do
+            let payloadRef ← IO.mkRef Lean.Json.null
+            let runtimeModel := { model with baseUrl := s!"http://127.0.0.1:{port}/runtime-stream-openai" }
+            let _ ← LeanAgent.AI.Providers.Streams.openAICompatibleStreams.streamSimple
+              runtimeModel
+              { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }] }
+              { apiKey := some "test-key"
+                reasoning := some level
+                onPayload := some fun payload _ => do
+                  payloadRef.set payload
+                  pure none
+              }
+            let payload ← payloadRef.get
+            match jsonObjectField? payload "thinking" with
+            | some thinking =>
+                assertTrue (jsonStringField? thinking "type" == some "enabled")
+                  s!"expected Z.AI GLM-5.2 thinking enable payload for {providerId}"
+            | none => fail s!"expected Z.AI GLM-5.2 thinking payload for {providerId}"
+            assertTrue (jsonStringField? payload "reasoning_effort" == some expectedEffort)
+              s!"expected Z.AI GLM-5.2 reasoning_effort mapping for {providerId}"
+
+def testOpenAICompatibleStreamsOmitZaiGLM52ReasoningEffortWhenThinkingOff : IO Unit := do
+  let port := 18147
+  withHttpServer port do
+    for providerId in #[LeanAgent.Models.zaiProviderId, LeanAgent.Models.zaiCodingCNProviderId] do
+      match LeanAgent.Models.ProviderCatalog.model? LeanAgent.Models.defaultCatalog providerId "glm-5.2" with
+      | none => fail s!"expected Z.AI GLM-5.2 model for provider {providerId}"
+      | some model =>
+          let payloadRef ← IO.mkRef Lean.Json.null
+          let runtimeModel := { model with baseUrl := s!"http://127.0.0.1:{port}/runtime-stream-openai" }
+          let _ ← LeanAgent.AI.Providers.Streams.openAICompatibleStreams.streamSimple
+            runtimeModel
+            { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }] }
+            { apiKey := some "test-key"
+              onPayload := some fun payload _ => do
+                payloadRef.set payload
+                pure none
+            }
+          let payload ← payloadRef.get
+          match jsonObjectField? payload "thinking" with
+          | some thinking =>
+              assertTrue (jsonStringField? thinking "type" == some "disabled")
+                s!"expected Z.AI GLM-5.2 disabled thinking payload for {providerId}"
+          | none => fail s!"expected Z.AI GLM-5.2 thinking payload for {providerId}"
+          assertTrue ((LeanAgent.Json.optVal? payload "reasoning_effort").isNone)
+            s!"expected Z.AI GLM-5.2 to omit reasoning_effort when thinking is off for {providerId}"
+
+def testOpenAICompatibleStreamsGateZaiToolStreamByBuiltinModel : IO Unit := do
+  let port := 18148
+  withHttpServer port do
+    let tool : LeanAgent.AI.Tool :=
+      { name := "ping"
+        description := "Ping tool"
+        parameters := LeanAgent.Json.obj [("type", LeanAgent.Json.str "object")]
+      }
+    for providerId in #[LeanAgent.Models.zaiProviderId, LeanAgent.Models.zaiCodingCNProviderId] do
+      for (modelId, expectsToolStream) in #[("glm-5.1", true), ("glm-4.5-air", false)] do
+        match LeanAgent.Models.ProviderCatalog.model? LeanAgent.Models.defaultCatalog providerId modelId with
+        | none => fail s!"expected Z.AI model {modelId} for provider {providerId}"
+        | some model =>
+            let payloadRef ← IO.mkRef Lean.Json.null
+            let runtimeModel := { model with baseUrl := s!"http://127.0.0.1:{port}/runtime-stream-openai" }
+            let _ ← LeanAgent.AI.Providers.Streams.openAICompatibleStreams.streamSimple
+              runtimeModel
+              { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }]
+                tools := #[tool]
+              }
+              { apiKey := some "test-key"
+                onPayload := some fun payload _ => do
+                  payloadRef.set payload
+                  pure none
+              }
+            let payload ← payloadRef.get
+            if expectsToolStream then
+              assertTrue (LeanAgent.Json.optVal? payload "tool_stream" == some (LeanAgent.Json.bool true))
+                s!"expected built-in Z.AI tool_stream enablement for {providerId}/{modelId}"
+            else
+              assertTrue ((LeanAgent.Json.optVal? payload "tool_stream").isNone)
+                s!"expected built-in Z.AI tool_stream omission for {providerId}/{modelId}"
+
+def testOpenAICompatibleStreamsRespectZaiToolStreamCompatOverride : IO Unit := do
+  let port := 18149
+  withHttpServer port do
+    let tool : LeanAgent.AI.Tool :=
+      { name := "ping"
+        description := "Ping tool"
+        parameters := LeanAgent.Json.obj [("type", LeanAgent.Json.str "object")]
+      }
+    for providerId in #[LeanAgent.Models.zaiProviderId, LeanAgent.Models.zaiCodingCNProviderId] do
+      match LeanAgent.Models.ProviderCatalog.model? LeanAgent.Models.defaultCatalog providerId "glm-4.5-air" with
+      | none => fail s!"expected Z.AI model glm-4.5-air for provider {providerId}"
+      | some model =>
+          let payloadRef ← IO.mkRef Lean.Json.null
+          let runtimeModel :=
+            { model with
+              baseUrl := s!"http://127.0.0.1:{port}/runtime-stream-openai"
+              compat := { model.compat with zaiToolStream := true }
+            }
+          let _ ← LeanAgent.AI.Providers.Streams.openAICompatibleStreams.streamSimple
+            runtimeModel
+            { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }]
+              tools := #[tool]
+            }
+            { apiKey := some "test-key"
+              onPayload := some fun payload _ => do
+                payloadRef.set payload
+                pure none
+            }
+          let payload ← payloadRef.get
+          assertTrue (LeanAgent.Json.optVal? payload "tool_stream" == some (LeanAgent.Json.bool true))
+            s!"expected explicit Z.AI tool_stream compat override for {providerId}"
+
+def testOpenAICompatibleStreamsOmitZaiToolStreamWithoutTools : IO Unit := do
+  let port := 18150
+  withHttpServer port do
+    for providerId in #[LeanAgent.Models.zaiProviderId, LeanAgent.Models.zaiCodingCNProviderId] do
+      match LeanAgent.Models.ProviderCatalog.model? LeanAgent.Models.defaultCatalog providerId "glm-5.1" with
+      | none => fail s!"expected Z.AI model glm-5.1 for provider {providerId}"
+      | some model =>
+          let payloadRef ← IO.mkRef Lean.Json.null
+          let runtimeModel := { model with baseUrl := s!"http://127.0.0.1:{port}/runtime-stream-openai" }
+          let _ ← LeanAgent.AI.Providers.Streams.openAICompatibleStreams.streamSimple
+            runtimeModel
+            { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }] }
+            { apiKey := some "test-key"
+              onPayload := some fun payload _ => do
+                payloadRef.set payload
+                pure none
+            }
+          let payload ← payloadRef.get
+          assertTrue ((LeanAgent.Json.optVal? payload "tool_stream").isNone)
+            s!"expected Z.AI tool_stream omission without tools for {providerId}"
+
 def testOpenAICompatibleStreamsUseOpenCodeMaxTokensCompat : IO Unit := do
   let port := 18117
   withHttpServer port do
@@ -13082,6 +13491,123 @@ def testCloudflareAIGatewayOpenAICompatibleHeaderAuthLocal : IO Unit := do
     assertTrue
       (LeanAgent.AI.contentPlainText message.content == "Bearer cf-env-key||gpt-4o-mini")
       "expected Cloudflare AI Gateway header-only auth through OpenAI-compatible runtime"
+
+def testCloudflareAIGatewayCompatUsesConservativeOpenAICompatibleFields : IO Unit := do
+  let port := 18097
+  withHttpServer port do
+    let model : LeanAgent.Models.ModelInfo :=
+      { LeanAgent.AI.Providers.CloudflareAIGateway.workersAIKimiK26 with
+        baseUrl :=
+          s!"http://127.0.0.1:{port}/cloudflare-openai-check/" ++
+            "{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}"
+      }
+    let collection ← LeanAgent.Models.createModels none fakeCloudflareAuthContext
+    let provider ← LeanAgent.Models.createProvider
+      { id := "cloudflare-ai-gateway"
+        name := some "Cloudflare AI Gateway"
+        auth := { apiKey := some LeanAgent.AI.Providers.CloudflareAuth.cloudflareAIGatewayAuth }
+        models := #[model]
+        apis := #[{ api := "openai-completions", streams := LeanAgent.AI.Providers.Streams.openAICompatibleStreams }]
+      }
+    collection.setProvider provider
+    let payloadRef ← IO.mkRef Lean.Json.null
+    let stream ← collection.streamSimple
+      model
+      { systemPrompt := some "You are helpful."
+        messages := #[.user { content := #[LeanAgent.AI.text "hi"], timestamp := 1 }]
+      }
+      { maxTokens := some 1234
+        reasoning := some .high
+        onPayload := some fun payload _ => do
+          payloadRef.set payload
+          pure none
+      }
+    let payload ← payloadRef.get
+    match jsonArrayField? payload "messages" with
+    | some messages =>
+        match messages[0]? with
+        | some first =>
+            assertTrue (jsonStringField? first "role" == some "system")
+              "expected Cloudflare AI Gateway compat model to keep system role"
+        | none => fail "expected Cloudflare AI Gateway compat first message"
+    | none => fail "expected Cloudflare AI Gateway compat messages"
+    assertTrue (LeanAgent.Json.optVal? payload "max_tokens" == some (LeanAgent.Json.nat 1234))
+      "expected Cloudflare AI Gateway compat model to use max_tokens"
+    assertTrue ((LeanAgent.Json.optVal? payload "max_completion_tokens").isNone)
+      "expected Cloudflare AI Gateway compat model to omit max_completion_tokens"
+    assertTrue ((LeanAgent.Json.optVal? payload "reasoning_effort").isNone)
+      "expected Cloudflare AI Gateway compat model to omit reasoning_effort"
+    assertTrue ((LeanAgent.Json.optVal? payload "store").isNone)
+      "expected Cloudflare AI Gateway compat model to omit store"
+    let parts := (LeanAgent.AI.contentPlainText stream.result.content).splitOn "|"
+    assertTrue (parts[0]? == some "Bearer cf-env-key")
+      "expected Cloudflare AI Gateway compat cf-aig auth header"
+    assertTrue (parts[1]? == some "")
+      "expected Cloudflare AI Gateway compat runtime to suppress Authorization"
+
+def testCloudflareAIGatewayPreservesInlineUpstreamAuthorization : IO Unit := do
+  let port := 18097
+  withHttpServer port do
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := "gpt-5.1"
+        name := "Gateway GPT-5.1"
+        provider := "cloudflare-ai-gateway"
+        api := "openai-completions"
+        baseUrl :=
+          s!"http://127.0.0.1:{port}/cloudflare-openai-check/" ++
+            "{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}"
+        contextWindow := 400000
+        maxTokens := 128000
+        reasoning := true
+      }
+    let collection ← LeanAgent.Models.createModels none fakeCloudflareAuthContext
+    let provider ← LeanAgent.Models.createProvider
+      { id := "cloudflare-ai-gateway"
+        name := some "Cloudflare AI Gateway"
+        auth := { apiKey := some LeanAgent.AI.Providers.CloudflareAuth.cloudflareAIGatewayAuth }
+        models := #[model]
+        apis := #[{ api := "openai-completions", streams := LeanAgent.AI.Providers.Streams.openAICompatibleStreams }]
+      }
+    collection.setProvider provider
+    let stream ← collection.streamSimple
+      model
+      { messages := #[.user { content := #[LeanAgent.AI.text "hi"], timestamp := 1 }] }
+      { headers := #[("Authorization", some "Bearer upstream-token")] }
+    let parts := (LeanAgent.AI.contentPlainText stream.result.content).splitOn "|"
+    assertTrue (parts[0]? == some "Bearer cf-env-key")
+      "expected Cloudflare AI Gateway to keep cf-aig auth header"
+    assertTrue (parts[1]? == some "Bearer upstream-token")
+      "expected Cloudflare AI Gateway BYOK request to preserve inline Authorization"
+
+def testCloudflareAIGatewayCompatSendsSessionAffinityHeaders : IO Unit := do
+  let port := 18097
+  withHttpServer port do
+    let model : LeanAgent.Models.ModelInfo :=
+      { LeanAgent.AI.Providers.CloudflareAIGateway.workersAIKimiK26 with
+        baseUrl :=
+          s!"http://127.0.0.1:{port}/cloudflare-openai-check/" ++
+            "{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}"
+      }
+    let collection ← LeanAgent.Models.createModels none fakeCloudflareAuthContext
+    let provider ← LeanAgent.Models.createProvider
+      { id := "cloudflare-ai-gateway"
+        name := some "Cloudflare AI Gateway"
+        auth := { apiKey := some LeanAgent.AI.Providers.CloudflareAuth.cloudflareAIGatewayAuth }
+        models := #[model]
+        apis := #[{ api := "openai-completions", streams := LeanAgent.AI.Providers.Streams.openAICompatibleStreams }]
+      }
+    collection.setProvider provider
+    let stream ← collection.streamSimple
+      model
+      { messages := #[.user { content := #[LeanAgent.AI.text "hi"], timestamp := 1 }] }
+      { sessionId := some "session-1" }
+    let parts := (LeanAgent.AI.contentPlainText stream.result.content).splitOn "|"
+    assertTrue (parts[2]? == some "session-1")
+      "expected Cloudflare AI Gateway session_id header"
+    assertTrue (parts[3]? == some "session-1")
+      "expected Cloudflare AI Gateway x-client-request-id header"
+    assertTrue (parts[4]? == some "session-1")
+      "expected Cloudflare AI Gateway x-session-affinity header"
 
 def testCompatBuiltinDispatchUsesCloudflareGatewayAuth : IO Unit := do
   let port := 18096
@@ -14607,11 +15133,14 @@ def main : IO UInt32 := do
     testOpenAICompletionsContextSerializesUserImages
     testOpenAICompletionsContextBatchesToolResultImages
     testOpenAICompletionsContextReplaysThinkingAsText
+    testOpenAICompletionsContextReplaysThinkingOnlyAsText
     testOpenAICompletionsContextAddsAnthropicCacheMarkers
     testOpenAICompletionsContextRequiresToolResultNameAndBridgeForImageReplay
     testOpenAICompletionsContextAddsBridgeBeforeUserAfterToolResults
     testOpenAICompletionsContextAddsRoutingPreferences
     testOpenAICompletionsContextReplaysXiaomiMissingThinkingAsEmptyReasoningContent
+    testOpenAICompletionsContextReplaysOpenCodeGoThinkingAsReasoningContent
+    testOpenAICompletionsContextPreservesGenericReasoningField
     testOpenAICompletionsContextStrictCompat
     testOpenAICompletionsContextSetsZaiToolStream
     testOpenAICompletionsParsesReasoningDetailsBeforeToolCall
@@ -14894,6 +15423,7 @@ def main : IO UInt32 := do
     testOpenAICompletionsStreamWithOptionsLocal
     testCompatOpenAICompletionsTypedLegacyAliasLocal
     testOpenAICompatibleStreamsUsesStreamingRuntime
+    testOpenAICompatibleStreamsReplayThinkingAsTextThroughRuntime
     testOpenAICompatibleCompleteSimpleSurfacesRoutedResponseModel
     testOpenAICompatibleCompleteSimpleOmitsMatchingResponseModel
     testOpenAICompatibleCompleteSimpleIgnoresEmptyOrMissingResponseModel
@@ -14905,6 +15435,13 @@ def main : IO UInt32 := do
     testOpenAICompatibleStreamsDetectMoonshotCompatDefaults
     testOpenAICompatibleStreamsUseTogetherGptOssReasoningEffort
     testOpenAICompatibleStreamsDetectTogetherReasoningOnlyCompat
+    testOpenAICompatibleStreamsClampGroqQwenReasoningToDefault
+    testOpenAICompatibleStreamsKeepGroqGptOssReasoningEffort
+    testOpenAICompatibleStreamsUseZaiGLM52ReasoningEffortMappings
+    testOpenAICompatibleStreamsOmitZaiGLM52ReasoningEffortWhenThinkingOff
+    testOpenAICompatibleStreamsGateZaiToolStreamByBuiltinModel
+    testOpenAICompatibleStreamsRespectZaiToolStreamCompatOverride
+    testOpenAICompatibleStreamsOmitZaiToolStreamWithoutTools
     testOpenAICompatibleStreamsUseOpenCodeMaxTokensCompat
     testOpenAICompatibleStreamsUseOpenCodeGoMaxTokensCompat
     testOpenAICompatibleStreamsOmitReasoningEffortForOpenCodeGrokBuild
@@ -14916,6 +15453,9 @@ def main : IO UInt32 := do
     testLegacyOpenAICompletionsAliasKeepsGitHubCopilotDetectedMaxCompletionTokens
     testOpenAICompatibleStreamsClampMaxTokens
     testCloudflareAIGatewayOpenAICompatibleHeaderAuthLocal
+    testCloudflareAIGatewayCompatUsesConservativeOpenAICompatibleFields
+    testCloudflareAIGatewayPreservesInlineUpstreamAuthorization
+    testCloudflareAIGatewayCompatSendsSessionAffinityHeaders
     testOpenRouterImagesRequestPayload
     testOpenRouterImagesGenerateLocal
     testOpenRouterImagesMissingApiKeyReturnsError

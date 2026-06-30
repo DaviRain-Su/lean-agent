@@ -595,6 +595,35 @@ def groqGptOss120B : ModelInfo :=
     reasoning := true
   }
 
+def groqGptOss20B : ModelInfo :=
+  { id := "openai/gpt-oss-20b"
+    name := "GPT OSS 20B"
+    provider := groqProviderId
+    api := "openai-completions"
+    baseUrl := groqBaseUrl
+    cost := cost 0.075 0.3 0.0375 0.0
+    contextWindow := 131072
+    maxTokens := 65536
+    reasoning := true
+  }
+
+def groqQwen332B : ModelInfo :=
+  { id := "qwen/qwen3-32b"
+    name := "Qwen3-32B"
+    provider := groqProviderId
+    api := "openai-completions"
+    baseUrl := groqBaseUrl
+    cost := cost 0.29 0.59 0.0 0.0
+    contextWindow := 131072
+    maxTokens := 40960
+    reasoning := true
+    thinkingLevelMap := #[ { level := .level .minimal, mapped := none }
+                        , { level := .level .low, mapped := none }
+                        , { level := .level .medium, mapped := none }
+                        , { level := .level .high, mapped := some "default" }
+                        ]
+  }
+
 def xaiCompat : ModelCompat :=
   { supportsStore := false
     supportsDeveloperRole := false
@@ -740,11 +769,15 @@ def zaiCompat : ModelCompat :=
     supportsDeveloperRole := false
     supportsReasoningEffort := false
     thinkingFormat := some "zai"
+  }
+
+def zaiToolStreamCompat : ModelCompat :=
+  { zaiCompat with
     zaiToolStream := true
   }
 
 def zaiReasoningEffortCompat : ModelCompat :=
-  { zaiCompat with
+  { zaiToolStreamCompat with
     supportsReasoningEffort := true
     supportsReasoningEffortExplicit := true
   }
@@ -892,30 +925,30 @@ def xiaomiTokenPlanSGPModels : Array ModelInfo :=
 
 def zaiModels : Array ModelInfo :=
   #[ catalogOpenAICompatibleModel zaiProviderId zaiBaseUrl "glm-4.5-air" "GLM-4.5-Air" 0.0 0.0 0.0 0.0 131072 98304 true zaiCompat #[] #["text"]
-   , catalogOpenAICompatibleModel zaiProviderId zaiBaseUrl "glm-4.7" "GLM-4.7" 0.0 0.0 0.0 0.0 204800 131072 true zaiCompat #[] #["text"]
-   , catalogOpenAICompatibleModel zaiProviderId zaiBaseUrl "glm-5-turbo" "GLM-5-Turbo" 0.0 0.0 0.0 0.0 200000 131072 true zaiCompat #[] #["text"]
-   , catalogOpenAICompatibleModel zaiProviderId zaiBaseUrl "glm-5.1" "GLM-5.1" 0.0 0.0 0.0 0.0 200000 131072 true zaiCompat #[] #["text"]
+   , catalogOpenAICompatibleModel zaiProviderId zaiBaseUrl "glm-4.7" "GLM-4.7" 0.0 0.0 0.0 0.0 204800 131072 true zaiToolStreamCompat #[] #["text"]
+   , catalogOpenAICompatibleModel zaiProviderId zaiBaseUrl "glm-5-turbo" "GLM-5-Turbo" 0.0 0.0 0.0 0.0 200000 131072 true zaiToolStreamCompat #[] #["text"]
+   , catalogOpenAICompatibleModel zaiProviderId zaiBaseUrl "glm-5.1" "GLM-5.1" 0.0 0.0 0.0 0.0 200000 131072 true zaiToolStreamCompat #[] #["text"]
    , catalogOpenAICompatibleModel zaiProviderId zaiBaseUrl "glm-5.2" "GLM-5.2" 0.0 0.0 0.0 0.0 1000000 131072 true zaiReasoningEffortCompat #[ { level := .level .minimal, mapped := none }
    , { level := .level .low, mapped := some "high" }
    , { level := .level .medium, mapped := some "high" }
    , { level := .level .high, mapped := some "high" }
    , { level := .level .xhigh, mapped := some "max" }
    ] #["text"]
-   , catalogOpenAICompatibleModel zaiProviderId zaiBaseUrl "glm-5v-turbo" "GLM-5V-Turbo" 0.0 0.0 0.0 0.0 200000 131072 true zaiCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel zaiProviderId zaiBaseUrl "glm-5v-turbo" "GLM-5V-Turbo" 0.0 0.0 0.0 0.0 200000 131072 true zaiToolStreamCompat #[] #["text", "image"]
    ]
 
 def zaiCodingCNModels : Array ModelInfo :=
   #[ catalogOpenAICompatibleModel zaiCodingCNProviderId zaiCodingCNBaseUrl "glm-4.5-air" "GLM-4.5-Air" 0.0 0.0 0.0 0.0 131072 98304 true zaiCompat #[] #["text"]
-   , catalogOpenAICompatibleModel zaiCodingCNProviderId zaiCodingCNBaseUrl "glm-4.7" "GLM-4.7" 0.0 0.0 0.0 0.0 204800 131072 true zaiCompat #[] #["text"]
-   , catalogOpenAICompatibleModel zaiCodingCNProviderId zaiCodingCNBaseUrl "glm-5-turbo" "GLM-5-Turbo" 0.0 0.0 0.0 0.0 200000 131072 true zaiCompat #[] #["text"]
-   , catalogOpenAICompatibleModel zaiCodingCNProviderId zaiCodingCNBaseUrl "glm-5.1" "GLM-5.1" 0.0 0.0 0.0 0.0 200000 131072 true zaiCompat #[] #["text"]
+   , catalogOpenAICompatibleModel zaiCodingCNProviderId zaiCodingCNBaseUrl "glm-4.7" "GLM-4.7" 0.0 0.0 0.0 0.0 204800 131072 true zaiToolStreamCompat #[] #["text"]
+   , catalogOpenAICompatibleModel zaiCodingCNProviderId zaiCodingCNBaseUrl "glm-5-turbo" "GLM-5-Turbo" 0.0 0.0 0.0 0.0 200000 131072 true zaiToolStreamCompat #[] #["text"]
+   , catalogOpenAICompatibleModel zaiCodingCNProviderId zaiCodingCNBaseUrl "glm-5.1" "GLM-5.1" 0.0 0.0 0.0 0.0 200000 131072 true zaiToolStreamCompat #[] #["text"]
    , catalogOpenAICompatibleModel zaiCodingCNProviderId zaiCodingCNBaseUrl "glm-5.2" "GLM-5.2" 0.0 0.0 0.0 0.0 1000000 131072 true zaiReasoningEffortCompat #[ { level := .level .minimal, mapped := none }
    , { level := .level .low, mapped := some "high" }
    , { level := .level .medium, mapped := some "high" }
    , { level := .level .high, mapped := some "high" }
    , { level := .level .xhigh, mapped := some "max" }
    ] #["text"]
-   , catalogOpenAICompatibleModel zaiCodingCNProviderId zaiCodingCNBaseUrl "glm-5v-turbo" "GLM-5V-Turbo" 0.0 0.0 0.0 0.0 200000 131072 true zaiCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel zaiCodingCNProviderId zaiCodingCNBaseUrl "glm-5v-turbo" "GLM-5V-Turbo" 0.0 0.0 0.0 0.0 200000 131072 true zaiToolStreamCompat #[] #["text", "image"]
    ]
 
 def anthropicSonnet45 : ModelInfo :=
@@ -1791,7 +1824,7 @@ def groqProviderInfo : ProviderInfo :=
     baseUrl := groqBaseUrl
     apiKeyEnv := groqApiKeyEnv
     defaultModel := groqDefaultModel
-    models := #[groqGptOss120B]
+    models := #[groqGptOss120B, groqGptOss20B, groqQwen332B]
   }
 
 def xaiProviderInfo : ProviderInfo :=
