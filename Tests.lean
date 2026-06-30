@@ -5849,6 +5849,10 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
   assertTrue (rendered.contains "openrouter/openai/gpt-oss-120b") "expected OpenRouter model"
   assertTrue (rendered.contains "groq/openai/gpt-oss-20b") "expected Groq GPT OSS 20B model"
   assertTrue (rendered.contains "groq/qwen/qwen3-32b") "expected Groq Qwen3 reasoning model"
+  assertTrue (rendered.contains "fireworks/accounts/fireworks/models/kimi-k2p6")
+    "expected Fireworks Anthropic-compatible default model"
+  assertTrue (rendered.contains "fireworks/accounts/fireworks/routers/kimi-k2p6-turbo")
+    "expected Fireworks router model"
   assertTrue (rendered.contains "fireworks/accounts/fireworks/models/glm-5p2") "expected Fireworks OpenAI-compatible model"
   assertTrue (rendered.contains "ant-ling/Ring-2.6-1T") "expected Ant Ling model"
   assertTrue (rendered.contains "huggingface/zai-org/GLM-5.2") "expected Hugging Face generated model set"
@@ -5887,6 +5891,7 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
   assertTrue (LeanAgent.Models.huggingFaceModels.size == 47) "expected generated Hugging Face model catalog"
   assertTrue (LeanAgent.Models.moonshotAIModels.size == 9) "expected generated Moonshot AI model catalog"
   assertTrue (LeanAgent.Models.moonshotAICNModels.size == 9) "expected generated Moonshot AI CN model catalog"
+  assertTrue (LeanAgent.Models.fireworksModels.size == 15) "expected generated Fireworks model catalog"
   assertTrue (LeanAgent.Models.nvidiaModels.size == 19) "expected generated NVIDIA model catalog"
   assertTrue
     (LeanAgent.Models.nvidiaModels.all fun model =>
@@ -6027,6 +6032,40 @@ def testOpenCodeCatalogMaxTokensCompat : IO Unit := do
       assertTrue (LeanAgent.Models.thinkingLevelMapValue? model (.level .medium) == none)
         "expected Groq GPT OSS 20B to keep direct reasoning_effort values"
   | none => fail "expected Groq GPT OSS 20B model"
+  match LeanAgent.Models.ProviderCatalog.model?
+      catalog
+      LeanAgent.Models.fireworksProviderId
+      LeanAgent.Models.fireworksDefaultModel with
+  | some model =>
+      assertTrue (model.api == LeanAgent.AI.Api.AnthropicMessages.api)
+        "expected Fireworks default model to use Anthropic-compatible API"
+      assertTrue model.compat.sendSessionAffinityHeaders
+        "expected Fireworks Anthropic session-affinity compat"
+      assertTrue (!model.compat.supportsEagerToolInputStreaming)
+        "expected Fireworks Anthropic compat to omit eager tool input streaming"
+      assertTrue (!model.compat.supportsCacheControlOnTools)
+        "expected Fireworks Anthropic compat to omit tool cache_control"
+      assertTrue (!model.compat.supportsLongCacheRetention)
+        "expected Fireworks Anthropic compat to omit long cache retention"
+      assertTrue (model.input.contains "image")
+        "expected Fireworks default model image input support"
+  | none => fail "expected Fireworks default model"
+  match LeanAgent.Models.ProviderCatalog.model?
+      catalog
+      LeanAgent.Models.fireworksProviderId
+      "accounts/fireworks/models/glm-5p2" with
+  | some model =>
+      assertTrue (model.api == "openai-completions")
+        "expected Fireworks GLM 5.2 to keep OpenAI-compatible API"
+      assertTrue (model.baseUrl == LeanAgent.Models.fireworksOpenAIBaseUrl)
+        "expected Fireworks GLM 5.2 OpenAI-compatible base URL"
+      assertTrue (LeanAgent.Models.thinkingLevelPayloadValueD model .off "off" == "none")
+        "expected Fireworks GLM 5.2 off reasoning payload mapping"
+      assertTrue (LeanAgent.Models.thinkingLevelMapValue? model (.level .minimal) == some none)
+        "expected Fireworks GLM 5.2 minimal reasoning suppression"
+      assertTrue (LeanAgent.Models.thinkingLevelPayloadValueD model (.level .xhigh) "xhigh" == "max")
+        "expected Fireworks GLM 5.2 xhigh reasoning payload mapping"
+  | none => fail "expected Fireworks GLM 5.2 model"
   match LeanAgent.Models.ProviderCatalog.model? catalog LeanAgent.Models.zaiProviderId "glm-5.2" with
   | some model =>
       assertTrue model.compat.supportsReasoningEffort "expected Z.AI GLM-5.2 reasoning-effort compat"
@@ -6182,8 +6221,22 @@ def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
   | none => fail "expected GitHub Copilot model in default runtime collection"
   match ← collection.getModel? LeanAgent.Models.fireworksProviderId LeanAgent.Models.fireworksDefaultModel with
   | some model =>
-      assertTrue (model.baseUrl == LeanAgent.Models.fireworksBaseUrl) "expected Fireworks OpenAI-compatible base URL"
+      assertTrue (model.api == LeanAgent.AI.Api.AnthropicMessages.api)
+        "expected Fireworks default Anthropic-compatible API"
+      assertTrue (model.baseUrl == LeanAgent.Models.fireworksBaseUrl)
+        "expected Fireworks default Anthropic-compatible base URL"
+      assertTrue model.compat.sendSessionAffinityHeaders
+        "expected Fireworks default session-affinity compat"
+      assertTrue (model.input.contains "image")
+        "expected Fireworks default model image input metadata"
   | none => fail "expected Fireworks model in default runtime collection"
+  match ← collection.getModel? LeanAgent.Models.fireworksProviderId "accounts/fireworks/models/glm-5p2" with
+  | some model =>
+      assertTrue (model.api == "openai-completions")
+        "expected Fireworks GLM 5.2 OpenAI-compatible API in default runtime collection"
+      assertTrue (model.baseUrl == LeanAgent.Models.fireworksOpenAIBaseUrl)
+        "expected Fireworks GLM 5.2 OpenAI-compatible base URL"
+  | none => fail "expected Fireworks GLM 5.2 in default runtime collection"
   match ← collection.getModel? LeanAgent.Models.huggingFaceProviderId "zai-org/GLM-5.2" with
   | some model =>
       assertTrue (model.api == "openai-completions") "expected Hugging Face OpenAI-compatible API"

@@ -78,8 +78,9 @@ def togetherBaseUrl : String := "https://api.together.ai/v1"
 
 def fireworksProviderId : String := "fireworks"
 def fireworksApiKeyEnv : String := "FIREWORKS_API_KEY"
-def fireworksDefaultModel : String := "accounts/fireworks/models/glm-5p2"
-def fireworksBaseUrl : String := "https://api.fireworks.ai/inference/v1"
+def fireworksDefaultModel : String := "accounts/fireworks/models/kimi-k2p6"
+def fireworksBaseUrl : String := "https://api.fireworks.ai/inference"
+def fireworksOpenAIBaseUrl : String := fireworksBaseUrl ++ "/v1"
 
 def anthropicProviderId : String := "anthropic"
 def anthropicApiKeyEnv : String := "ANTHROPIC_API_KEY"
@@ -708,18 +709,117 @@ def fireworksCompat : ModelCompat :=
     supportsDeveloperRole := false
   }
 
+def fireworksAnthropicCompat : ModelCompat :=
+  { sendSessionAffinityHeaders := true
+    supportsEagerToolInputStreaming := false
+    supportsCacheControlOnTools := false
+    supportsLongCacheRetention := false
+  }
+
+def fireworksAnthropicModel
+    (id name : String)
+    (inputCost outputCost cacheReadCost cacheWriteCost : Float)
+    (contextWindow maxTokens : Nat)
+    (input : Array String := #["text"]) : ModelInfo :=
+  catalogModel fireworksProviderId id name LeanAgent.AI.Api.AnthropicMessages.api fireworksBaseUrl
+    inputCost outputCost cacheReadCost cacheWriteCost contextWindow maxTokens true fireworksAnthropicCompat
+    #[] input
+
+def fireworksGlm52ThinkingMap : Array LeanAgent.AI.ThinkingLevelMapEntry :=
+  #[ { level := .off, mapped := some "none" }
+   , { level := .level .minimal, mapped := none }
+   , { level := .level .low, mapped := some "high" }
+   , { level := .level .medium, mapped := some "high" }
+   , { level := .level .xhigh, mapped := some "max" }
+   ]
+
+def fireworksDeepSeekV4Flash : ModelInfo :=
+  fireworksAnthropicModel "accounts/fireworks/models/deepseek-v4-flash" "DeepSeek V4 Flash"
+    0.14 0.28 0.028 0.0 1000000 384000
+
+def fireworksDeepSeekV4Pro : ModelInfo :=
+  fireworksAnthropicModel "accounts/fireworks/models/deepseek-v4-pro" "DeepSeek V4 Pro"
+    1.74 3.48 0.145 0.0 1000000 384000
+
+def fireworksGlm51 : ModelInfo :=
+  fireworksAnthropicModel "accounts/fireworks/models/glm-5p1" "GLM 5.1"
+    1.4 4.4 0.26 0.0 202800 131072
+
 def fireworksGlm52 : ModelInfo :=
-  { id := fireworksDefaultModel
+  { id := "accounts/fireworks/models/glm-5p2"
     name := "GLM 5.2"
     provider := fireworksProviderId
     api := "openai-completions"
-    baseUrl := fireworksBaseUrl
+    baseUrl := fireworksOpenAIBaseUrl
     cost := cost 1.4 4.4 0.26 0.0
     contextWindow := 1048576
     maxTokens := 131072
     reasoning := true
     compat := fireworksCompat
+    thinkingLevelMap := fireworksGlm52ThinkingMap
   }
+
+def fireworksGptOss120B : ModelInfo :=
+  fireworksAnthropicModel "accounts/fireworks/models/gpt-oss-120b" "GPT OSS 120B"
+    0.15 0.6 0.015 0.0 131072 32768
+
+def fireworksGptOss20B : ModelInfo :=
+  fireworksAnthropicModel "accounts/fireworks/models/gpt-oss-20b" "GPT OSS 20B"
+    0.07 0.3 0.035 0.0 131072 32768
+
+def fireworksKimiK26 : ModelInfo :=
+  fireworksAnthropicModel fireworksDefaultModel "Kimi K2.6"
+    0.95 4.0 0.16 0.0 262000 262000 #["text", "image"]
+
+def fireworksKimiK27Code : ModelInfo :=
+  fireworksAnthropicModel "accounts/fireworks/models/kimi-k2p7-code" "Kimi K2.7 Code"
+    0.95 4.0 0.19 0.0 262000 262000 #["text", "image"]
+
+def fireworksMiniMaxM27 : ModelInfo :=
+  fireworksAnthropicModel "accounts/fireworks/models/minimax-m2p7" "MiniMax-M2.7"
+    0.3 1.2 0.06 0.0 196608 196608
+
+def fireworksMiniMaxM3 : ModelInfo :=
+  fireworksAnthropicModel "accounts/fireworks/models/minimax-m3" "MiniMax-M3"
+    0.3 1.2 0.06 0.0 512000 512000
+
+def fireworksQwen37Plus : ModelInfo :=
+  fireworksAnthropicModel "accounts/fireworks/models/qwen3p7-plus" "Qwen 3.7 Plus"
+    0.4 1.6 0.08 0.0 262144 65536 #["text", "image"]
+
+def fireworksGlm51Fast : ModelInfo :=
+  fireworksAnthropicModel "accounts/fireworks/routers/glm-5p1-fast" "GLM 5.1 Fast"
+    2.8 8.8 0.52 0.0 202800 131072
+
+def fireworksKimiK26Fast : ModelInfo :=
+  fireworksAnthropicModel "accounts/fireworks/routers/kimi-k2p6-fast" "Kimi K2.6 Fast"
+    2.0 8.0 0.3 0.0 262000 262000 #["text", "image"]
+
+def fireworksKimiK26Turbo : ModelInfo :=
+  fireworksAnthropicModel "accounts/fireworks/routers/kimi-k2p6-turbo" "Kimi K2.6 Turbo"
+    2.0 8.0 0.3 0.0 262000 262000 #["text", "image"]
+
+def fireworksKimiK27CodeFast : ModelInfo :=
+  fireworksAnthropicModel "accounts/fireworks/routers/kimi-k2p7-code-fast" "Kimi K2.7 Code Fast"
+    1.9 8.0 0.38 0.0 262000 262000 #["text", "image"]
+
+def fireworksModels : Array ModelInfo :=
+  #[ fireworksDeepSeekV4Flash
+   , fireworksDeepSeekV4Pro
+   , fireworksGlm51
+   , fireworksGlm52
+   , fireworksGptOss120B
+   , fireworksGptOss20B
+   , fireworksKimiK26
+   , fireworksKimiK27Code
+   , fireworksMiniMaxM27
+   , fireworksMiniMaxM3
+   , fireworksQwen37Plus
+   , fireworksGlm51Fast
+   , fireworksKimiK26Fast
+   , fireworksKimiK26Turbo
+   , fireworksKimiK27CodeFast
+   ]
 
 def antLingCompat : ModelCompat :=
   { supportsStore := false
@@ -1860,7 +1960,7 @@ def fireworksProviderInfo : ProviderInfo :=
     baseUrl := fireworksBaseUrl
     apiKeyEnv := fireworksApiKeyEnv
     defaultModel := fireworksDefaultModel
-    models := #[fireworksGlm52]
+    models := fireworksModels
   }
 
 def antLingProviderInfo : ProviderInfo :=
