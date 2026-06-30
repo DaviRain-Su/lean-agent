@@ -42,6 +42,7 @@ structure OpenAICompletionsOptions extends LeanAgent.AI.SimpleStreamOptions wher
   offReasoningEffortValue : Option String := none
   offThinkingEnabled : Bool := false
   supportsReasoningEffort : Bool := true
+  supportsUsageInStreaming : Bool := true
   maxTokensField : String := "max_tokens"
   supportsLongCacheRetention : Bool := true
   sendSessionAffinityHeaders : Bool := false
@@ -53,8 +54,12 @@ structure OpenAICompletionsModel extends LeanAgent.AI.Api.TransformMessages.Targ
   supportsDeveloperRole : Bool := true
   requiresThinkingAsText : Bool := false
   requiresReasoningContentOnAssistantMessages : Bool := false
+  requiresToolResultName : Bool := false
+  requiresAssistantAfterToolResult : Bool := false
   thinkingFormat : Option String := none
   chatTemplateKwargs : Option Lean.Json := none
+  openRouterRouting : Option Lean.Json := none
+  vercelGatewayRouting : Option Lean.Json := none
   zaiToolStream : Bool := false
   supportsStrictMode : Bool := true
   cacheControlFormat : Option String := none
@@ -65,12 +70,17 @@ structure OpenAICompletionsCompatOverride where
   supportsDeveloperRole : Option Bool := none
   requiresThinkingAsText : Option Bool := none
   requiresReasoningContentOnAssistantMessages : Option Bool := none
+  requiresToolResultName : Option Bool := none
+  requiresAssistantAfterToolResult : Option Bool := none
   thinkingFormat : Option String := none
   chatTemplateKwargs : Option Lean.Json := none
+  openRouterRouting : Option Lean.Json := none
+  vercelGatewayRouting : Option Lean.Json := none
   zaiToolStream : Option Bool := none
   supportsStrictMode : Option Bool := none
   cacheControlFormat : Option String := none
   supportsReasoningEffort : Option Bool := none
+  supportsUsageInStreaming : Option Bool := none
   maxTokensField : Option String := none
   supportsLongCacheRetention : Option Bool := none
   sendSessionAffinityHeaders : Option Bool := none
@@ -80,12 +90,17 @@ structure ResolvedOpenAICompletionsCompat where
   supportsDeveloperRole : Bool := true
   requiresThinkingAsText : Bool := false
   requiresReasoningContentOnAssistantMessages : Bool := false
+  requiresToolResultName : Bool := false
+  requiresAssistantAfterToolResult : Bool := false
   thinkingFormat : Option String := some "openai"
   chatTemplateKwargs : Option Lean.Json := none
+  openRouterRouting : Option Lean.Json := none
+  vercelGatewayRouting : Option Lean.Json := none
   zaiToolStream : Bool := false
   supportsStrictMode : Bool := true
   cacheControlFormat : Option String := none
   supportsReasoningEffort : Bool := true
+  supportsUsageInStreaming : Bool := true
   maxTokensField : String := "max_completion_tokens"
   supportsLongCacheRetention : Bool := true
   sendSessionAffinityHeaders : Bool := false
@@ -173,14 +188,19 @@ def detectCompat
     supportsDeveloperRole := supportsDeveloperRole
     requiresThinkingAsText := false
     requiresReasoningContentOnAssistantMessages := isDeepSeek
+    requiresToolResultName := false
+    requiresAssistantAfterToolResult := false
     thinkingFormat := thinkingFormat
     chatTemplateKwargs := none
+    openRouterRouting := none
+    vercelGatewayRouting := none
     zaiToolStream := false
     supportsStrictMode := !(isMoonshot || isTogether || isCloudflareAiGateway || isNvidia)
     cacheControlFormat := cacheControlFormat
     supportsReasoningEffort :=
       isTogetherReasoningEffort ||
         !(isGrok || isZai || isMoonshot || isTogether || isCloudflareAiGateway || isNvidia || isAntLing)
+    supportsUsageInStreaming := true
     maxTokensField := if useMaxTokens then "max_tokens" else "max_completion_tokens"
     supportsLongCacheRetention :=
       !(isTogether || isCloudflareWorkersAI || isCloudflareAiGateway || isNvidia || isAntLing)
@@ -197,12 +217,21 @@ def resolveCompat
     requiresReasoningContentOnAssistantMessages :=
       override.requiresReasoningContentOnAssistantMessages.getD
         detected.requiresReasoningContentOnAssistantMessages
+    requiresToolResultName :=
+      override.requiresToolResultName.getD detected.requiresToolResultName
+    requiresAssistantAfterToolResult :=
+      override.requiresAssistantAfterToolResult.getD
+        detected.requiresAssistantAfterToolResult
     thinkingFormat := override.thinkingFormat <|> detected.thinkingFormat
     chatTemplateKwargs := override.chatTemplateKwargs <|> detected.chatTemplateKwargs
+    openRouterRouting := override.openRouterRouting <|> detected.openRouterRouting
+    vercelGatewayRouting := override.vercelGatewayRouting <|> detected.vercelGatewayRouting
     zaiToolStream := override.zaiToolStream.getD detected.zaiToolStream
     supportsStrictMode := override.supportsStrictMode.getD detected.supportsStrictMode
     cacheControlFormat := override.cacheControlFormat <|> detected.cacheControlFormat
     supportsReasoningEffort := override.supportsReasoningEffort.getD detected.supportsReasoningEffort
+    supportsUsageInStreaming :=
+      override.supportsUsageInStreaming.getD detected.supportsUsageInStreaming
     maxTokensField := override.maxTokensField.getD detected.maxTokensField
     supportsLongCacheRetention :=
       override.supportsLongCacheRetention.getD detected.supportsLongCacheRetention
@@ -469,9 +498,14 @@ def assistantMessageJson?
   if !hasContent && toolCalls.isEmpty then
     none
   else
+    let emptyAssistantContent :=
+      if model.requiresAssistantAfterToolResult then
+        LeanAgent.Json.str ""
+      else
+        LeanAgent.Json.null
     let baseFields :=
       [ ("role", LeanAgent.Json.str "assistant")
-      , ("content", contentJson?.getD LeanAgent.Json.null)
+      , ("content", contentJson?.getD emptyAssistantContent)
       ]
     let toolFields :=
       if toolCalls.isEmpty then
@@ -509,6 +543,26 @@ def toolResultMessageJson (message : LeanAgent.AI.ToolResultMessage) : Lean.Json
     , ("content", LeanAgent.Json.str (sanitize rendered))
     ]
 
+def compatToolResultMessageJson
+    (model : OpenAICompletionsModel)
+    (message : LeanAgent.AI.ToolResultMessage) : Lean.Json :=
+  let fields :=
+    [ ("role", LeanAgent.Json.str "tool")
+    , ("tool_call_id", LeanAgent.Json.str (toolResultCallId message.toolCallId))
+    , ("content", LeanAgent.Json.str (sanitize (if (toolResultText message.content).isEmpty then "(see attached image)" else toolResultText message.content)))
+    ] ++
+      if model.requiresToolResultName then
+        [("name", LeanAgent.Json.str message.toolName)]
+      else
+        []
+  LeanAgent.Json.obj fields
+
+def assistantToolResultBridgeMessageJson : Lean.Json :=
+  LeanAgent.Json.obj
+    [ ("role", LeanAgent.Json.str "assistant")
+    , ("content", LeanAgent.Json.str "I have processed the tool results.")
+    ]
+
 def groupedToolResultImageMessageJson (imageParts : Array Lean.Json) : Lean.Json :=
   LeanAgent.Json.obj
     [ ("role", LeanAgent.Json.str "user")
@@ -530,10 +584,16 @@ def collectLeadingToolResults :
 partial def convertMessagesLoop
     (model : OpenAICompletionsModel)
     (messages : List LeanAgent.AI.Message)
+    (afterToolResult : Bool := false)
     (acc : Array Lean.Json := #[]) : Array Lean.Json :=
   match messages with
   | [] => acc
   | .user user :: rest =>
+      let acc :=
+        if model.requiresAssistantAfterToolResult && afterToolResult then
+          acc.push assistantToolResultBridgeMessageJson
+        else
+          acc
       let content := userContentParts user.content
       let acc :=
         if content.isEmpty then
@@ -544,19 +604,19 @@ partial def convertMessagesLoop
               [ ("role", LeanAgent.Json.str "user")
               , ("content", LeanAgent.Json.arr content)
               ])
-      convertMessagesLoop model rest acc
+      convertMessagesLoop model rest false acc
   | .assistant assistant :: rest =>
       let acc :=
         match assistantMessageJson? model assistant with
         | some json => acc.push json
         | none => acc
-      convertMessagesLoop model rest acc
+      convertMessagesLoop model rest false acc
   | .toolResult _ :: _ =>
       let (toolResults, remaining) := collectLeadingToolResults messages
       let (acc, imageParts) :=
         toolResults.foldl
           (fun (state : Array Lean.Json × Array Lean.Json) toolResult =>
-            let textJson := toolResultMessageJson toolResult
+            let textJson := compatToolResultMessageJson model toolResult
             let images :=
               if model.input.contains "image" then
                 state.snd ++ toolResultImageParts toolResult.content
@@ -568,8 +628,13 @@ partial def convertMessagesLoop
         if imageParts.isEmpty then
           acc
         else
+          let acc :=
+            if model.requiresAssistantAfterToolResult then
+              acc.push assistantToolResultBridgeMessageJson
+            else
+              acc
           acc.push (groupedToolResultImageMessageJson imageParts)
-      convertMessagesLoop model remaining acc
+      convertMessagesLoop model remaining imageParts.isEmpty acc
 
 def transformedContextMessages
     (model : OpenAICompletionsModel)
@@ -711,6 +776,8 @@ def resolvedLegacyOptions
       { options with
         supportsReasoningEffort :=
           if options.supportsReasoningEffort then compat.supportsReasoningEffort else false
+        supportsUsageInStreaming :=
+          if options.supportsUsageInStreaming then compat.supportsUsageInStreaming else false
         maxTokensField :=
           if options.maxTokensField == "max_tokens" then compat.maxTokensField else options.maxTokensField
         supportsLongCacheRetention :=
@@ -829,7 +896,27 @@ def requestCompatOptionFields
               | none => []
         else
           []
-  temperatureFields ++ maxTokenFields ++ storeFields ++ reasoningFields
+  let routingFields :=
+    (match compat.openRouterRouting with
+     | some routing => [("provider", routing)]
+     | none => []) ++
+      (match compat.vercelGatewayRouting with
+       | some (.obj fields) =>
+           let gatewayFields :=
+             fields.foldl (init := ([] : List (String × Lean.Json))) fun acc key value =>
+               if key == "only" || key == "order" then
+                 (key, value) :: acc
+               else
+                 acc
+           if gatewayFields.isEmpty then
+             []
+           else
+             [ ("providerOptions",
+                 LeanAgent.Json.obj
+                   [("gateway", LeanAgent.Json.obj gatewayFields.reverse)])
+             ]
+       | _ => [])
+  temperatureFields ++ maxTokenFields ++ storeFields ++ reasoningFields ++ routingFields
 
 def jsonStringField? (json : Lean.Json) (key : String) : Option String :=
   match LeanAgent.Json.optVal? json key with
@@ -1043,7 +1130,33 @@ def requestContextOptionFields
               | none => []
         else
           []
-  temperatureFields ++ maxTokenFields ++ storeFields ++ reasoningFields
+  let routingFields :=
+    (match model.openRouterRouting with
+     | some routing => [("provider", routing)]
+     | none => []) ++
+      (match model.vercelGatewayRouting with
+       | some (.obj fields) =>
+           let gatewayFields :=
+             fields.foldl (init := ([] : List (String × Lean.Json))) fun acc key value =>
+               if key == "only" || key == "order" then
+                 (key, value) :: acc
+               else
+                 acc
+           if gatewayFields.isEmpty then
+             []
+           else
+             [ ("providerOptions",
+                 LeanAgent.Json.obj
+                   [("gateway", LeanAgent.Json.obj gatewayFields.reverse)])
+             ]
+       | _ => [])
+  temperatureFields ++ maxTokenFields ++ storeFields ++ reasoningFields ++ routingFields
+
+def streamingUsageFields (options : OpenAICompletionsOptions) : List (String × Lean.Json) :=
+  if options.supportsUsageInStreaming then
+    [("stream_options", LeanAgent.Json.obj [("include_usage", LeanAgent.Json.bool true)])]
+  else
+    []
 
 def cacheRetentionFromEnv? (env : Array (String × String)) : Option LeanAgent.AI.CacheRetention :=
   env.findSome? fun (name, value) =>
@@ -1327,8 +1440,8 @@ def requestToStreamingJsonWithOptions
     ([ ("model", LeanAgent.Json.str request.model)
      , ("messages", LeanAgent.Json.arr messages)
      , ("stream", LeanAgent.Json.bool true)
-     , ("stream_options", LeanAgent.Json.obj [("include_usage", LeanAgent.Json.bool true)])
-     ] ++ optionFields
+     ] ++ streamingUsageFields options
+       ++ optionFields
        ++ promptCacheFields baseUrl options
        ++ (match tools? with
            | some tools => [("tools", LeanAgent.Json.arr tools)]
@@ -1387,8 +1500,8 @@ def requestToStreamingJsonWithContextOptions
     ([ ("model", LeanAgent.Json.str model.id)
      , ("messages", LeanAgent.Json.arr messages)
      , ("stream", LeanAgent.Json.bool true)
-     , ("stream_options", LeanAgent.Json.obj [("include_usage", LeanAgent.Json.bool true)])
-     ] ++ requestContextOptionFields model options
+     ] ++ streamingUsageFields options
+       ++ requestContextOptionFields model options
        ++ promptCacheFields baseUrl options
        ++ (match tools? with
            | some tools => [("tools", LeanAgent.Json.arr tools)]

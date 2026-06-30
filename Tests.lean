@@ -606,6 +606,14 @@ def testOpenAICompletionsStreamingPayload : IO Unit := do
         "expected streaming usage option"
   | none => fail "expected stream_options"
 
+def testOpenAICompletionsStreamingPayloadCanOmitUsageOption : IO Unit := do
+  let json := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithOptions
+    (basicProviderRequest)
+    { supportsUsageInStreaming := false }
+    LeanAgent.Models.openAIBaseUrl
+  assertTrue ((LeanAgent.Json.optVal? json "stream_options").isNone)
+    "expected compat to omit streaming usage option"
+
 def testOpenAICompletionsParsesStreamingText : IO Unit := do
   let raw := String.intercalate "\n"
     [ "data: {\"id\":\"chatcmpl-1\",\"model\":\"deepseek-v4-flash\",\"choices\":[{\"delta\":{\"content\":\"hel\"},\"finish_reason\":null}]}"
@@ -1429,6 +1437,133 @@ def testOpenAICompletionsContextBatchesToolResultImages : IO Unit := do
           | none => fail "expected replay content array"
       | none => fail "expected trailing replay user message"
   | none => fail "expected OpenAI-compatible messages array"
+
+def testOpenAICompletionsContextRequiresToolResultNameAndBridgeForImageReplay : IO Unit := do
+  let model :=
+    { openAICompletionsContextModel with
+      requiresToolResultName := true
+      requiresAssistantAfterToolResult := true
+    }
+  let assistant : LeanAgent.AI.AssistantMessage :=
+    { content :=
+        #[ .toolCall
+            { id := "tool-1"
+              name := "read"
+              arguments := LeanAgent.Json.obj [("path", LeanAgent.Json.str "img.png")]
+            }
+         ]
+      api := model.api
+      provider := model.provider
+      model := model.id
+      stopReason := .toolUse
+      timestamp := 2
+    }
+  let payload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+    model
+    { messages :=
+        #[ .user { content := #[LeanAgent.AI.text "Read the image"], timestamp := 1 }
+         , .assistant assistant
+         , .toolResult
+            { toolCallId := "tool-1"
+              toolName := "read"
+              content :=
+                #[ LeanAgent.AI.text "Read image file [image/png]"
+                 , LeanAgent.AI.image "ZmFrZQ==" "image/png"
+                 ]
+              isError := false
+              timestamp := 3
+            }
+         ]
+    }
+  match jsonArrayField? payload "messages" with
+  | some messages =>
+      let roles := messages.map (fun message => (jsonStringField? message "role").getD "")
+      assertTrue (roles == #["user", "assistant", "tool", "assistant", "user"])
+        "expected compat bridge before grouped tool-result image replay"
+      match messages[1]?, messages[2]?, messages[3]? with
+      | some replayedAssistant, some toolResult, some bridge =>
+          assertTrue (LeanAgent.Json.optVal? replayedAssistant "content" == some (LeanAgent.Json.str ""))
+            "expected compat assistant tool-call replay to use empty-string content"
+          assertTrue (jsonStringField? toolResult "name" == some "read")
+            "expected compat tool result name field"
+          assertTrue (jsonStringField? bridge "content" == some "I have processed the tool results.")
+            "expected compat bridge assistant content"
+      | _, _, _ => fail "expected compat assistant, tool result, and bridge messages"
+  | none => fail "expected OpenAI-compatible messages array"
+
+def testOpenAICompletionsContextAddsBridgeBeforeUserAfterToolResults : IO Unit := do
+  let model :=
+    { openAICompletionsContextModel with
+      requiresAssistantAfterToolResult := true
+    }
+  let assistant : LeanAgent.AI.AssistantMessage :=
+    { content :=
+        #[ .toolCall
+            { id := "tool-1"
+              name := "read"
+              arguments := LeanAgent.Json.obj [("path", LeanAgent.Json.str "README.md")]
+            }
+         ]
+      api := model.api
+      provider := model.provider
+      model := model.id
+      stopReason := .toolUse
+      timestamp := 2
+    }
+  let payload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+    model
+    { messages :=
+        #[ .user { content := #[LeanAgent.AI.text "Use the read tool"], timestamp := 1 }
+         , .assistant assistant
+         , .toolResult
+            { toolCallId := "tool-1"
+              toolName := "read"
+              content := #[LeanAgent.AI.text "README contents"]
+              isError := false
+              timestamp := 3
+            }
+         , .user { content := #[LeanAgent.AI.text "Summarize it"], timestamp := 4 }
+         ]
+    }
+  match jsonArrayField? payload "messages" with
+  | some messages =>
+      let roles := messages.map (fun message => (jsonStringField? message "role").getD "")
+      assertTrue (roles == #["user", "assistant", "tool", "assistant", "user"])
+        "expected compat bridge before user after tool results"
+      match messages[3]? with
+      | some bridge =>
+          assertTrue (jsonStringField? bridge "content" == some "I have processed the tool results.")
+            "expected compat bridge assistant content before user follow-up"
+      | none => fail "expected compat bridge assistant message"
+  | none => fail "expected OpenAI-compatible messages array"
+
+def testOpenAICompletionsContextAddsRoutingPreferences : IO Unit := do
+  let openRouterRouting :=
+    LeanAgent.Json.obj
+      [ ("only", LeanAgent.Json.arr #[LeanAgent.Json.str "anthropic"])
+      , ("allow_fallbacks", LeanAgent.Json.bool false)
+      ]
+  let vercelRouting :=
+    LeanAgent.Json.obj
+      [ ("only", LeanAgent.Json.arr #[LeanAgent.Json.str "bedrock"])
+      , ("order", LeanAgent.Json.arr #[LeanAgent.Json.str "anthropic", LeanAgent.Json.str "openai"])
+      ]
+  let payload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+    { openAICompletionsContextModel with
+      provider := LeanAgent.Models.openRouterProviderId
+      openRouterRouting := some openRouterRouting
+      vercelGatewayRouting := some vercelRouting
+    }
+    { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }] }
+  assertTrue (LeanAgent.Json.optVal? payload "provider" == some openRouterRouting)
+    "expected OpenRouter routing passthrough"
+  match jsonObjectField? payload "providerOptions" >>= fun options => jsonObjectField? options "gateway" with
+  | some gateway =>
+      assertTrue ((LeanAgent.Json.optVal? gateway "only").isSome)
+        "expected Vercel gateway only routing"
+      assertTrue ((LeanAgent.Json.optVal? gateway "order").isSome)
+        "expected Vercel gateway order routing"
+  | none => fail "expected Vercel gateway providerOptions"
 
 def testOpenAICompletionsContextReplaysThinkingAsText : IO Unit := do
   let model :=
@@ -5325,8 +5460,12 @@ def testTogetherCatalogReasoningEffortCompat : IO Unit := do
       assertTrue model.reasoning "expected Together default model reasoning support"
       assertTrue model.compat.supportsReasoningEffort
         "expected Together GPT OSS compat to support reasoning_effort"
+      assertTrue model.compat.supportsReasoningEffortExplicit
+        "expected Together GPT OSS reasoning-effort explicit override"
       assertTrue (model.compat.thinkingFormat == some "openai")
         "expected Together GPT OSS compat to use openai reasoning format"
+      assertTrue model.compat.maxTokensFieldExplicit
+        "expected Together GPT OSS max_tokens explicit override"
       assertTrue (LeanAgent.Models.thinkingLevelMapValue? model .off == some none)
         "expected Together GPT OSS off thinking level to map to omission"
       assertTrue (LeanAgent.Models.thinkingLevelMapValue? model (.level .minimal) == some none)
@@ -5342,6 +5481,8 @@ def testOpenCodeCatalogMaxTokensCompat : IO Unit := do
   | some model =>
       assertTrue (model.compat.maxTokensField == "max_tokens")
         "expected OpenCode big-pickle max_tokens compat metadata"
+      assertTrue model.compat.maxTokensFieldExplicit
+        "expected OpenCode big-pickle explicit max_tokens override"
   | none => fail "expected OpenCode big-pickle model"
   match LeanAgent.Models.ProviderCatalog.model? catalog LeanAgent.Models.opencodeProviderId "kimi-k2.6" with
   | some model =>
@@ -5384,6 +5525,8 @@ def testOpenCodeCatalogMaxTokensCompat : IO Unit := do
   match LeanAgent.Models.ProviderCatalog.model? catalog LeanAgent.Models.zaiProviderId "glm-5.2" with
   | some model =>
       assertTrue model.compat.supportsReasoningEffort "expected Z.AI GLM-5.2 reasoning-effort compat"
+      assertTrue model.compat.supportsReasoningEffortExplicit
+        "expected Z.AI GLM-5.2 explicit reasoning-effort override"
       assertTrue model.compat.zaiToolStream "expected Z.AI GLM-5.2 tool-stream compat"
       assertTrue (LeanAgent.Models.thinkingLevelPayloadValueD model (.level .xhigh) "xhigh" == "max")
         "expected Z.AI xhigh mapping"
@@ -10045,7 +10188,7 @@ def httpServerScript : String :=
     , "            return"
     , "        if self.path == '/clamp-openai/chat/completions':"
     , "            request = json.loads(body)"
-    , "            text = str(request.get('max_tokens'))"
+    , "            text = str(request.get('max_tokens') or request.get('max_completion_tokens'))"
     , "            payload = ("
     , "                'data: ' + json.dumps({'choices': [{'delta': {'content': text}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 4, 'completion_tokens': 2}}) + '\\n\\n' +"
     , "                'data: [DONE]\\n\\n'"
@@ -12162,6 +12305,118 @@ def testOpenAICompatibleStreamsUseOpenCodeGoMaxTokensCompat : IO Unit := do
     assertTrue (LeanAgent.Json.optVal? payload "enable_thinking" == some (LeanAgent.Json.bool true))
       "expected OpenCode Go qwen compat metadata to preserve qwen thinking payload"
 
+def testOpenAICompatibleStreamsOmitStreamingUsageWhenCompatDisablesIt : IO Unit := do
+  let port := 18133
+  withHttpServer port do
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := "custom-no-usage"
+        name := "Custom No Usage"
+        provider := "custom"
+        api := "openai-completions"
+        baseUrl := s!"http://127.0.0.1:{port}/runtime-stream-openai"
+        contextWindow := 100000
+        maxTokens := 16000
+        compat := { supportsUsageInStreaming := false }
+        input := #["text"]
+      }
+    let payloadRef ← IO.mkRef Lean.Json.null
+    let _ ← LeanAgent.AI.Providers.Streams.openAICompatibleStreams.streamSimple
+      model
+      { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }] }
+      { apiKey := some "test-key"
+        onPayload := some fun payload _ => do
+          payloadRef.set payload
+          pure none
+      }
+    let payload ← payloadRef.get
+    assertTrue ((LeanAgent.Json.optVal? payload "stream_options").isNone)
+      "expected runtime compat to omit streaming usage option"
+
+def testLegacyOpenAICompletionsAliasOmitStreamingUsageWhenCompatDisablesIt : IO Unit := do
+  let port := 18134
+  withHttpServer port do
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := "custom-no-usage"
+        name := "Custom No Usage"
+        provider := "custom"
+        api := "openai-completions"
+        baseUrl := s!"http://127.0.0.1:{port}/runtime-stream-openai"
+        contextWindow := 100000
+        maxTokens := 16000
+        compat := { supportsUsageInStreaming := false }
+        input := #["text"]
+      }
+    let payloadRef ← IO.mkRef Lean.Json.null
+    let _ ← LeanAgent.AI.Compat.Aliases.streamOpenAICompletionsWithOptions
+      model
+      { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }] }
+      { apiKey := some "test-key"
+        onPayload := some fun payload _ => do
+          payloadRef.set payload
+          pure none
+      }
+    let payload ← payloadRef.get
+    assertTrue ((LeanAgent.Json.optVal? payload "stream_options").isNone)
+      "expected legacy alias compat to omit streaming usage option"
+
+def testOpenAICompatibleStreamsKeepGitHubCopilotDetectedMaxCompletionTokens : IO Unit := do
+  let port := 18131
+  withHttpServer port do
+    match LeanAgent.Models.githubCopilotModels.find? (fun model => model.id == "claude-fable-5") with
+    | none => fail "expected GitHub Copilot Claude Fable 5 model"
+    | some baseModel =>
+        let model : LeanAgent.Models.ModelInfo :=
+          { baseModel with
+            baseUrl := s!"http://127.0.0.1:{port}/runtime-stream-openai"
+          }
+        let payloadRef ← IO.mkRef Lean.Json.null
+        let _ ← LeanAgent.AI.Providers.Streams.openAICompatibleStreams.streamSimple
+          model
+          { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }] }
+          { apiKey := some "test-key"
+            maxTokens := some 123
+            reasoning := some .high
+            onPayload := some fun payload _ => do
+              payloadRef.set payload
+              pure none
+          }
+        let payload ← payloadRef.get
+        assertTrue (LeanAgent.Json.optVal? payload "max_completion_tokens" == some (LeanAgent.Json.nat 123))
+          "expected GitHub Copilot partial compat to keep detected max_completion_tokens"
+        assertTrue ((LeanAgent.Json.optVal? payload "max_tokens").isNone)
+          "expected GitHub Copilot partial compat to avoid forced max_tokens"
+        assertTrue ((LeanAgent.Json.optVal? payload "reasoning_effort").isNone)
+          "expected GitHub Copilot partial compat to keep reasoning_effort disabled"
+
+def testLegacyOpenAICompletionsAliasKeepsGitHubCopilotDetectedMaxCompletionTokens : IO Unit := do
+  let port := 18132
+  withHttpServer port do
+    match LeanAgent.Models.githubCopilotModels.find? (fun model => model.id == "claude-fable-5") with
+    | none => fail "expected GitHub Copilot Claude Fable 5 model"
+    | some baseModel =>
+        let model : LeanAgent.Models.ModelInfo :=
+          { baseModel with
+            baseUrl := s!"http://127.0.0.1:{port}/runtime-stream-openai"
+          }
+        let payloadRef ← IO.mkRef Lean.Json.null
+        let _ ← LeanAgent.AI.Compat.Aliases.streamOpenAICompletionsWithOptions
+          model
+          { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }] }
+          { apiKey := some "test-key"
+            maxTokens := some 123
+            reasoningEffort := some .high
+            onPayload := some fun payload _ => do
+              payloadRef.set payload
+              pure none
+          }
+        let payload ← payloadRef.get
+        assertTrue (LeanAgent.Json.optVal? payload "max_completion_tokens" == some (LeanAgent.Json.nat 123))
+          "expected legacy OpenAI alias to keep detected max_completion_tokens"
+        assertTrue ((LeanAgent.Json.optVal? payload "max_tokens").isNone)
+          "expected legacy OpenAI alias to avoid forced max_tokens"
+        assertTrue ((LeanAgent.Json.optVal? payload "reasoning_effort").isNone)
+          "expected legacy OpenAI alias to keep reasoning_effort disabled"
+
 def testOpenAICompatibleStreamsClampMaxTokens : IO Unit := do
   let port := 18091
   withHttpServer port do
@@ -13739,6 +13994,9 @@ def main : IO UInt32 := do
     testOpenAICompletionsContextBatchesToolResultImages
     testOpenAICompletionsContextReplaysThinkingAsText
     testOpenAICompletionsContextAddsAnthropicCacheMarkers
+    testOpenAICompletionsContextRequiresToolResultNameAndBridgeForImageReplay
+    testOpenAICompletionsContextAddsBridgeBeforeUserAfterToolResults
+    testOpenAICompletionsContextAddsRoutingPreferences
     testOpenAICompletionsContextStrictCompat
     testOpenAICompletionsContextSetsZaiToolStream
     testOpenAICompletionsParsesReasoningDetailsBeforeToolCall
@@ -13764,6 +14022,7 @@ def main : IO UInt32 := do
     testOpenAICompletionsSessionAffinityHeaders
     testSSEParsesDataEvents
     testOpenAICompletionsStreamingPayload
+    testOpenAICompletionsStreamingPayloadCanOmitUsageOption
     testOpenAICompletionsParsesStreamingText
     testOpenAICompletionsParsesStreamingToolCall
     testOpenAICompletionsParsesStreamingThinking
@@ -14018,6 +14277,10 @@ def main : IO UInt32 := do
     testOpenAICompatibleStreamsDetectTogetherReasoningOnlyCompat
     testOpenAICompatibleStreamsUseOpenCodeMaxTokensCompat
     testOpenAICompatibleStreamsUseOpenCodeGoMaxTokensCompat
+    testOpenAICompatibleStreamsOmitStreamingUsageWhenCompatDisablesIt
+    testLegacyOpenAICompletionsAliasOmitStreamingUsageWhenCompatDisablesIt
+    testOpenAICompatibleStreamsKeepGitHubCopilotDetectedMaxCompletionTokens
+    testLegacyOpenAICompletionsAliasKeepsGitHubCopilotDetectedMaxCompletionTokens
     testOpenAICompatibleStreamsClampMaxTokens
     testCloudflareAIGatewayOpenAICompatibleHeaderAuthLocal
     testOpenRouterImagesRequestPayload

@@ -13,32 +13,79 @@ import LeanAgent.Models.Core
 
 namespace LeanAgent.AI.Providers.Streams
 
+def compatBoolOverride (value defaultValue explicit : Bool) : Option Bool :=
+  if explicit || value != defaultValue then some value else none
+
+def compatStringOverride (value defaultValue : String) (explicit : Bool) : Option String :=
+  if explicit || value != defaultValue then some value else none
+
 def compatOverrideFromModelCompat
     (compat : LeanAgent.Models.ModelCompat) :
     LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsCompatOverride :=
-  { supportsStore := if compat.supportsStore == true then none else some compat.supportsStore
+  { supportsStore :=
+      compatBoolOverride compat.supportsStore true compat.supportsStoreExplicit
     supportsDeveloperRole :=
-      if compat.supportsDeveloperRole == true then none else some compat.supportsDeveloperRole
+      compatBoolOverride
+        compat.supportsDeveloperRole
+        true
+        compat.supportsDeveloperRoleExplicit
     requiresThinkingAsText :=
-      if compat.requiresThinkingAsText == false then none else some compat.requiresThinkingAsText
+      compatBoolOverride
+        compat.requiresThinkingAsText
+        false
+        compat.requiresThinkingAsTextExplicit
     requiresReasoningContentOnAssistantMessages :=
-      if compat.requiresReasoningContentOnAssistantMessages == false then
+      compatBoolOverride
+        compat.requiresReasoningContentOnAssistantMessages
+        false
+        compat.requiresReasoningContentOnAssistantMessagesExplicit
+    requiresToolResultName :=
+      if compat.requiresToolResultName == false then none else some compat.requiresToolResultName
+    requiresAssistantAfterToolResult :=
+      if compat.requiresAssistantAfterToolResult == false then
         none
       else
-        some compat.requiresReasoningContentOnAssistantMessages
+        some compat.requiresAssistantAfterToolResult
     thinkingFormat := compat.thinkingFormat
     chatTemplateKwargs := compat.chatTemplateKwargs
-    zaiToolStream := if compat.zaiToolStream == false then none else some compat.zaiToolStream
-    supportsStrictMode := if compat.supportsStrictMode == true then none else some compat.supportsStrictMode
+    openRouterRouting := compat.openRouterRouting
+    vercelGatewayRouting := compat.vercelGatewayRouting
+    zaiToolStream := compatBoolOverride compat.zaiToolStream false compat.zaiToolStreamExplicit
+    supportsStrictMode :=
+      compatBoolOverride compat.supportsStrictMode true compat.supportsStrictModeExplicit
     cacheControlFormat := compat.cacheControlFormat
     supportsReasoningEffort :=
-      if compat.supportsReasoningEffort == true then none else some compat.supportsReasoningEffort
-    maxTokensField := if compat.maxTokensField == "max_tokens" then none else some compat.maxTokensField
+      compatBoolOverride
+        compat.supportsReasoningEffort
+        true
+        compat.supportsReasoningEffortExplicit
+    supportsUsageInStreaming :=
+      compatBoolOverride
+        compat.supportsUsageInStreaming
+        true
+        compat.supportsUsageInStreamingExplicit
+    maxTokensField :=
+      compatStringOverride compat.maxTokensField "max_tokens" compat.maxTokensFieldExplicit
     supportsLongCacheRetention :=
-      if compat.supportsLongCacheRetention == true then none else some compat.supportsLongCacheRetention
+      compatBoolOverride
+        compat.supportsLongCacheRetention
+        true
+        compat.supportsLongCacheRetentionExplicit
     sendSessionAffinityHeaders :=
-      if compat.sendSessionAffinityHeaders == false then none else some compat.sendSessionAffinityHeaders
+      compatBoolOverride
+        compat.sendSessionAffinityHeaders
+        false
+        compat.sendSessionAffinityHeadersExplicit
   }
+
+def resolvedOpenAICompletionsCompatFromModel
+    (model : LeanAgent.Models.ModelInfo) :
+    LeanAgent.AI.Api.OpenAICompletions.ResolvedOpenAICompletionsCompat :=
+  LeanAgent.AI.Api.OpenAICompletions.resolveCompat
+    model.provider
+    model.baseUrl
+    model.id
+    (compatOverrideFromModelCompat model.compat)
 
 def anthropicThinkingEffort
     (model : LeanAgent.Models.ModelInfo)
@@ -57,24 +104,7 @@ def openAICompletionsOptionsFromSimple
     (model : LeanAgent.Models.ModelInfo)
     (options : LeanAgent.AI.SimpleStreamOptions) :
     LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsOptions :=
-  let compat :=
-    LeanAgent.AI.Api.OpenAICompletions.resolveCompat
-      model.provider
-      model.baseUrl
-      model.id
-      (compatOverrideFromModelCompat model.compat)
-  let hasCompatMetadata := model.compat != {}
-  let supportsReasoningEffort :=
-    if hasCompatMetadata then model.compat.supportsReasoningEffort else compat.supportsReasoningEffort
-  let maxTokensField :=
-    if hasCompatMetadata && !(model.provider == "openrouter" && model.compat.maxTokensField == "max_tokens") then
-      model.compat.maxTokensField
-    else
-      compat.maxTokensField
-  let supportsLongCacheRetention :=
-    if hasCompatMetadata then model.compat.supportsLongCacheRetention else compat.supportsLongCacheRetention
-  let sendSessionAffinityHeaders :=
-    if hasCompatMetadata then model.compat.sendSessionAffinityHeaders else compat.sendSessionAffinityHeaders
+  let compat := resolvedOpenAICompletionsCompatFromModel model
   let apiOptions := LeanAgent.AI.Api.OpenAICompletions.optionsFromSimple options
   let reasoningValue :=
     match apiOptions.reasoningEffort with
@@ -94,21 +124,17 @@ def openAICompletionsOptionsFromSimple
     reasoningEffortValue := reasoningValue
     offReasoningEffortValue := offValue
     offThinkingEnabled := offThinkingEnabled
-    supportsReasoningEffort := supportsReasoningEffort
-    maxTokensField := maxTokensField
-    supportsLongCacheRetention := supportsLongCacheRetention
-    sendSessionAffinityHeaders := sendSessionAffinityHeaders
+    supportsReasoningEffort := compat.supportsReasoningEffort
+    supportsUsageInStreaming := compat.supportsUsageInStreaming
+    maxTokensField := compat.maxTokensField
+    supportsLongCacheRetention := compat.supportsLongCacheRetention
+    sendSessionAffinityHeaders := compat.sendSessionAffinityHeaders
   }
 
 def openAICompletionsModelFromModelInfo
     (model : LeanAgent.Models.ModelInfo) :
     LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsModel :=
-  let compat :=
-    LeanAgent.AI.Api.OpenAICompletions.resolveCompat
-      model.provider
-      model.baseUrl
-      model.id
-      (compatOverrideFromModelCompat model.compat)
+  let compat := resolvedOpenAICompletionsCompatFromModel model
   { id := model.id
     provider := model.provider
     api := model.api
@@ -120,8 +146,12 @@ def openAICompletionsModelFromModelInfo
     requiresThinkingAsText := compat.requiresThinkingAsText
     requiresReasoningContentOnAssistantMessages :=
       compat.requiresReasoningContentOnAssistantMessages
+    requiresToolResultName := compat.requiresToolResultName
+    requiresAssistantAfterToolResult := compat.requiresAssistantAfterToolResult
     thinkingFormat := compat.thinkingFormat
     chatTemplateKwargs := compat.chatTemplateKwargs
+    openRouterRouting := compat.openRouterRouting
+    vercelGatewayRouting := compat.vercelGatewayRouting
     zaiToolStream := compat.zaiToolStream
     supportsStrictMode := compat.supportsStrictMode
     cacheControlFormat := compat.cacheControlFormat

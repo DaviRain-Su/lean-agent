@@ -248,6 +248,7 @@ def withModelCompatForOpenAICompletions
     (model : LeanAgent.Models.ModelInfo)
     (options : LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsOptions) :
     LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsOptions :=
+  let compat := LeanAgent.AI.Providers.Streams.resolvedOpenAICompletionsCompatFromModel model
   let reasoningValue :=
     match options.reasoningEffortValue with
     | some value => some value
@@ -271,10 +272,11 @@ def withModelCompatForOpenAICompletions
   { options with
     reasoningEffortValue := reasoningValue
     offReasoningEffortValue := offValue
-    supportsReasoningEffort := model.compat.supportsReasoningEffort
-    maxTokensField := model.compat.maxTokensField
-    supportsLongCacheRetention := model.compat.supportsLongCacheRetention
-    sendSessionAffinityHeaders := model.compat.sendSessionAffinityHeaders
+    supportsReasoningEffort := compat.supportsReasoningEffort
+    supportsUsageInStreaming := compat.supportsUsageInStreaming
+    maxTokensField := compat.maxTokensField
+    supportsLongCacheRetention := compat.supportsLongCacheRetention
+    sendSessionAffinityHeaders := compat.sendSessionAffinityHeaders
   }
 
 def streamOpenAICompletionsWithOptions : OpenAICompletionsStream :=

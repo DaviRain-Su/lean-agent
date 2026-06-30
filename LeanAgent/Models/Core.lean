@@ -20,7 +20,12 @@ structure ModelCompat where
   supportsStrictMode : Bool := true
   cacheControlFormat : Option String := none
   supportsReasoningEffort : Bool := true
+  supportsUsageInStreaming : Bool := true
   maxTokensField : String := "max_tokens"
+  requiresToolResultName : Bool := false
+  requiresAssistantAfterToolResult : Bool := false
+  openRouterRouting : Option Lean.Json := none
+  vercelGatewayRouting : Option Lean.Json := none
   supportsLongCacheRetention : Bool := true
   sendSessionAffinityHeaders : Bool := false
   supportsTemperature : Bool := true
@@ -28,6 +33,17 @@ structure ModelCompat where
   supportsCacheControlOnTools : Bool := true
   allowEmptySignature : Bool := false
   forceAdaptiveThinking : Bool := false
+  supportsStoreExplicit : Bool := false
+  supportsDeveloperRoleExplicit : Bool := false
+  requiresThinkingAsTextExplicit : Bool := false
+  requiresReasoningContentOnAssistantMessagesExplicit : Bool := false
+  zaiToolStreamExplicit : Bool := false
+  supportsStrictModeExplicit : Bool := false
+  supportsReasoningEffortExplicit : Bool := false
+  supportsUsageInStreamingExplicit : Bool := false
+  maxTokensFieldExplicit : Bool := false
+  supportsLongCacheRetentionExplicit : Bool := false
+  sendSessionAffinityHeadersExplicit : Bool := false
 deriving BEq
 
 structure ModelInfo where
