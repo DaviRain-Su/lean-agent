@@ -1,6 +1,7 @@
 import Lean
 import LeanAgent.Core
 import LeanAgent.Agent.Types
+import LeanAgent.AI.Util.Abort
 import LeanAgent.Json
 namespace LeanAgent.CodingTools
 
@@ -439,22 +440,33 @@ def defaultAgentTools (root : System.FilePath) : Array LeanAgent.Agent.AgentTool
       parameters := legacyTool.inputSchema
       label := legacyTool.name
       execute := fun toolCallId args signal updateCallback => do
-        let call : ToolCall := { id := toolCallId, name := legacyTool.name, arguments := args }
-        let result ← legacyTool.execute call
-        let content : Array LeanAgent.AI.ContentBlock :=
-          if result.content.isEmpty then
-            #[]
-          else
-            #[.text { text := result.content }]
-        let newResult : LeanAgent.Agent.AgentToolResult :=
-          { content := content
-            details := result.data
-            terminate := false
-          }
-        match updateCallback with
-        | some cb => cb newResult
-        | none => pure ()
-        pure newResult
+        if ← LeanAgent.AI.Util.Abort.isAborted signal then
+          let abortResult : LeanAgent.Agent.AgentToolResult :=
+            { content := #[.text { text := LeanAgent.AI.Util.Abort.requestAbortedMessage }]
+              details := none
+              terminate := true
+            }
+          match updateCallback with
+          | some cb => cb abortResult
+          | none => pure ()
+          pure abortResult
+        else
+          let call : ToolCall := { id := toolCallId, name := legacyTool.name, arguments := args }
+          let result ← legacyTool.execute call
+          let content : Array LeanAgent.AI.ContentBlock :=
+            if result.content.isEmpty then
+              #[]
+            else
+              #[.text { text := result.content }]
+          let newResult : LeanAgent.Agent.AgentToolResult :=
+            { content := content
+              details := result.data
+              terminate := false
+            }
+          match updateCallback with
+          | some cb => cb newResult
+          | none => pure ()
+          pure newResult
     }
   defaultTools root |>.map wrap
 
