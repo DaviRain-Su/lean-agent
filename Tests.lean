@@ -5911,6 +5911,28 @@ def testOAuthProviderRegistryCrud : IO Unit := do
   assertTrue (builtIns.any (·.id == LeanAgent.AI.OAuth.GitHubCopilot.providerId))
     "expected reset to keep GitHub Copilot built-in OAuth provider"
 
+def testOAuthProviderRegistryReplacementPreservesOrder : IO Unit := do
+  LeanAgent.AI.OAuth.resetOAuthProviders
+  let refreshA ← IO.mkRef 0
+  let refreshB ← IO.mkRef 0
+  let providerA := fakeOAuthProviderForRegistry "registry-order-a" "Registry Order A" refreshA
+  let providerB := fakeOAuthProviderForRegistry "registry-order-b" "Registry Order B" refreshB
+  let replacementA := fakeOAuthProviderForRegistry "registry-order-a" "Registry Order A Replaced" refreshA
+  LeanAgent.AI.OAuth.registerOAuthProvider providerA
+  LeanAgent.AI.OAuth.registerOAuthProvider providerB
+  LeanAgent.AI.OAuth.registerOAuthProvider replacementA
+  let customProviders :=
+    (← LeanAgent.AI.OAuth.getOAuthProviders).filter (fun provider =>
+      provider.id.startsWith "registry-order-")
+  assertTrue ((customProviders.map (·.id)) == #["registry-order-a", "registry-order-b"])
+    "expected OAuth provider replacement to preserve registration order"
+  match ← LeanAgent.AI.OAuth.getOAuthProvider? "registry-order-a" with
+  | some provider =>
+      assertTrue (provider.name == "Registry Order A Replaced")
+        "expected OAuth registry replacement to update the registered provider"
+  | none => fail "expected replaced OAuth provider lookup"
+  LeanAgent.AI.OAuth.resetOAuthProviders
+
 def testModelsCollectionAppliesRegisteredOAuthModelHook : IO Unit := do
   LeanAgent.AI.OAuth.resetOAuthProviders
   let refreshCalls ← IO.mkRef 0
@@ -6966,6 +6988,32 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
   | some _ => pure ()
   | none => fail "expected OpenRouter image provider in builtin image collection"
 
+def testBuiltinModelsCollectionMatchesPiInvariants : IO Unit := do
+  let providerIds := LeanAgent.AI.Providers.All.getBuiltinProviders
+  assertTrue (providerIds.size == 35) "expected 35 builtin provider ids"
+  assertTrue (providerIds.toList.eraseDups.length == providerIds.size)
+    "expected builtin provider ids to stay unique"
+  assertTrue (providerIds.contains LeanAgent.Models.anthropicProviderId)
+    "expected builtin provider ids to include Anthropic"
+  let collection ← LeanAgent.AI.Providers.All.builtinModels
+  let providers ← collection.getProviders
+  assertTrue (providers.size == providerIds.size)
+    "expected builtin collection provider count to match builtin provider ids"
+  assertTrue (providers.map (·.id) == providerIds)
+    "expected builtin collection provider ids to match static builtin provider ids"
+  match ← collection.getModel? LeanAgent.Models.anthropicProviderId "claude-haiku-4-5" with
+  | some anthropic =>
+      assertTrue (anthropic.api == LeanAgent.AI.Api.AnthropicMessages.api)
+        "expected Anthropic builtin collection model api"
+  | none => fail "expected Anthropic builtin collection model"
+  let allModels ← collection.getModels
+  assertTrue (allModels.size > 500) "expected builtin collection to expose more than 500 models"
+  for provider in providers do
+    let models ← collection.getModels (some provider.id)
+    assertTrue (!models.isEmpty) s!"expected builtin provider {provider.id} to expose models"
+    assertTrue (models.all fun model => model.provider == provider.id)
+      s!"expected builtin provider {provider.id} to own its listed models"
+
 def testEnvApiKeysProviderMap : IO Unit := do
   assertTrue
     (LeanAgent.AI.EnvApiKeys.apiKeyEnvVars? "github-copilot" == some #["COPILOT_GITHUB_TOKEN"])
@@ -7241,6 +7289,45 @@ def testModelsCollectionListingSwallowsProviderSourceFailures : IO Unit := do
         "expected hasApi to report false for a different runtime API"
   | none => fail "expected surviving provider model lookup"
 
+def testModelsCollectionReplacementPreservesOrder : IO Unit := do
+  let collection ← LeanAgent.Models.createModels
+  let first ← LeanAgent.Models.createProvider
+    { id := "order-a"
+      name := some "Order A"
+      auth := fakeProviderAuth
+      models := #[{ fakeRuntimeModel with provider := "order-a", id := "a1" }]
+      apis := #[{ api := "fake-api", streams := fakeRuntimeStreams (← IO.mkRef none) }]
+    }
+  let second ← LeanAgent.Models.createProvider
+    { id := "order-b"
+      name := some "Order B"
+      auth := fakeProviderAuth
+      models := #[{ fakeRuntimeModel with provider := "order-b", id := "b1" }]
+      apis := #[{ api := "fake-api", streams := fakeRuntimeStreams (← IO.mkRef none) }]
+    }
+  let replacement ← LeanAgent.Models.createProvider
+    { id := "order-a"
+      name := some "Order A Replaced"
+      auth := fakeProviderAuth
+      models := #[{ fakeRuntimeModel with provider := "order-a", id := "a2" }]
+      apis := #[{ api := "fake-api", streams := fakeRuntimeStreams (← IO.mkRef none) }]
+    }
+  collection.setProvider first
+  collection.setProvider second
+  collection.setProvider replacement
+  let providers ← collection.getProviders
+  assertTrue ((providers.map (·.id)) == #["order-a", "order-b"])
+    "expected provider replacement to preserve collection order"
+  match ← collection.getProvider? "order-a" with
+  | some provider =>
+      assertTrue (provider.name == "Order A Replaced")
+        "expected provider replacement to update the provider entry"
+  | none => fail "expected replaced provider lookup"
+  assertTrue ((← collection.getModel? "order-a" "a2").isSome)
+    "expected replacement provider model to be visible"
+  assertTrue ((← collection.getModel? "order-a" "a1").isNone)
+    "expected replaced provider model list to be updated"
+
 def testModelsCollectionUnknownProviderReturnsError : IO Unit := do
   let collection ← LeanAgent.Models.createModels
   let result ← collection.completeSimple
@@ -7484,6 +7571,45 @@ def testCompatApiRegistryDispatchesAndUnregisters : IO Unit := do
     "expected compat source unregister"
   LeanAgent.AI.Compat.resetApiProviders
 
+def testCompatApiRegistryReplacementPreservesOrder : IO Unit := do
+  let apiA := "compat-order-a"
+  let apiB := "compat-order-b"
+  let makeProvider (api label : String) : LeanAgent.AI.Compat.ApiProvider :=
+    { api := api
+      streams :=
+        { streamSimple := fun model _context _options => do
+            let timestamp ← IO.monoMsNow
+            pure
+              (LeanAgent.AI.fromMessage
+                { content := #[LeanAgent.AI.text label]
+                  api := model.api
+                  provider := model.provider
+                  model := model.id
+                  timestamp := timestamp
+                })
+        } }
+  LeanAgent.AI.Compat.clearApiProviders
+  try
+    LeanAgent.AI.Compat.registerApiProvider (makeProvider apiA "first") (some "compat-order-source-a")
+    LeanAgent.AI.Compat.registerApiProvider (makeProvider apiB "second") (some "compat-order-source-b")
+    LeanAgent.AI.Compat.registerApiProvider
+      (makeProvider apiA "replaced")
+      (some "compat-order-source-a-replaced")
+    let providers ← LeanAgent.AI.Compat.getApiProviders
+    assertTrue ((providers.map (·.api)) == #[apiA, apiB])
+      "expected compat API replacement to preserve registry order"
+    match ← LeanAgent.AI.Compat.getApiProvider? apiA with
+    | some provider =>
+        let stream ← provider.streamSimple
+          { fakeRuntimeModel with api := apiA, provider := "compat-order", id := "model-a" }
+          { messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 0 }] }
+          {}
+        assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "replaced")
+          "expected compat API replacement to update the registered provider"
+    | none => fail "expected compat replacement provider lookup"
+  finally
+    LeanAgent.AI.Compat.resetApiProviders
+
 def testCompatGenericStreamAndCompleteDispatch : IO Unit := do
   LeanAgent.AI.Compat.resetApiProviders
   let seenApiKey ← IO.mkRef (none : Option String)
@@ -7610,6 +7736,43 @@ def testImagesApiRegistryDispatchesAndUnregisters : IO Unit := do
   assertTrue ((← LeanAgent.AI.Images.getImagesApiProvider? fakeImagesModel.api).isNone)
     "expected image source unregister"
   LeanAgent.AI.Images.resetImagesApiProviders
+
+def testImagesApiRegistryReplacementPreservesOrder : IO Unit := do
+  let apiA := "images-order-a"
+  let apiB := "images-order-b"
+  let makeProvider (api label : String) : LeanAgent.AI.Images.ImagesApiProvider :=
+    { api := api
+      generateImages := fun model _context _options => do
+        let timestamp ← IO.monoMsNow
+        pure
+          { api := model.api
+            provider := model.provider
+            model := model.id
+            output := #[LeanAgent.AI.text label]
+            timestamp := timestamp
+          }
+    }
+  LeanAgent.AI.Images.clearImagesApiProviders
+  try
+    LeanAgent.AI.Images.registerImagesApiProvider (makeProvider apiA "first") (some "images-order-source-a")
+    LeanAgent.AI.Images.registerImagesApiProvider (makeProvider apiB "second") (some "images-order-source-b")
+    LeanAgent.AI.Images.registerImagesApiProvider
+      (makeProvider apiA "replaced")
+      (some "images-order-source-a-replaced")
+    let providers ← LeanAgent.AI.Images.getImagesApiProviders
+    assertTrue ((providers.map (·.api)) == #[apiA, apiB])
+      "expected image API replacement to preserve registry order"
+    match ← LeanAgent.AI.Images.getImagesApiProvider? apiA with
+    | some provider =>
+        let result ← provider.generateImages
+          { fakeImagesModel with api := apiA, provider := "images-order", id := "image-a" }
+          { input := #[LeanAgent.AI.text "draw"] }
+          {}
+        assertTrue (LeanAgent.AI.contentPlainText result.output == "replaced")
+          "expected image API replacement to update the registered provider"
+    | none => fail "expected image API replacement provider lookup"
+  finally
+    LeanAgent.AI.Images.resetImagesApiProviders
 
 def testImagesApiRegistryMissingProviderReturnsError : IO Unit := do
   LeanAgent.AI.Images.resetImagesApiProviders
@@ -7804,6 +7967,75 @@ def testImagesCollectionProviderCrudAndRefresh : IO Unit := do
   collection.setProvider provider
   collection.clearProviders
   assertTrue ((← collection.getProviders).isEmpty) "expected image provider clear"
+
+def testImagesCollectionReplacementPreservesOrder : IO Unit := do
+  let collection ← LeanAgent.AI.Images.createImagesModels
+  let first ← LeanAgent.AI.Images.createImagesProvider
+    { id := "image-order-a"
+      name := some "Image Order A"
+      auth := fakeProviderAuth
+      models := #[{ fakeImagesModel with provider := "image-order-a", id := "image-a1" }]
+      api :=
+        { generateImages := fun model _context _options => do
+            let timestamp ← IO.monoMsNow
+            pure
+              { api := model.api
+                provider := model.provider
+                model := model.id
+                output := #[LeanAgent.AI.text "first"]
+                timestamp := timestamp
+              }
+        }
+    }
+  let second ← LeanAgent.AI.Images.createImagesProvider
+    { id := "image-order-b"
+      name := some "Image Order B"
+      auth := fakeProviderAuth
+      models := #[{ fakeImagesModel with provider := "image-order-b", id := "image-b1" }]
+      api :=
+        { generateImages := fun model _context _options => do
+            let timestamp ← IO.monoMsNow
+            pure
+              { api := model.api
+                provider := model.provider
+                model := model.id
+                output := #[LeanAgent.AI.text "second"]
+                timestamp := timestamp
+              }
+        }
+    }
+  let replacement ← LeanAgent.AI.Images.createImagesProvider
+    { id := "image-order-a"
+      name := some "Image Order A Replaced"
+      auth := fakeProviderAuth
+      models := #[{ fakeImagesModel with provider := "image-order-a", id := "image-a2" }]
+      api :=
+        { generateImages := fun model _context _options => do
+            let timestamp ← IO.monoMsNow
+            pure
+              { api := model.api
+                provider := model.provider
+                model := model.id
+                output := #[LeanAgent.AI.text "replacement"]
+                timestamp := timestamp
+              }
+        }
+    }
+  collection.setProvider first
+  collection.setProvider second
+  collection.setProvider replacement
+  let providers ← collection.getProviders
+  assertTrue ((providers.map (·.id)) == #["image-order-a", "image-order-b"])
+    "expected image provider replacement to preserve collection order"
+  match ← collection.getProvider? "image-order-a" with
+  | some provider =>
+      assertTrue (provider.name == "Image Order A Replaced")
+        "expected image provider replacement to update the provider entry"
+  | none => fail "expected replaced image provider lookup"
+  assertTrue ((← collection.getModel? "image-order-a" "image-a2").isSome)
+    "expected replacement image provider model to be visible"
+  assertTrue ((← collection.getModel? "image-order-a" "image-a1").isNone)
+    "expected replaced image provider model list to be updated"
 
 def testImagesCollectionAppliesAuthAndOptions : IO Unit := do
   let seenApiKey ← IO.mkRef (none : Option String)
@@ -8031,6 +8263,28 @@ def testOpenRouterImagesProviderFactoryAuthAndModels : IO Unit := do
             "expected OpenRouter image env source"
       | none => fail "expected OpenRouter image auth"
   | none => fail "expected OpenRouter auto image model"
+
+def testBuiltinImagesModelsMatchesPiInvariants : IO Unit := do
+  let collection ← LeanAgent.AI.Providers.All.builtinImagesModels none fakeOpenRouterImagesAuthContext
+  let providers ← collection.getProviders
+  assertTrue (providers.map (·.id) == #[LeanAgent.AI.Api.OpenRouterImages.providerId])
+    "expected builtin image collection to expose only OpenRouter"
+  let models ← collection.getModels (some LeanAgent.AI.Api.OpenRouterImages.providerId)
+  assertTrue (!models.isEmpty) "expected builtin image collection to expose OpenRouter models"
+  assertTrue (models.all fun model =>
+      model.provider == LeanAgent.AI.Api.OpenRouterImages.providerId &&
+      model.api == LeanAgent.AI.Api.OpenRouterImages.api)
+    "expected builtin image collection models to belong to OpenRouter Images"
+  match models[0]? with
+  | some model =>
+      match ← collection.getAuth model with
+      | some result =>
+          assertTrue (result.auth.apiKey == some "openrouter-image-key")
+            "expected builtin image collection to resolve OpenRouter env auth"
+          assertTrue (result.source == some LeanAgent.AI.Api.OpenRouterImages.apiKeyEnv)
+            "expected builtin image collection to report OpenRouter env source"
+      | none => fail "expected builtin image collection auth result"
+  | none => fail "expected builtin image collection first model"
 
 def testCompatInjectsEnvApiKeyForKnownProviders : IO Unit := do
   LeanAgent.AI.Compat.resetApiProviders
@@ -12626,6 +12880,7 @@ def main : IO UInt32 := do
     testModelsAuthOAuthCredentialOwnsProvider
     testLazyOAuthLoadsOnceAndDelegates
     testOAuthProviderRegistryCrud
+    testOAuthProviderRegistryReplacementPreservesOrder
     testModelsCollectionAppliesRegisteredOAuthModelHook
     testOAuthStandaloneModuleImportBootstrapsBuiltIns
     testCompatStandaloneModuleImportIncludesLegacyAliases
@@ -12677,33 +12932,39 @@ def main : IO UInt32 := do
     testCloudflareStoredCredentialResolution
     testCloudflareProviderFactoriesExposeModelsAndAuth
     testBuiltinProvidersAllAggregatesImplementedProviders
+    testBuiltinModelsCollectionMatchesPiInvariants
     testEnvApiKeysProviderMap
     testEnvApiKeysPrefersAnthropicOAuthToken
     testEnvApiKeysAmbientAuthMarkers
     testModelsCollectionDispatchesWithAuth
     testModelsCollectionGenericStreamAndCompleteDispatchWithAuth
     testModelsCollectionListingSwallowsProviderSourceFailures
+    testModelsCollectionReplacementPreservesOrder
     testModelsCollectionUnknownProviderReturnsError
     testModelsCollectionAuthSetupFailureReturnsErrorStream
     testModelsCreateProviderDynamicRefreshDedupes
     testModelsCollectionRefreshAndFailureSemantics
     testModelsCollectionAppliesCloudflareAIGatewayAuth
     testCompatApiRegistryDispatchesAndUnregisters
+    testCompatApiRegistryReplacementPreservesOrder
     testCompatGenericStreamAndCompleteDispatch
     testBedrockLazyApiOverride
     testCompatBuiltinDispatchUsesCloudflareGatewayAuth
     testImagesApiRegistryDispatchesAndUnregisters
+    testImagesApiRegistryReplacementPreservesOrder
     testImagesApiRegistryMissingProviderReturnsError
     testCompatImageEntrypointsDispatchAndCatalog
     testImagesBuiltInRegistryRestoresOpenRouter
     testImageModelCatalogOpenRouter
     testImagesCollectionProviderCrudAndRefresh
+    testImagesCollectionReplacementPreservesOrder
     testImagesCollectionAppliesAuthAndOptions
     testImagesCollectionAppliesOAuthAuth
     testImagesCollectionUnknownProviderReturnsError
     testImagesCollectionAbortSignalReturnsAborted
     testOpenRouterImagesAbortSignalReturnsAborted
     testOpenRouterImagesProviderFactoryAuthAndModels
+    testBuiltinImagesModelsMatchesPiInvariants
     testCompatInjectsEnvApiKeyForKnownProviders
     testCompatInjectsEnvApiKeyForMappedProvidersOutsideCatalog
     testCompatMissingProviderReturnsError
