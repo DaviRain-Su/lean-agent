@@ -144,6 +144,8 @@ def detectCompat
   let thinkingFormat :=
     if isDeepSeek then
       some "deepseek"
+    else if isMoonshot then
+      some "deepseek"
     else if isZai then
       some "zai"
     else if isTogether then
