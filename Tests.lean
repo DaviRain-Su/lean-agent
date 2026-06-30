@@ -6832,6 +6832,13 @@ def testBuiltinProvidersAllAggregatesImplementedProviders : IO Unit := do
     "expected all providers to include Cloudflare Workers AI"
   assertTrue (providerIds.contains LeanAgent.AI.Providers.CloudflareAIGateway.providerId)
     "expected all providers to include Cloudflare AI Gateway"
+  match LeanAgent.AI.Providers.All.getBuiltinModel
+    LeanAgent.Models.deepSeekProviderId
+    LeanAgent.Models.deepSeekDefaultModel with
+  | some model =>
+      assertTrue (model.provider == LeanAgent.Models.deepSeekProviderId)
+        "expected TS-style builtin model alias to resolve DeepSeek"
+  | none => fail "expected TS-style builtin model alias lookup"
   match LeanAgent.AI.Providers.All.getBuiltinModel?
     LeanAgent.Models.deepSeekProviderId
     LeanAgent.Models.deepSeekDefaultModel with
@@ -7182,6 +7189,57 @@ def testModelsCollectionGenericStreamAndCompleteDispatchWithAuth : IO Unit := do
     "expected collection generic complete dispatch result"
   assertTrue ((← seenApiKey.get) == some "env-secret")
     "expected collection generic complete to inject auth"
+
+def testModelsCollectionListingSwallowsProviderSourceFailures : IO Unit := do
+  let collection ← LeanAgent.Models.createModels
+  let brokenProvider : LeanAgent.Models.Provider :=
+    { id := "broken"
+      name := "Broken"
+      auth := fakeProviderAuth
+      getModels := throw (IO.userError "boom")
+      streamSimple := fun model _context _options => do
+        let timestamp ← IO.monoMsNow
+        pure
+          (LeanAgent.AI.fromMessage
+            { content := #[LeanAgent.AI.text s!"unexpected: {model.id}"]
+              api := model.api
+              provider := model.provider
+              model := model.id
+              timestamp := timestamp
+            })
+    }
+  let okProvider ← LeanAgent.Models.createProvider
+    { id := "ok"
+      name := some "Okay"
+      auth := fakeProviderAuth
+      models := #[{ fakeRuntimeModel with provider := "ok", id := "m1" }]
+      apis := #[{ api := "fake-api", streams := fakeRuntimeStreams (← IO.mkRef none) }]
+    }
+  collection.setProvider brokenProvider
+  collection.setProvider okProvider
+  assertTrue ((← collection.getModels).map (·.id) == #["m1"])
+    "expected collection-wide listing to swallow broken provider getModels failure"
+  assertTrue ((← collection.getModels (some "broken")).isEmpty)
+    "expected single-provider listing to swallow broken provider getModels failure"
+  match ← collection.getProvider "broken" with
+  | some provider =>
+      let threw ←
+        try
+          let _ ← provider.getModels
+          pure false
+        catch err =>
+          assertTrue (err.toString.contains "boom")
+            "expected direct provider getModels failure details"
+          pure true
+      assertTrue threw "expected direct broken provider getModels to still throw"
+  | none => fail "expected broken provider lookup"
+  match ← collection.getModel "ok" "m1" with
+  | some found =>
+      assertTrue (LeanAgent.Models.hasApi found "fake-api")
+        "expected hasApi to report true for the matching runtime API"
+      assertTrue (!(LeanAgent.Models.hasApi found "openai-completions"))
+        "expected hasApi to report false for a different runtime API"
+  | none => fail "expected surviving provider model lookup"
 
 def testModelsCollectionUnknownProviderReturnsError : IO Unit := do
   let collection ← LeanAgent.Models.createModels
@@ -7611,22 +7669,18 @@ def testCompatImageEntrypointsDispatchAndCatalog : IO Unit := do
         "expected compat image model api"
       assertTrue (model.output == #["image", "text"]) "expected compat image model metadata"
   | none => fail "expected compat image model lookup"
-  let imageModel ← LeanAgent.AI.Compat.getImageModel
-    LeanAgent.AI.Images.Models.openRouterProviderId
-    "openrouter/auto"
-  assertTrue (imageModel.name == "Auto Router") "expected compat image getImageModel"
+  match LeanAgent.AI.Compat.getImageModel
+      LeanAgent.AI.Images.Models.openRouterProviderId
+      "openrouter/auto" with
+  | some imageModel =>
+      assertTrue (imageModel.name == "Auto Router") "expected compat image getImageModel"
+  | none => fail "expected compat image getImageModel"
   LeanAgent.AI.Compat.unregisterImagesApiProviders "compat-images-test"
   assertTrue ((← LeanAgent.AI.Compat.getImagesApiProvider? fakeImagesModel.api).isNone)
     "expected compat image unregister"
-  let failed ←
-    try
-      let _ ← LeanAgent.AI.Compat.getImageModel "missing-images" "missing-model"
-      pure false
-    catch err =>
-      assertTrue (err.toString.contains "Unknown built-in image model")
-        "expected compat missing image model error"
-      pure true
-  assertTrue failed "expected compat missing image model to fail"
+  assertTrue
+    ((LeanAgent.AI.Compat.getImageModel "missing-images" "missing-model").isNone)
+    "expected compat missing image model lookup to return none"
   LeanAgent.AI.Compat.resetImagesApiProviders
 
 def testImagesBuiltInRegistryRestoresOpenRouter : IO Unit := do
@@ -8419,19 +8473,16 @@ def testCompatStaticCatalogPassthroughs : IO Unit := do
       assertTrue (model.api == "openai-completions") "expected compat model passthrough api"
       assertTrue model.reasoning "expected compat model passthrough metadata"
   | none => fail "expected compat getModel? passthrough"
-  let model ← LeanAgent.AI.Compat.getModel
-    LeanAgent.Models.openAIProviderId
-    LeanAgent.Models.openAIDefaultModel
-  assertTrue (model.provider == LeanAgent.Models.openAIProviderId) "expected compat getModel result"
-  let failed ←
-    try
-      let _ ← LeanAgent.AI.Compat.getModel "missing-provider" "missing-model"
-      pure false
-    catch err =>
-      assertTrue (err.toString.contains "Unknown built-in model")
-        "expected compat getModel missing model error"
-      pure true
-  assertTrue failed "expected compat getModel to reject missing model"
+  match LeanAgent.AI.Compat.getModel
+      LeanAgent.Models.openAIProviderId
+      LeanAgent.Models.openAIDefaultModel with
+  | some model =>
+      assertTrue (model.provider == LeanAgent.Models.openAIProviderId)
+        "expected compat getModel result"
+  | none => fail "expected compat getModel result"
+  assertTrue
+    ((LeanAgent.AI.Compat.getModel "missing-provider" "missing-model").isNone)
+    "expected compat getModel missing model lookup to return none"
 
 def testAIContentBlockJsonRoundTrip : IO Unit := do
   let block : LeanAgent.AI.ContentBlock :=
@@ -12631,6 +12682,7 @@ def main : IO UInt32 := do
     testEnvApiKeysAmbientAuthMarkers
     testModelsCollectionDispatchesWithAuth
     testModelsCollectionGenericStreamAndCompleteDispatchWithAuth
+    testModelsCollectionListingSwallowsProviderSourceFailures
     testModelsCollectionUnknownProviderReturnsError
     testModelsCollectionAuthSetupFailureReturnsErrorStream
     testModelsCreateProviderDynamicRefreshDedupes

@@ -59,6 +59,9 @@ def getBuiltinModels (providerId : String) : Array LeanAgent.Models.ModelInfo :=
 def getBuiltinModel? (providerId modelId : String) : Option LeanAgent.Models.ModelInfo :=
   (getBuiltinModels providerId).find? (fun model => model.id == modelId)
 
+def getBuiltinModel (providerId modelId : String) : Option LeanAgent.Models.ModelInfo :=
+  getBuiltinModel? providerId modelId
+
 def catalogProviders : IO (Array LeanAgent.Models.Provider) := do
   pure
      #[ ← LeanAgent.AI.Providers.DeepSeek.provider

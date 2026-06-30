@@ -220,10 +220,8 @@ def getModels (providerId : String) : Array LeanAgent.Models.ModelInfo :=
 def getModel? (providerId modelId : String) : Option LeanAgent.Models.ModelInfo :=
   LeanAgent.AI.Providers.All.getBuiltinModel? providerId modelId
 
-def getModel (providerId modelId : String) : IO LeanAgent.Models.ModelInfo := do
-  match getModel? providerId modelId with
-  | some model => pure model
-  | none => throw (IO.userError s!"Unknown built-in model: {providerId}/{modelId}")
+def getModel (providerId modelId : String) : Option LeanAgent.Models.ModelInfo :=
+  getModel? providerId modelId
 
 def registerImagesApiProvider
     (provider : LeanAgent.AI.Images.ImagesApiProvider)
@@ -277,10 +275,8 @@ def getImageModels (providerId : String) : Array LeanAgent.AI.ImagesModel :=
 def getImageModel? (providerId modelId : String) : Option LeanAgent.AI.ImagesModel :=
   LeanAgent.AI.Images.Models.getImageModel? providerId modelId
 
-def getImageModel (providerId modelId : String) : IO LeanAgent.AI.ImagesModel := do
-  match getImageModel? providerId modelId with
-  | some model => pure model
-  | none => throw (IO.userError s!"Unknown built-in image model: {providerId}/{modelId}")
+def getImageModel (providerId modelId : String) : Option LeanAgent.AI.ImagesModel :=
+  getImageModel? providerId modelId
 
 def providerEnvApiKey? (model : LeanAgent.Models.ModelInfo) (env : LeanAgent.AI.Auth.ProviderEnv) :
     IO (Option String) :=
