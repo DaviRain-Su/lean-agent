@@ -3,9 +3,7 @@ import LeanAgent.Agent.Types
 import LeanAgent.Agent.Loop
 import LeanAgent.Agent.Agent
 import LeanAgent.AI.Types
-import LeanAgent.Core
 import LeanAgent.Json
-import LeanAgent.Loop
 import LeanAgent.Models
 
 namespace LeanAgent.Session
@@ -35,70 +33,6 @@ def newId (idPrefix : String) : IO String := do
   pure s!"{idPrefix}-{← IO.monoNanosNow}"
 
 
-def toolCallToJson (call : ToolCall) : Lean.Json :=
-  LeanAgent.Json.obj
-    [ ("id", LeanAgent.Json.str call.id)
-    , ("name", LeanAgent.Json.str call.name)
-    , ("arguments", call.arguments)
-    ]
-
-
-def toolCallFromJson (json : Lean.Json) : Except String ToolCall := do
-  let id ← (← json.getObjVal? "id").getStr?
-  let name ← (← json.getObjVal? "name").getStr?
-  let arguments ← json.getObjVal? "arguments"
-  pure { id := id, name := name, arguments := arguments }
-
-
-def messageToJson : AgentMessage → Lean.Json
-  | .user content =>
-      LeanAgent.Json.obj
-        [ ("role", LeanAgent.Json.str "user")
-        , ("content", LeanAgent.Json.str content)
-        ]
-  | .assistant content calls =>
-      LeanAgent.Json.obj
-        [ ("role", LeanAgent.Json.str "assistant")
-        , ("content", LeanAgent.Json.str content)
-        , ("tool_calls", LeanAgent.Json.arr (calls.map toolCallToJson))
-        ]
-  | .toolResult toolCallId name content ok =>
-      LeanAgent.Json.obj
-        [ ("role", LeanAgent.Json.str "tool")
-        , ("tool_call_id", LeanAgent.Json.str toolCallId)
-        , ("name", LeanAgent.Json.str name)
-        , ("content", LeanAgent.Json.str content)
-        , ("ok", LeanAgent.Json.bool ok)
-        ]
-
-
-def messageFromJson (json : Lean.Json) : Except String AgentMessage := do
-  let role ← (← json.getObjVal? "role").getStr?
-  match role with
-  | "user" =>
-      pure (.user (← (← json.getObjVal? "content").getStr?))
-  | "assistant" =>
-      let content ← (← json.getObjVal? "content").getStr?
-      let toolCalls ←
-        match LeanAgent.Json.optVal? json "tool_calls" with
-        | some value =>
-            let raw ← value.getArr?
-            raw.mapM toolCallFromJson
-        | none => pure #[]
-      pure (.assistant content toolCalls)
-  | "tool" =>
-      let toolCallId ← (← json.getObjVal? "tool_call_id").getStr?
-      let name ←
-        match LeanAgent.Json.optVal? json "name" with
-        | some value => value.getStr?
-        | none => pure "tool"
-      let content ← (← json.getObjVal? "content").getStr?
-      let ok ←
-        match LeanAgent.Json.optVal? json "ok" with
-        | some value => value.getBool?
-        | none => pure true
-      pure (.toolResult toolCallId name content ok)
-  | other => throw s!"unknown message role: {other}"
 
 
 def headerJson (id timestamp cwd model : String) : Lean.Json :=
@@ -110,27 +44,6 @@ def headerJson (id timestamp cwd model : String) : Lean.Json :=
     , ("cwd", LeanAgent.Json.str cwd)
     , ("model", LeanAgent.Json.str model)
     ]
-
-
-def messageEntryJson (id parentId timestamp : String) (message : AgentMessage) : Lean.Json :=
-  LeanAgent.Json.obj
-    [ ("type", LeanAgent.Json.str "message")
-    , ("id", LeanAgent.Json.str id)
-    , ("parentId", if parentId.isEmpty then LeanAgent.Json.null else LeanAgent.Json.str parentId)
-    , ("timestamp", LeanAgent.Json.str timestamp)
-    , ("message", messageToJson message)
-    ]
-
-
-def messageEntryJsonFromJson (id parentId timestamp : String) (message : Lean.Json) : Lean.Json :=
-  LeanAgent.Json.obj
-    [ ("type", LeanAgent.Json.str "message")
-    , ("id", LeanAgent.Json.str id)
-    , ("parentId", if parentId.isEmpty then LeanAgent.Json.null else LeanAgent.Json.str parentId)
-    , ("timestamp", LeanAgent.Json.str timestamp)
-    , ("message", message)
-    ]
-
 
 def customMessageToJson
     (customType : String)
@@ -147,14 +60,38 @@ def customMessageToJson
 
 
 def runtimeMessageToJson : RuntimeAgentMessage → Lean.Json
-  | .ofMessage message => messageToJson (LeanAgent.AI.toLegacyMessage message)
+  | .ofMessage message => LeanAgent.AI.messageToJson message
   | .custom customType content display timestamp =>
       customMessageToJson customType content display timestamp
 
 
-def runtimeMessageFromJson
-    (modelInfo : LeanAgent.Models.ModelInfo)
-    (json : Lean.Json) : Except String RuntimeAgentMessage := do
+def messageEntryJson (id parentId timestamp : String) (message : RuntimeAgentMessage) : Lean.Json :=
+  LeanAgent.Json.obj
+    [ ("type", LeanAgent.Json.str "message")
+    , ("id", LeanAgent.Json.str id)
+    , ("parentId", if parentId.isEmpty then LeanAgent.Json.null else LeanAgent.Json.str parentId)
+    , ("timestamp", LeanAgent.Json.str timestamp)
+    , ("message", runtimeMessageToJson message)
+    ]
+
+
+def messageEntryJsonFromJson (id parentId timestamp : String) (message : Lean.Json) : Lean.Json :=
+  LeanAgent.Json.obj
+    [ ("type", LeanAgent.Json.str "message")
+    , ("id", LeanAgent.Json.str id)
+    , ("parentId", if parentId.isEmpty then LeanAgent.Json.null else LeanAgent.Json.str parentId)
+    , ("timestamp", LeanAgent.Json.str timestamp)
+    , ("message", message)
+    ]
+
+
+/--
+Parse a RuntimeAgentMessage from JSON. Handles both the new AI.Message format
+(`"user"`/`"assistant"`/`"toolResult"` with ContentBlock arrays) and the legacy
+format (`"tool"` role, string content) for backward compatibility with existing
+session files.
+-/
+def runtimeMessageFromJson (json : Lean.Json) : Except String RuntimeAgentMessage := do
   let role ← (← json.getObjVal? "role").getStr?
   match role with
   | "custom" =>
@@ -164,16 +101,35 @@ def runtimeMessageFromJson
           (← LeanAgent.AI.contentArrayFromJson (← json.getObjVal? "content"))
           ((← LeanAgent.Json.optionalBool json "display").getD true)
           ((← LeanAgent.Json.optionalNat json "timestamp").getD 0))
-  | _ =>
-      let legacyMessage ← messageFromJson json
+  | "tool" =>
+      -- Legacy format: role "tool" with string content → convert to AI.ToolResultMessage
+      let toolCallId ← (← json.getObjVal? "tool_call_id").getStr?
+      let toolName ←
+        match LeanAgent.Json.optVal? json "name" with
+        | some value => value.getStr?
+        | none => pure "tool"
+      let contentStr ← (← json.getObjVal? "content").getStr?
+      let isError ←
+        match LeanAgent.Json.optVal? json "ok" with
+        | some value => pure (← value.getBool?)
+        | none => pure false
+      let timestamp ←
+        match LeanAgent.Json.optVal? json "timestamp" with
+        | some value => value.getNat?
+        | none => pure 0
       pure
         (.ofMessage
-          (LeanAgent.AI.fromLegacyMessage
-            modelInfo.api
-            modelInfo.provider
-            modelInfo.id
-            0
-            legacyMessage))
+          (.toolResult
+            { toolCallId := toolCallId
+              toolName := toolName
+              content := #[.text { text := contentStr }]
+              isError := isError
+              timestamp := timestamp
+            }))
+  | _ =>
+      -- New AI.Message format (user/assistant/toolResult)
+      let message ← LeanAgent.AI.messageFromJson json
+      pure (.ofMessage message)
 
 
 def appendLine (path : System.FilePath) (line : String) : IO Unit := do
@@ -194,7 +150,6 @@ def ensureSessionFile (path : System.FilePath) (cwd : System.FilePath) (model : 
 
 
 def parseSessionLine?
-    (modelInfo : LeanAgent.Models.ModelInfo)
     (line : String) : Except String (Option (String × RuntimeAgentMessage)) := do
   let trimmed := line.trimAscii.toString
   if trimmed.isEmpty then
@@ -205,14 +160,13 @@ def parseSessionLine?
     if entryType == "message" then
       let id ← (← json.getObjVal? "id").getStr?
       let message ← json.getObjVal? "message"
-      let message ← runtimeMessageFromJson modelInfo message
+      let message ← runtimeMessageFromJson message
       pure (some (id, message))
     else
       pure none
 
 
 def loadMessagesWithLastId
-    (modelInfo : LeanAgent.Models.ModelInfo)
     (path : System.FilePath) : IO (Array RuntimeAgentMessage × Option String) := do
   if !(← path.pathExists) then
     pure (#[], none)
@@ -221,7 +175,7 @@ def loadMessagesWithLastId
     let mut messages := #[]
     let mut lastId := none
     for line in content.splitOn "\n" do
-      match parseSessionLine? modelInfo line with
+      match parseSessionLine? line with
       | .ok (some (id, message)) =>
           messages := messages.push message
           lastId := some id
@@ -231,10 +185,8 @@ def loadMessagesWithLastId
 
 
 def loadMessages
-    (modelInfo : LeanAgent.Models.ModelInfo)
     (path : System.FilePath) : IO (Array RuntimeAgentMessage) := do
-  pure (← loadMessagesWithLastId modelInfo path).fst
-
+  pure (← loadMessagesWithLastId path).fst
 
 structure SessionStore where
   path : System.FilePath
@@ -312,12 +264,12 @@ def create
       pure (mkSession #[] none)
   | .create path =>
       ensureSessionFile path cwd model
-      let (messages, lastId) ← loadMessagesWithLastId config.model path
+      let (messages, lastId) ← loadMessagesWithLastId path
       pure (mkSession messages (some { path := path, lastEntryId := lastId }))
   | .resume path =>
       if !(← path.pathExists) then
         throw (IO.userError s!"session file not found: {path}")
-      let (messages, lastId) ← loadMessagesWithLastId config.model path
+      let (messages, lastId) ← loadMessagesWithLastId path
       pure (mkSession messages (some { path := path, lastEntryId := lastId }))
 
 

@@ -134,13 +134,13 @@ def createSessionWithAgent
       pure { agent := agent }
   | .create path =>
       LeanAgent.Session.ensureSessionFile path cwd model
-      let (messages, lastId) ← LeanAgent.Session.loadMessagesWithLastId agent.state.model path
+      let (messages, lastId) ← LeanAgent.Session.loadMessagesWithLastId path
       let agent := { agent with state := { agent.state with messages := messages } }
       pure { agent := agent, store := some { path := path, lastEntryId := lastId } }
   | .resume path =>
       if !(← path.pathExists) then
         throw (IO.userError s!"session file not found: {path}")
-      let (messages, lastId) ← LeanAgent.Session.loadMessagesWithLastId agent.state.model path
+      let (messages, lastId) ← LeanAgent.Session.loadMessagesWithLastId path
       let agent := { agent with state := { agent.state with messages := messages } }
       pure { agent := agent, store := some { path := path, lastEntryId := lastId } }
 

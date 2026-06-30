@@ -247,7 +247,7 @@ def testSessionJsonlRoundTrip : IO Unit :=
       #[userMsg, assistantMsg]
     let modelInfo : LeanAgent.Models.ModelInfo :=
       { id := "fake-model", name := "fake", provider := "fake", api := "fake", baseUrl := "" }
-    let (messages, lastId) ← LeanAgent.Session.loadMessagesWithLastId modelInfo path
+    let (messages, lastId) ← LeanAgent.Session.loadMessagesWithLastId path
     assertTrue (messages.size == 2) "expected persisted messages"
     assertTrue lastId.isSome "expected last entry id"
     assertTrue store.isSome "expected updated store"
@@ -10419,7 +10419,7 @@ def testAgentSessionCreateAndContinue : IO Unit :=
     let session ← LeanAgent.Session.create config root "fake" (.create path)
     let session ← LeanAgent.Session.prompt session "continue" silentAgentSink
     assertTrue (session.messages.size >= 1) "prompt should produce messages"
-    let (messages, _) ← LeanAgent.Session.loadMessagesWithLastId modelInfo path
+    let (messages, _) ← LeanAgent.Session.loadMessagesWithLastId path
     assertTrue (messages.size >= 1) "should persist messages"
 
 def testAgentSessionRejectsAssistantContinue : IO Unit := do
