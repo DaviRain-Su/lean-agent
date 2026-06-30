@@ -1252,6 +1252,129 @@ def jsonObjectField? (json : Lean.Json) (key : String) : Option Lean.Json :=
       | .error _ => none
   | none => none
 
+def openAICompletionsContextModel : LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsModel :=
+  { id := "gpt-4o-mini"
+    provider := LeanAgent.Models.openAIProviderId
+    api := "openai-completions"
+    input := #["text", "image"]
+  }
+
+def testOpenAICompletionsContextSerializesUserImages : IO Unit := do
+  let payload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+    openAICompletionsContextModel
+    { messages :=
+        #[ .user
+            { content :=
+                #[ LeanAgent.AI.text "describe"
+                 , LeanAgent.AI.image "QUJD" "image/png"
+                 ]
+              timestamp := 1
+            }
+         ]
+    }
+  match jsonArrayField? payload "messages" with
+  | some messages =>
+      match messages[0]? with
+      | some user =>
+          assertTrue (jsonStringField? user "role" == some "user") "expected user role"
+          match jsonArrayField? user "content" with
+          | some content =>
+              match content[0]?, content[1]? with
+              | some textPart, some imagePart =>
+                  assertTrue (jsonStringField? textPart "type" == some "text")
+                    "expected text content part"
+                  assertTrue (jsonStringField? textPart "text" == some "describe")
+                    "expected user text"
+                  assertTrue (jsonStringField? imagePart "type" == some "image_url")
+                    "expected image content part"
+                  match jsonObjectField? imagePart "image_url" with
+                  | some imageUrl =>
+                      assertTrue
+                        (jsonStringField? imageUrl "url" == some "data:image/png;base64,QUJD")
+                        "expected user image data URL"
+                  | none => fail "expected image_url object"
+              | _, _ => fail "expected user text and image parts"
+          | none => fail "expected user content array"
+      | none => fail "expected user message"
+  | none => fail "expected OpenAI-compatible messages array"
+
+def testOpenAICompletionsContextBatchesToolResultImages : IO Unit := do
+  let assistant : LeanAgent.AI.AssistantMessage :=
+    { content :=
+        #[ .toolCall
+            { id := "tool-1"
+              name := "read"
+              arguments := LeanAgent.Json.obj [("path", LeanAgent.Json.str "img-1.png")]
+            }
+         , .toolCall
+            { id := "tool-2"
+              name := "read"
+              arguments := LeanAgent.Json.obj [("path", LeanAgent.Json.str "img-2.png")]
+            }
+         ]
+      api := openAICompletionsContextModel.api
+      provider := openAICompletionsContextModel.provider
+      model := openAICompletionsContextModel.id
+      stopReason := .toolUse
+      timestamp := 2
+    }
+  let payload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+    openAICompletionsContextModel
+    { messages :=
+        #[ .user { content := #[LeanAgent.AI.text "Read the images"], timestamp := 1 }
+         , .assistant assistant
+         , .toolResult
+            { toolCallId := "tool-1"
+              toolName := "read"
+              content :=
+                #[ LeanAgent.AI.text "Read image file [image/png]"
+                 , LeanAgent.AI.image "ZmFrZQ==" "image/png"
+                 ]
+              isError := false
+              timestamp := 3
+            }
+         , .toolResult
+            { toolCallId := "tool-2"
+              toolName := "read"
+              content :=
+                #[ LeanAgent.AI.text "Read image file [image/png]"
+                 , LeanAgent.AI.image "YmFy" "image/png"
+                 ]
+              isError := false
+              timestamp := 4
+            }
+         ]
+    }
+  match jsonArrayField? payload "messages" with
+  | some messages =>
+      let roles :=
+        messages.map (fun message => (jsonStringField? message "role").getD "")
+      assertTrue (roles == #["user", "assistant", "tool", "tool", "user"])
+        "expected grouped tool-result image replay as a trailing user turn"
+      match messages[4]? with
+      | some imageReplay =>
+          match jsonArrayField? imageReplay "content" with
+          | some content =>
+              assertTrue (content.size == 3) "expected one text marker plus two replayed images"
+              assertTrue (jsonStringField? content[0]! "type" == some "text")
+                "expected replay marker text block"
+              assertTrue (jsonStringField? content[1]! "type" == some "image_url")
+                "expected first replay image block"
+              assertTrue (jsonStringField? content[2]! "type" == some "image_url")
+                "expected second replay image block"
+              match jsonObjectField? content[1]! "image_url", jsonObjectField? content[2]! "image_url" with
+              | some firstUrl, some secondUrl =>
+                  assertTrue
+                    (jsonStringField? firstUrl "url" == some "data:image/png;base64,ZmFrZQ==")
+                    "expected first replay image data URL"
+                  assertTrue
+                    (jsonStringField? secondUrl "url" == some "data:image/png;base64,YmFy")
+                    "expected second replay image data URL"
+              | _, _ => fail "expected replay image_url objects"
+          | none => fail "expected replay content array"
+      | none => fail "expected trailing replay user message"
+  | none => fail "expected OpenAI-compatible messages array"
+
 def testAnthropicMessagesRequestPayload : IO Unit := do
   let assistant : LeanAgent.AI.AssistantMessage :=
     { content :=
@@ -12750,6 +12873,8 @@ def main : IO UInt32 := do
     testOpenAICompletionsOmitsEmptyTools
     testOpenAICompletionsIncludesToolsWhenPresent
     testOpenAICompletionsIncludesEmptyToolsForToolHistory
+    testOpenAICompletionsContextSerializesUserImages
+    testOpenAICompletionsContextBatchesToolResultImages
     testOpenAICompletionsSerializesOptions
     testOpenAICompletionsUsesMappedReasoningEffort
     testOpenAICompletionsCompatSuppressesUnsupportedFields

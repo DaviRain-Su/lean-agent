@@ -291,12 +291,10 @@ def streamOpenAICompletionsWithOptions : OpenAICompletionsStream :=
       { apiKey := apiKey
         baseUrl := model.baseUrl
       }
-    let request := LeanAgent.AI.Providers.Streams.contextToProviderRequest model context
-    let stream ← LeanAgent.AI.Api.OpenAICompletions.streamWithOptions
+    let stream ← LeanAgent.AI.Api.OpenAICompletions.streamContextWithOptions
       config
-      request
-      model.api
-      model.provider
+      (LeanAgent.AI.Providers.Streams.openAICompletionsModelFromModelInfo model)
+      context
       options
     pure (LeanAgent.Models.applyUsageCostToStream model stream)
 

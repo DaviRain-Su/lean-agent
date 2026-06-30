@@ -1,5 +1,6 @@
 import Lean
 import LeanAgent.AI.Api.OpenAIPromptCache
+import LeanAgent.AI.Api.TransformMessages
 import LeanAgent.AI.EventStream
 import LeanAgent.AI.Types
 import LeanAgent.AI.Util.Diagnostics
@@ -42,6 +43,12 @@ structure OpenAICompletionsOptions extends LeanAgent.AI.SimpleStreamOptions wher
   maxTokensField : String := "max_tokens"
   supportsLongCacheRetention : Bool := true
   sendSessionAffinityHeaders : Bool := false
+
+structure OpenAICompletionsModel extends LeanAgent.AI.Api.TransformMessages.TargetModel where
+  reasoning : Bool := false
+  supportsDeveloperRole : Bool := true
+  requiresReasoningContentOnAssistantMessages : Bool := false
+deriving BEq
 
 def optionsFromSimple (options : LeanAgent.AI.SimpleStreamOptions) : OpenAICompletionsOptions :=
   { temperature := options.temperature
@@ -91,6 +98,32 @@ def requestReasoningEffortString
     (effort : LeanAgent.AI.ThinkingLevel) : String :=
   options.reasoningEffortValue.getD (reasoningEffortString effort)
 
+def OpenAICompletionsModel.toModelRef
+    (model : OpenAICompletionsModel)
+    (baseUrl : String) : LeanAgent.AI.ModelRef :=
+  { id := model.id
+    api := model.api
+    provider := model.provider
+    baseUrl := some baseUrl
+  }
+
+def takeChars (value : String) (count : Nat) : String :=
+  String.ofList (value.toList.take count)
+
+def normalizeToolCallIdValue (provider : String) (id : String) : String :=
+  if id.contains "|" then
+    let callId := (id.splitOn "|").head!
+    LeanAgent.AI.Api.TransformMessages.sanitizeToolCallId callId 40
+  else if provider == "openai" && id.length > 40 then
+    takeChars id 40
+  else
+    id
+
+def normalizeToolCallId
+    (model : OpenAICompletionsModel) :
+    LeanAgent.AI.Api.TransformMessages.NormalizeToolCallId :=
+  fun id _target _source => normalizeToolCallIdValue model.provider id
+
 def toolCallToJson (call : LeanAgent.ToolCall) : Lean.Json :=
   LeanAgent.Json.obj
     [ ("id", LeanAgent.Json.str call.id)
@@ -112,6 +145,255 @@ def hasToolHistory (messages : Array LeanAgent.AgentMessage) : Bool :=
 
 def sanitize (text : String) : String :=
   LeanAgent.AI.Util.SanitizeUnicode.sanitizeSurrogates text
+
+def contentPartTextJson (text : String) : Lean.Json :=
+  LeanAgent.Json.obj
+    [ ("type", LeanAgent.Json.str "text")
+    , ("text", LeanAgent.Json.str (sanitize text))
+    ]
+
+def contentPartImageJson (image : LeanAgent.AI.ImageContent) : Lean.Json :=
+  LeanAgent.Json.obj
+    [ ("type", LeanAgent.Json.str "image_url")
+    , ("image_url",
+        LeanAgent.Json.obj
+          [ ("url", LeanAgent.Json.str s!"data:{image.mimeType};base64,{image.data}") ])
+    ]
+
+def contentText? : LeanAgent.AI.ContentBlock → Option String
+  | .text content => some content.text
+  | _ => none
+
+def contentImage? : LeanAgent.AI.ContentBlock → Option LeanAgent.AI.ImageContent
+  | .image content => some content
+  | _ => none
+
+def userContentParts (content : Array LeanAgent.AI.ContentBlock) : Array Lean.Json :=
+  content.filterMap fun block =>
+    match block with
+    | .text text => some (contentPartTextJson text.text)
+    | .image image => some (contentPartImageJson image)
+    | _ => none
+
+def aiToolCallToJson (call : LeanAgent.AI.ToolCall) : Lean.Json :=
+  LeanAgent.Json.obj
+    [ ("id", LeanAgent.Json.str call.id)
+    , ("type", LeanAgent.Json.str "function")
+    , ("function",
+        LeanAgent.Json.obj
+          [ ("name", LeanAgent.Json.str call.name)
+          , ("arguments", LeanAgent.Json.str call.arguments.compress)
+          ])
+    ]
+
+def aiToolToJson (tool : LeanAgent.AI.Tool) : Lean.Json :=
+  LeanAgent.Json.obj
+    [ ("type", LeanAgent.Json.str "function")
+    , ("function",
+        LeanAgent.Json.obj
+          [ ("name", LeanAgent.Json.str tool.name)
+          , ("description", LeanAgent.Json.str tool.description)
+          , ("parameters", tool.parameters)
+          ])
+    ]
+
+def messageHasAIToolHistory : LeanAgent.AI.Message → Bool
+  | .assistant assistant =>
+      assistant.content.any fun block =>
+        match block with
+        | .toolCall _ => true
+        | _ => false
+  | .toolResult _ => true
+  | .user _ => false
+
+def hasAIToolHistory (messages : Array LeanAgent.AI.Message) : Bool :=
+  messages.any messageHasAIToolHistory
+
+def requestToolFieldsForContext
+    (context : LeanAgent.AI.Context)
+    (messages : Array LeanAgent.AI.Message)
+    (options : OpenAICompletionsOptions) : List (String × Lean.Json) :=
+  if !context.tools.isEmpty || hasAIToolHistory messages then
+    [ ("tools", LeanAgent.Json.arr (context.tools.map aiToolToJson))
+    , ("tool_choice", (options.toolChoice.getD .auto).toJson)
+    ]
+  else
+    []
+
+def reasoningTextBlocks (content : Array LeanAgent.AI.ContentBlock) :
+    Array LeanAgent.AI.ThinkingContent :=
+  content.filterMap fun block =>
+    match block with
+    | .thinking thinking =>
+        if thinking.thinking.trimAscii.toString.isEmpty then none else some thinking
+    | _ => none
+
+def assistantText (content : Array LeanAgent.AI.ContentBlock) : String :=
+  String.intercalate ""
+    (content.toList.filterMap fun block =>
+      match block with
+      | .text text =>
+          if text.text.trimAscii.toString.isEmpty then none else some (sanitize text.text)
+      | _ => none)
+
+def assistantThinkingField?
+    (model : OpenAICompletionsModel)
+    (content : Array LeanAgent.AI.ContentBlock) : Option (String × Lean.Json) :=
+  let thinkingBlocks := reasoningTextBlocks content
+  match thinkingBlocks[0]? with
+  | some first =>
+      match first.thinkingSignature with
+      | some signature =>
+          let key :=
+            if model.provider == "opencode-go" && signature == "reasoning" then
+              "reasoning_content"
+            else
+              signature
+          some
+            (key,
+              LeanAgent.Json.str
+                (sanitize (String.intercalate "\n" (thinkingBlocks.map (·.thinking) |>.toList))))
+      | none =>
+          if model.reasoning && model.requiresReasoningContentOnAssistantMessages then
+            some ("reasoning_content", LeanAgent.Json.str "")
+          else
+            none
+  | none =>
+      if model.reasoning && model.requiresReasoningContentOnAssistantMessages then
+        some ("reasoning_content", LeanAgent.Json.str "")
+      else
+        none
+
+def assistantMessageJson?
+    (model : OpenAICompletionsModel)
+    (assistant : LeanAgent.AI.AssistantMessage) : Option Lean.Json :=
+  let content := assistantText assistant.content
+  let toolCalls := LeanAgent.AI.contentToolCalls assistant.content
+  let thinkingField? := assistantThinkingField? model assistant.content
+  let hasContent := !content.isEmpty
+  if !hasContent && toolCalls.isEmpty then
+    none
+  else
+    let baseFields :=
+      [ ("role", LeanAgent.Json.str "assistant")
+      , ("content", if hasContent then LeanAgent.Json.str content else LeanAgent.Json.null)
+      ]
+    let toolFields :=
+      if toolCalls.isEmpty then
+        []
+      else
+        [("tool_calls", LeanAgent.Json.arr (toolCalls.map aiToolCallToJson))]
+    let thinkingFields :=
+      match thinkingField? with
+      | some (key, value) => [(key, value)]
+      | none => []
+    some (LeanAgent.Json.obj (baseFields ++ toolFields ++ thinkingFields))
+
+def toolResultCallId (id : String) : String :=
+  match id.splitOn "|" with
+  | [] => id
+  | callId :: _ => callId
+
+def toolResultText (content : Array LeanAgent.AI.ContentBlock) : String :=
+  String.intercalate "\n" (content.toList.filterMap contentText?)
+
+def toolResultImageParts (content : Array LeanAgent.AI.ContentBlock) : Array Lean.Json :=
+  content.filterMap fun block => (contentImage? block).map contentPartImageJson
+
+def toolResultMessageJson (message : LeanAgent.AI.ToolResultMessage) : Lean.Json :=
+  let text := toolResultText message.content
+  let rendered := if text.isEmpty then "(see attached image)" else text
+  LeanAgent.Json.obj
+    [ ("role", LeanAgent.Json.str "tool")
+    , ("tool_call_id", LeanAgent.Json.str (toolResultCallId message.toolCallId))
+    , ("content", LeanAgent.Json.str (sanitize rendered))
+    ]
+
+def groupedToolResultImageMessageJson (imageParts : Array Lean.Json) : Lean.Json :=
+  LeanAgent.Json.obj
+    [ ("role", LeanAgent.Json.str "user")
+    , ("content",
+        LeanAgent.Json.arr
+          (#[contentPartTextJson "Attached image(s) from tool result:"] ++ imageParts))
+    ]
+
+def collectLeadingToolResultsAux
+    (acc : Array LeanAgent.AI.ToolResultMessage) :
+    List LeanAgent.AI.Message → Array LeanAgent.AI.ToolResultMessage × List LeanAgent.AI.Message
+  | .toolResult message :: rest => collectLeadingToolResultsAux (acc.push message) rest
+  | remaining => (acc, remaining)
+
+def collectLeadingToolResults :
+    List LeanAgent.AI.Message → Array LeanAgent.AI.ToolResultMessage × List LeanAgent.AI.Message :=
+  collectLeadingToolResultsAux #[]
+
+partial def convertMessagesLoop
+    (model : OpenAICompletionsModel)
+    (messages : List LeanAgent.AI.Message)
+    (acc : Array Lean.Json := #[]) : Array Lean.Json :=
+  match messages with
+  | [] => acc
+  | .user user :: rest =>
+      let content := userContentParts user.content
+      let acc :=
+        if content.isEmpty then
+          acc
+        else
+          acc.push
+            (LeanAgent.Json.obj
+              [ ("role", LeanAgent.Json.str "user")
+              , ("content", LeanAgent.Json.arr content)
+              ])
+      convertMessagesLoop model rest acc
+  | .assistant assistant :: rest =>
+      let acc :=
+        match assistantMessageJson? model assistant with
+        | some json => acc.push json
+        | none => acc
+      convertMessagesLoop model rest acc
+  | .toolResult _ :: _ =>
+      let (toolResults, remaining) := collectLeadingToolResults messages
+      let (acc, imageParts) :=
+        toolResults.foldl
+          (fun (state : Array Lean.Json × Array Lean.Json) toolResult =>
+            let textJson := toolResultMessageJson toolResult
+            let images :=
+              if model.input.contains "image" then
+                state.snd ++ toolResultImageParts toolResult.content
+              else
+                state.snd
+            (state.fst.push textJson, images))
+          (acc, #[])
+      let acc :=
+        if imageParts.isEmpty then
+          acc
+        else
+          acc.push (groupedToolResultImageMessageJson imageParts)
+      convertMessagesLoop model remaining acc
+
+def convertMessages
+    (model : OpenAICompletionsModel)
+    (context : LeanAgent.AI.Context) : Array Lean.Json :=
+  let transformedMessages :=
+    LeanAgent.AI.Api.TransformMessages.transformMessages
+      context.messages
+      { id := model.id
+        provider := model.provider
+        api := model.api
+        input := model.input
+      }
+      { normalizeToolCallId? := some (normalizeToolCallId model) }
+  let systemMessages :=
+    match context.systemPrompt with
+    | some systemPrompt =>
+        let role :=
+          if model.reasoning && model.supportsDeveloperRole then "developer" else "system"
+        #[LeanAgent.Json.obj
+          [ ("role", LeanAgent.Json.str role)
+          , ("content", LeanAgent.Json.str (sanitize systemPrompt))
+          ]]
+    | none => #[]
+  systemMessages ++ convertMessagesLoop model transformedMessages.toList
 
 def messageToJson : AgentMessage → Lean.Json
   | .user content =>
@@ -295,6 +577,52 @@ def requestToStreamingJsonWithOptions
      ] ++ requestOptionFields options
        ++ promptCacheFields baseUrl options
        ++ requestToolFields request options)
+
+def requestToJsonWithContextOptions
+    (model : OpenAICompletionsModel)
+    (context : LeanAgent.AI.Context)
+    (options : OpenAICompletionsOptions := {})
+    (baseUrl : String := "") : Lean.Json :=
+  let messages := convertMessages model context
+  LeanAgent.Json.obj
+    ([ ("model", LeanAgent.Json.str model.id)
+     , ("messages", LeanAgent.Json.arr messages)
+     ] ++ requestOptionFields options
+       ++ promptCacheFields baseUrl options
+       ++ requestToolFieldsForContext context
+            (LeanAgent.AI.Api.TransformMessages.transformMessages
+              context.messages
+              { id := model.id
+                provider := model.provider
+                api := model.api
+                input := model.input
+              }
+              { normalizeToolCallId? := some (normalizeToolCallId model) })
+            options)
+
+def requestToStreamingJsonWithContextOptions
+    (model : OpenAICompletionsModel)
+    (context : LeanAgent.AI.Context)
+    (options : OpenAICompletionsOptions := {})
+    (baseUrl : String := "") : Lean.Json :=
+  let messages := convertMessages model context
+  LeanAgent.Json.obj
+    ([ ("model", LeanAgent.Json.str model.id)
+     , ("messages", LeanAgent.Json.arr messages)
+     , ("stream", LeanAgent.Json.bool true)
+     , ("stream_options", LeanAgent.Json.obj [("include_usage", LeanAgent.Json.bool true)])
+     ] ++ requestOptionFields options
+       ++ promptCacheFields baseUrl options
+       ++ requestToolFieldsForContext context
+            (LeanAgent.AI.Api.TransformMessages.transformMessages
+              context.messages
+              { id := model.id
+                provider := model.provider
+                api := model.api
+                input := model.input
+              }
+              { normalizeToolCallId? := some (normalizeToolCallId model) })
+            options)
 
 def runHttpJson
     (config : OpenAICompatibleConfig)
@@ -773,6 +1101,25 @@ def streamWithOptions
     options.signal
   let timestamp ← IO.monoMsNow
   match parseStreamingEventStream api providerId request.model timestamp raw with
+  | .ok stream => pure stream
+  | .error err => throw (IO.userError s!"failed to parse streaming provider response: {err}\n{raw}")
+
+def streamContextWithOptions
+    (config : OpenAICompatibleConfig)
+    (model : OpenAICompletionsModel)
+    (context : LeanAgent.AI.Context)
+    (options : OpenAICompletionsOptions := {}) :
+    IO LeanAgent.AI.AssistantMessageEventStream := do
+  let ref := model.toModelRef config.baseUrl
+  let payload ←
+    applyPayloadHook options ref
+      (requestToStreamingJsonWithContextOptions model context options config.baseUrl)
+  let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
+  let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
+    (runHttpJson config payload (requestHeaders options) options ref)
+    options.signal
+  let timestamp ← IO.monoMsNow
+  match parseStreamingEventStream model.api model.provider model.id timestamp raw with
   | .ok stream => pure stream
   | .error err => throw (IO.userError s!"failed to parse streaming provider response: {err}\n{raw}")
 

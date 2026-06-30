@@ -52,6 +52,19 @@ def openAICompletionsOptionsFromSimple
     sendSessionAffinityHeaders := model.compat.sendSessionAffinityHeaders
   }
 
+def openAICompletionsModelFromModelInfo
+    (model : LeanAgent.Models.ModelInfo) :
+    LeanAgent.AI.Api.OpenAICompletions.OpenAICompletionsModel :=
+  { id := model.id
+    provider := model.provider
+    api := model.api
+    input := model.input
+    reasoning := model.reasoning
+    supportsDeveloperRole := model.compat.supportsDeveloperRole
+    requiresReasoningContentOnAssistantMessages :=
+      model.compat.requiresReasoningContentOnAssistantMessages
+  }
+
 def legacyToolFromAITool (tool : LeanAgent.AI.Tool) : AgentTool :=
   { name := tool.name
     description := tool.description
@@ -131,12 +144,10 @@ def openAICompatibleStreams : LeanAgent.Models.ProviderStreams :=
         { apiKey := apiKey
           baseUrl := model.baseUrl
         }
-      let request := contextToProviderRequest model context
-      let stream ← LeanAgent.AI.Api.OpenAICompletions.streamWithOptions
+      let stream ← LeanAgent.AI.Api.OpenAICompletions.streamContextWithOptions
         config
-        request
-        model.api
-        model.provider
+        (openAICompletionsModelFromModelInfo model)
+        context
         (openAICompletionsOptionsFromSimple model options)
       pure (LeanAgent.Models.applyUsageCostToStream model stream)
   }
