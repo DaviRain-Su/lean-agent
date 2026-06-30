@@ -7183,6 +7183,66 @@ def testModelsCollectionGenericStreamAndCompleteDispatchWithAuth : IO Unit := do
   assertTrue ((← seenApiKey.get) == some "env-secret")
     "expected collection generic complete to inject auth"
 
+def testModelsCollectionUnknownProviderReturnsError : IO Unit := do
+  let collection ← LeanAgent.Models.createModels
+  let result ← collection.completeSimple
+    { fakeRuntimeModel with provider := "ghost" }
+    { systemPrompt := some "system"
+      messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 0 }]
+    }
+  assertTrue (result.stopReason == .error) "expected unknown provider error result"
+  assertTrue
+    (match result.errorMessage with
+     | some message => message.contains "Unknown provider: ghost"
+     | none => false)
+    "expected unknown provider error message"
+
+def testModelsCollectionAuthSetupFailureReturnsErrorStream : IO Unit := do
+  let calledRef ← IO.mkRef false
+  let failingAuth : LeanAgent.AI.Auth.ProviderAuth :=
+    { apiKey := some
+        { name := "Failing API key"
+          resolve := fun model _ctx _credential => do
+            throw (IO.userError s!"failed to resolve auth for {model.provider}")
+        } }
+  let provider ← LeanAgent.Models.createProvider
+    { id := "failing-auth"
+      name := some "Failing Auth"
+      auth := failingAuth
+      models := #[{ fakeRuntimeModel with provider := "failing-auth" }]
+      apis :=
+        #[{ api := "fake-api"
+            streams :=
+              { streamSimple := fun model _context _options => do
+                  calledRef.set true
+                  let timestamp ← IO.monoMsNow
+                  pure
+                    (LeanAgent.AI.fromMessage
+                      { content := #[LeanAgent.AI.text s!"unexpected: {model.id}"]
+                        api := model.api
+                        provider := model.provider
+                        model := model.id
+                        timestamp := timestamp
+                      })
+              } }]
+    }
+  let collection ← LeanAgent.Models.createModels
+  collection.setProvider provider
+  let stream ← collection.streamSimple
+    { fakeRuntimeModel with provider := "failing-auth" }
+    { systemPrompt := some "system"
+      messages := #[.user { content := #[LeanAgent.AI.text "hello"], timestamp := 0 }]
+    }
+  assertTrue (stream.result.stopReason == .error) "expected auth setup failure error stream"
+  assertTrue (!(← calledRef.get)) "expected auth setup failure to skip provider dispatch"
+  match stream.result.errorMessage with
+  | some message =>
+      assertTrue (message.contains "ModelsError(auth)")
+        "expected typed auth error for setup failure"
+      assertTrue (message.contains "API key auth failed for provider failing-auth")
+        "expected provider-specific auth failure details"
+  | none => fail "expected auth setup failure error message"
+
 def testModelsCreateProviderDynamicRefreshDedupes : IO Unit := do
   let fetches ← IO.mkRef 0
   let provider ← LeanAgent.Models.createProvider
@@ -12571,6 +12631,8 @@ def main : IO UInt32 := do
     testEnvApiKeysAmbientAuthMarkers
     testModelsCollectionDispatchesWithAuth
     testModelsCollectionGenericStreamAndCompleteDispatchWithAuth
+    testModelsCollectionUnknownProviderReturnsError
+    testModelsCollectionAuthSetupFailureReturnsErrorStream
     testModelsCreateProviderDynamicRefreshDedupes
     testModelsCollectionRefreshAndFailureSemantics
     testModelsCollectionAppliesCloudflareAIGatewayAuth

@@ -345,12 +345,22 @@ def streamBuiltinSimple
     IO LeanAgent.AI.AssistantMessageEventStream := do
   if ← LeanAgent.AI.Util.Abort.isAborted options.signal then
     return abortedCompatStream model (← IO.monoMsNow)
-  let models ← compatModels
-  let builtinProvider ← models.requireProvider model
-  let (requestModel, requestOptions) ← models.applyAuth builtinProvider model options
-  let (responseRef, requestOptions) ← LeanAgent.Models.withCapturedResponseHook requestOptions
-  let provider ← resolveApiProvider requestModel.api
-  ensureApiMatches provider requestModel
+  let setup? ←
+    try
+      let models ← compatModels
+      let builtinProvider ← models.requireProvider model
+      let (requestModel, requestOptions) ← models.applyAuth builtinProvider model options
+      let (responseRef, requestOptions) ← LeanAgent.Models.withCapturedResponseHook requestOptions
+      let provider ← resolveApiProvider requestModel.api
+      ensureApiMatches provider requestModel
+      pure (some (provider, requestModel, responseRef, requestOptions))
+    catch err =>
+      if LeanAgent.AI.Util.Abort.isAbortErrorMessage err.toString then
+        pure none
+      else
+        return ← LeanAgent.AI.Api.Lazy.setupErrorStream model.toModelRef err.toString
+  let some (provider, requestModel, responseRef, requestOptions) := setup?
+    | return abortedCompatStream model (← IO.monoMsNow)
   try
     provider.streams.streamSimple requestModel context requestOptions
   catch err =>

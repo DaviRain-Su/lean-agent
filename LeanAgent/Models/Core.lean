@@ -698,9 +698,19 @@ def Collection.streamSimple
     IO LeanAgent.AI.AssistantMessageEventStream := do
   if ← LeanAgent.AI.Util.Abort.isAborted options.signal then
     return abortedEventStream model (← IO.monoMsNow)
-  let provider ← collection.requireProvider model
-  let (requestModel, requestOptions) ← collection.applyAuth provider model options
-  let (responseRef, requestOptions) ← withCapturedResponseHook requestOptions
+  let setup? ←
+    try
+      let provider ← collection.requireProvider model
+      let (requestModel, requestOptions) ← collection.applyAuth provider model options
+      let (responseRef, requestOptions) ← withCapturedResponseHook requestOptions
+      pure (some (provider, requestModel, responseRef, requestOptions))
+    catch err =>
+      if LeanAgent.AI.Util.Abort.isAbortErrorMessage err.toString then
+        pure none
+      else
+        return ← LeanAgent.AI.Api.Lazy.setupErrorStream model.toModelRef err.toString
+  let some (provider, requestModel, responseRef, requestOptions) := setup?
+    | return abortedEventStream model (← IO.monoMsNow)
   try
     provider.streamSimple requestModel context requestOptions
   catch err =>
