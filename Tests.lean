@@ -5314,6 +5314,27 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
     "expected generated Xiaomi Token Plan SGP model catalog"
   assertTrue (LeanAgent.Models.zaiModels.size == 6) "expected generated Z.AI model catalog"
   assertTrue (LeanAgent.Models.zaiCodingCNModels.size == 6) "expected generated Z.AI Coding CN model catalog"
+
+def testTogetherCatalogReasoningEffortCompat : IO Unit := do
+  let catalog := LeanAgent.Models.defaultCatalog
+  match LeanAgent.Models.ProviderCatalog.model?
+      catalog
+      LeanAgent.Models.togetherProviderId
+      LeanAgent.Models.togetherDefaultModel with
+  | some model =>
+      assertTrue model.reasoning "expected Together default model reasoning support"
+      assertTrue model.compat.supportsReasoningEffort
+        "expected Together GPT OSS compat to support reasoning_effort"
+      assertTrue (model.compat.thinkingFormat == some "openai")
+        "expected Together GPT OSS compat to use openai reasoning format"
+      assertTrue (LeanAgent.Models.thinkingLevelMapValue? model .off == some none)
+        "expected Together GPT OSS off thinking level to map to omission"
+      assertTrue (LeanAgent.Models.thinkingLevelMapValue? model (.level .minimal) == some none)
+        "expected Together GPT OSS minimal thinking level to map to omission"
+  | none => fail "expected Together default model in catalog"
+  let rendered := LeanAgent.Models.renderCatalog catalog
+  assertTrue (rendered.contains "together/openai/gpt-oss-20b")
+    "expected Together GPT OSS 20B model in catalog"
   assertTrue (LeanAgent.Models.kimiCodingModels.size == 3) "expected generated Kimi Coding model catalog"
   assertTrue (LeanAgent.Models.minimaxModels.size == 3) "expected generated MiniMax model catalog"
   assertTrue (LeanAgent.Models.minimaxCNModels.size == 3) "expected generated MiniMax CN model catalog"
@@ -11958,6 +11979,97 @@ def testOpenAICompatibleStreamsDetectMoonshotCompatDefaults : IO Unit := do
         | none => fail "expected Moonshot tool function"
     | _, _ => fail "expected Moonshot thinking object and tools array"
 
+def testOpenAICompatibleStreamsUseTogetherGptOssReasoningEffort : IO Unit := do
+  let port := 18115
+  withHttpServer port do
+    let tool : LeanAgent.AI.Tool :=
+      { name := "lookup"
+        description := "Lookup a value"
+        parameters := LeanAgent.Json.obj [("type", LeanAgent.Json.str "object")]
+      }
+    let model : LeanAgent.Models.ModelInfo :=
+      { LeanAgent.Models.togetherGptOss120B with
+        baseUrl := s!"http://127.0.0.1:{port}/runtime-stream-openai"
+      }
+    let payloadRef ← IO.mkRef Lean.Json.null
+    let _ ← LeanAgent.AI.Providers.Streams.openAICompatibleStreams.streamSimple
+      model
+      { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }]
+        tools := #[tool]
+      }
+      { apiKey := some "test-key"
+        maxTokens := some 123
+        reasoning := some .high
+        onPayload := some fun payload _ => do
+          payloadRef.set payload
+          pure none
+      }
+    let payload ← payloadRef.get
+    assertTrue (LeanAgent.Json.optVal? payload "max_tokens" == some (LeanAgent.Json.nat 123))
+      "expected Together GPT OSS to use max_tokens"
+    assertTrue (LeanAgent.Json.optVal? payload "reasoning_effort" == some (LeanAgent.Json.str "high"))
+      "expected Together GPT OSS to send reasoning_effort"
+    assertTrue ((LeanAgent.Json.optVal? payload "reasoning").isNone)
+      "expected Together GPT OSS to avoid toggle reasoning object"
+    match jsonArrayField? payload "tools" with
+    | some tools =>
+        match jsonObjectField? tools[0]! "function" with
+        | some fn =>
+            assertTrue ((LeanAgent.Json.optVal? fn "strict").isNone)
+              "expected Together GPT OSS to omit strict"
+        | none => fail "expected Together GPT OSS tool function"
+    | none => fail "expected Together GPT OSS tools array"
+
+def testOpenAICompatibleStreamsDetectTogetherReasoningOnlyCompat : IO Unit := do
+  let port := 18116
+  withHttpServer port do
+    let tool : LeanAgent.AI.Tool :=
+      { name := "lookup"
+        description := "Lookup a value"
+        parameters := LeanAgent.Json.obj [("type", LeanAgent.Json.str "object")]
+      }
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := "deepseek-ai/DeepSeek-R1"
+        name := "DeepSeek R1 via Together"
+        provider := LeanAgent.Models.togetherProviderId
+        api := "openai-completions"
+        baseUrl := s!"http://127.0.0.1:{port}/runtime-stream-openai"
+        contextWindow := 131072
+        maxTokens := 32768
+        reasoning := true
+        input := #["text"]
+      }
+    let payloadRef ← IO.mkRef Lean.Json.null
+    let _ ← LeanAgent.AI.Providers.Streams.openAICompatibleStreams.streamSimple
+      model
+      { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }]
+        tools := #[tool]
+      }
+      { apiKey := some "test-key"
+        maxTokens := some 123
+        reasoning := some .high
+        onPayload := some fun payload _ => do
+          payloadRef.set payload
+          pure none
+      }
+    let payload ← payloadRef.get
+    assertTrue (LeanAgent.Json.optVal? payload "max_tokens" == some (LeanAgent.Json.nat 123))
+      "expected Together reasoning-only fallback to use max_tokens"
+    assertTrue ((LeanAgent.Json.optVal? payload "reasoning_effort").isNone)
+      "expected Together reasoning-only fallback to omit reasoning_effort"
+    assertTrue ((LeanAgent.Json.optVal? payload "reasoning").isNone)
+      "expected Together reasoning-only fallback to avoid toggle reasoning object"
+    assertTrue ((LeanAgent.Json.optVal? payload "thinking").isNone)
+      "expected Together reasoning-only fallback to avoid thinking object"
+    match jsonArrayField? payload "tools" with
+    | some tools =>
+        match jsonObjectField? tools[0]! "function" with
+        | some fn =>
+            assertTrue ((LeanAgent.Json.optVal? fn "strict").isNone)
+              "expected Together reasoning-only fallback to omit strict"
+        | none => fail "expected Together reasoning-only fallback tool function"
+    | none => fail "expected Together reasoning-only fallback tools array"
+
 def testOpenAICompatibleStreamsClampMaxTokens : IO Unit := do
   let port := 18091
   withHttpServer port do
@@ -11969,6 +12081,7 @@ def testOpenAICompatibleStreamsClampMaxTokens : IO Unit := do
         baseUrl := s!"http://127.0.0.1:{port}/clamp-openai"
         contextWindow := 5000
         maxTokens := 4000
+        compat := { thinkingFormat := some "openai" }
       }
     let context : LeanAgent.AI.Context :=
       { systemPrompt := some "abcd"
@@ -13652,6 +13765,7 @@ def main : IO UInt32 := do
     testRetryWithRetriesStopsOnAbortSignal
     testModelCatalogDeepSeekDefaults
     testOpenAICompatibleProviderFamilyCatalog
+    testTogetherCatalogReasoningEffortCompat
     testDefaultModelsRegistersOpenAICompatibleFamily
     testOpenAICompatibleProviderFactoriesMatchCatalog
     testBuiltinModelsGitHubCopilotOAuthFiltersModelList
@@ -13807,6 +13921,8 @@ def main : IO UInt32 := do
     testOpenAICompatibleStreamsApplyModelCost
     testOpenAICompatibleStreamsDetectOpenRouterDeveloperRole
     testOpenAICompatibleStreamsDetectMoonshotCompatDefaults
+    testOpenAICompatibleStreamsUseTogetherGptOssReasoningEffort
+    testOpenAICompatibleStreamsDetectTogetherReasoningOnlyCompat
     testOpenAICompatibleStreamsClampMaxTokens
     testCloudflareAIGatewayOpenAICompatibleHeaderAuthLocal
     testOpenRouterImagesRequestPayload

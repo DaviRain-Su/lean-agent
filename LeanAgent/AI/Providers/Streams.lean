@@ -63,6 +63,18 @@ def openAICompletionsOptionsFromSimple
       model.baseUrl
       model.id
       (compatOverrideFromModelCompat model.compat)
+  let hasCompatMetadata := model.compat != {}
+  let supportsReasoningEffort :=
+    if hasCompatMetadata then model.compat.supportsReasoningEffort else compat.supportsReasoningEffort
+  let maxTokensField :=
+    if hasCompatMetadata && !(model.provider == "openrouter" && model.compat.maxTokensField == "max_tokens") then
+      model.compat.maxTokensField
+    else
+      compat.maxTokensField
+  let supportsLongCacheRetention :=
+    if hasCompatMetadata then model.compat.supportsLongCacheRetention else compat.supportsLongCacheRetention
+  let sendSessionAffinityHeaders :=
+    if hasCompatMetadata then model.compat.sendSessionAffinityHeaders else compat.sendSessionAffinityHeaders
   let apiOptions := LeanAgent.AI.Api.OpenAICompletions.optionsFromSimple options
   let reasoningValue :=
     match apiOptions.reasoningEffort with
@@ -82,10 +94,10 @@ def openAICompletionsOptionsFromSimple
     reasoningEffortValue := reasoningValue
     offReasoningEffortValue := offValue
     offThinkingEnabled := offThinkingEnabled
-    supportsReasoningEffort := compat.supportsReasoningEffort
-    maxTokensField := compat.maxTokensField
-    supportsLongCacheRetention := compat.supportsLongCacheRetention
-    sendSessionAffinityHeaders := compat.sendSessionAffinityHeaders
+    supportsReasoningEffort := supportsReasoningEffort
+    maxTokensField := maxTokensField
+    supportsLongCacheRetention := supportsLongCacheRetention
+    sendSessionAffinityHeaders := sendSessionAffinityHeaders
   }
 
 def openAICompletionsModelFromModelInfo

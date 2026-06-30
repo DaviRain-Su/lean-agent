@@ -596,13 +596,14 @@ def cerebrasGptOss120B : ModelInfo :=
     compat := cerebrasCompat
   }
 
-def togetherCompat : ModelCompat :=
+def togetherReasoningEffortCompat : ModelCompat :=
   { supportsStore := false
     supportsDeveloperRole := false
-    supportsReasoningEffort := false
+    supportsReasoningEffort := true
     maxTokensField := "max_tokens"
     thinkingFormat := some "openai"
     supportsStrictMode := false
+    supportsLongCacheRetention := false
   }
 
 def togetherGptOss120B : ModelInfo :=
@@ -615,7 +616,26 @@ def togetherGptOss120B : ModelInfo :=
     contextWindow := 131072
     maxTokens := 131072
     reasoning := true
-    compat := togetherCompat
+    compat := togetherReasoningEffortCompat
+    thinkingLevelMap := #[ { level := .off, mapped := none }
+                        , { level := .level .minimal, mapped := none }
+                        ]
+  }
+
+def togetherGptOss20B : ModelInfo :=
+  { id := "openai/gpt-oss-20b"
+    name := "GPT OSS 20B"
+    provider := togetherProviderId
+    api := "openai-completions"
+    baseUrl := togetherBaseUrl
+    cost := cost 0.05 0.2 0.0 0.0
+    contextWindow := 131072
+    maxTokens := 131072
+    reasoning := true
+    compat := togetherReasoningEffortCompat
+    thinkingLevelMap := #[ { level := .off, mapped := none }
+                        , { level := .level .minimal, mapped := none }
+                        ]
   }
 
 def fireworksCompat : ModelCompat :=
@@ -1708,7 +1728,7 @@ def togetherProviderInfo : ProviderInfo :=
     baseUrl := togetherBaseUrl
     apiKeyEnv := togetherApiKeyEnv
     defaultModel := togetherDefaultModel
-    models := #[togetherGptOss120B]
+    models := #[togetherGptOss120B, togetherGptOss20B]
   }
 
 def fireworksProviderInfo : ProviderInfo :=

@@ -113,11 +113,19 @@ def optionsFromSimple (options : LeanAgent.AI.SimpleStreamOptions) : OpenAICompl
 
 def detectCompat
     (provider baseUrl modelId : String) : ResolvedOpenAICompletionsCompat :=
+  let togetherReasoningEffortModelIds : Array String :=
+    #["openai/gpt-oss-120b", "openai/gpt-oss-20b"]
+  let togetherReasoningOnlyModelIds : Array String :=
+    #["deepseek-ai/DeepSeek-R1", "MiniMaxAI/MiniMax-M2.7"]
   let isZai :=
     provider == "zai" || provider == "zai-coding-cn" ||
       baseUrl.contains "api.z.ai" || baseUrl.contains "open.bigmodel.cn"
   let isTogether :=
     provider == "together" || baseUrl.contains "api.together.ai" || baseUrl.contains "api.together.xyz"
+  let isTogetherReasoningEffort :=
+    isTogether && togetherReasoningEffortModelIds.contains modelId
+  let isTogetherReasoningOnly :=
+    isTogether && togetherReasoningOnlyModelIds.contains modelId
   let isMoonshot :=
     provider == "moonshotai" || provider == "moonshotai-cn" || baseUrl.contains "api.moonshot."
   let isOpenRouter := provider == "openrouter" || baseUrl.contains "openrouter.ai"
@@ -148,7 +156,7 @@ def detectCompat
       some "deepseek"
     else if isZai then
       some "zai"
-    else if isTogether then
+    else if isTogether && !(isTogetherReasoningEffort || isTogetherReasoningOnly) then
       some "together"
     else if isAntLing then
       some "ant-ling"
@@ -171,7 +179,8 @@ def detectCompat
     supportsStrictMode := !(isMoonshot || isTogether || isCloudflareAiGateway || isNvidia)
     cacheControlFormat := cacheControlFormat
     supportsReasoningEffort :=
-      !(isGrok || isZai || isMoonshot || isTogether || isCloudflareAiGateway || isNvidia || isAntLing)
+      isTogetherReasoningEffort ||
+        !(isGrok || isZai || isMoonshot || isTogether || isCloudflareAiGateway || isNvidia || isAntLing)
     maxTokensField := if useMaxTokens then "max_tokens" else "max_completion_tokens"
     supportsLongCacheRetention :=
       !(isTogether || isCloudflareWorkersAI || isCloudflareAiGateway || isNvidia || isAntLing)
