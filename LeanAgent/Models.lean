@@ -599,7 +599,10 @@ def cerebrasGptOss120B : ModelInfo :=
 def togetherCompat : ModelCompat :=
   { supportsStore := false
     supportsDeveloperRole := false
+    supportsReasoningEffort := false
+    maxTokensField := "max_tokens"
     thinkingFormat := some "openai"
+    supportsStrictMode := false
   }
 
 def togetherGptOss120B : ModelInfo :=
@@ -636,7 +639,10 @@ def fireworksGlm52 : ModelInfo :=
 def antLingCompat : ModelCompat :=
   { supportsStore := false
     supportsDeveloperRole := false
+    supportsReasoningEffort := false
+    maxTokensField := "max_tokens"
     thinkingFormat := some "ant-ling"
+    supportsLongCacheRetention := false
   }
 
 def huggingFaceCompat : ModelCompat :=
@@ -646,26 +652,36 @@ def huggingFaceCompat : ModelCompat :=
 def moonshotAICompat : ModelCompat :=
   { supportsStore := false
     supportsDeveloperRole := false
+    supportsReasoningEffort := false
+    maxTokensField := "max_tokens"
     thinkingFormat := some "deepseek"
+    supportsStrictMode := false
   }
 
 def nvidiaCompat : ModelCompat :=
   { supportsStore := false
     supportsDeveloperRole := false
+    supportsReasoningEffort := false
+    maxTokensField := "max_tokens"
+    supportsStrictMode := false
+    supportsLongCacheRetention := false
   }
 
 def nvidiaModelHeaders : LeanAgent.AI.Auth.ProviderHeaders :=
   #[("NVCF-POLL-SECONDS", "3600")]
 
 def xiaomiCompat : ModelCompat :=
-  { requiresReasoningContentOnAssistantMessages := true
+  { supportsDeveloperRole := false
+    requiresReasoningContentOnAssistantMessages := true
     thinkingFormat := some "deepseek"
   }
 
 def zaiCompat : ModelCompat :=
   { supportsStore := false
     supportsDeveloperRole := false
+    supportsReasoningEffort := false
     thinkingFormat := some "zai"
+    zaiToolStream := true
   }
 
 def antLingModels : Array ModelInfo :=
@@ -814,7 +830,7 @@ def zaiModels : Array ModelInfo :=
    , catalogOpenAICompatibleModel zaiProviderId zaiBaseUrl "glm-4.7" "GLM-4.7" 0.0 0.0 0.0 0.0 204800 131072 true zaiCompat #[] #["text"]
    , catalogOpenAICompatibleModel zaiProviderId zaiBaseUrl "glm-5-turbo" "GLM-5-Turbo" 0.0 0.0 0.0 0.0 200000 131072 true zaiCompat #[] #["text"]
    , catalogOpenAICompatibleModel zaiProviderId zaiBaseUrl "glm-5.1" "GLM-5.1" 0.0 0.0 0.0 0.0 200000 131072 true zaiCompat #[] #["text"]
-   , catalogOpenAICompatibleModel zaiProviderId zaiBaseUrl "glm-5.2" "GLM-5.2" 0.0 0.0 0.0 0.0 1000000 131072 true zaiCompat #[ { level := .level .minimal, mapped := none }
+   , catalogOpenAICompatibleModel zaiProviderId zaiBaseUrl "glm-5.2" "GLM-5.2" 0.0 0.0 0.0 0.0 1000000 131072 true { zaiCompat with supportsReasoningEffort := true } #[ { level := .level .minimal, mapped := none }
    , { level := .level .low, mapped := some "high" }
    , { level := .level .medium, mapped := some "high" }
    , { level := .level .high, mapped := some "high" }
@@ -828,7 +844,7 @@ def zaiCodingCNModels : Array ModelInfo :=
    , catalogOpenAICompatibleModel zaiCodingCNProviderId zaiCodingCNBaseUrl "glm-4.7" "GLM-4.7" 0.0 0.0 0.0 0.0 204800 131072 true zaiCompat #[] #["text"]
    , catalogOpenAICompatibleModel zaiCodingCNProviderId zaiCodingCNBaseUrl "glm-5-turbo" "GLM-5-Turbo" 0.0 0.0 0.0 0.0 200000 131072 true zaiCompat #[] #["text"]
    , catalogOpenAICompatibleModel zaiCodingCNProviderId zaiCodingCNBaseUrl "glm-5.1" "GLM-5.1" 0.0 0.0 0.0 0.0 200000 131072 true zaiCompat #[] #["text"]
-   , catalogOpenAICompatibleModel zaiCodingCNProviderId zaiCodingCNBaseUrl "glm-5.2" "GLM-5.2" 0.0 0.0 0.0 0.0 1000000 131072 true zaiCompat #[ { level := .level .minimal, mapped := none }
+   , catalogOpenAICompatibleModel zaiCodingCNProviderId zaiCodingCNBaseUrl "glm-5.2" "GLM-5.2" 0.0 0.0 0.0 0.0 1000000 131072 true { zaiCompat with supportsReasoningEffort := true } #[ { level := .level .minimal, mapped := none }
    , { level := .level .low, mapped := some "high" }
    , { level := .level .medium, mapped := some "high" }
    , { level := .level .high, mapped := some "high" }
@@ -1590,7 +1606,7 @@ structure ProviderInfo where
   modelEnv : Option String := none
   defaultModel : String
   models : Array ModelInfo := #[]
-deriving Repr, BEq
+deriving BEq
 
 def ProviderInfo.authEnvs (provider : ProviderInfo) : Array String :=
   let envs := if provider.apiKeyEnvs.isEmpty then #[provider.apiKeyEnv] else provider.apiKeyEnvs
@@ -1907,7 +1923,7 @@ def amazonBedrockProviderInfo : ProviderInfo :=
 
 structure ProviderCatalog where
   providers : Array ProviderInfo := #[]
-deriving Repr, BEq
+deriving BEq
 
 def defaultCatalog : ProviderCatalog :=
   { providers :=

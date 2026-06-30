@@ -43,9 +43,12 @@ def openAICompletionsOptionsFromSimple
       LeanAgent.Models.offThinkingLevelPayloadValue? model
     else
       none
+  let offThinkingEnabled :=
+    model.reasoning && LeanAgent.Models.thinkingLevelMapValue? model .off != some none
   { apiOptions with
     reasoningEffortValue := reasoningValue
     offReasoningEffortValue := offValue
+    offThinkingEnabled := offThinkingEnabled
     supportsReasoningEffort := model.compat.supportsReasoningEffort
     maxTokensField := model.compat.maxTokensField
     supportsLongCacheRetention := model.compat.supportsLongCacheRetention
@@ -60,9 +63,16 @@ def openAICompletionsModelFromModelInfo
     api := model.api
     input := model.input
     reasoning := model.reasoning
+    supportsStore := model.compat.supportsStore
     supportsDeveloperRole := model.compat.supportsDeveloperRole
+    requiresThinkingAsText := model.compat.requiresThinkingAsText
     requiresReasoningContentOnAssistantMessages :=
       model.compat.requiresReasoningContentOnAssistantMessages
+    thinkingFormat := model.compat.thinkingFormat
+    chatTemplateKwargs := model.compat.chatTemplateKwargs
+    zaiToolStream := model.compat.zaiToolStream
+    supportsStrictMode := model.compat.supportsStrictMode
+    cacheControlFormat := model.compat.cacheControlFormat
   }
 
 def legacyToolFromAITool (tool : LeanAgent.AI.Tool) : AgentTool :=

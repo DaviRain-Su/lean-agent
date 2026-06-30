@@ -1375,6 +1375,428 @@ def testOpenAICompletionsContextBatchesToolResultImages : IO Unit := do
       | none => fail "expected trailing replay user message"
   | none => fail "expected OpenAI-compatible messages array"
 
+def testOpenAICompletionsContextReplaysThinkingAsText : IO Unit := do
+  let model :=
+    { openAICompletionsContextModel with
+      provider := "repro-provider"
+      reasoning := true
+      requiresThinkingAsText := true
+    }
+  let assistant : LeanAgent.AI.AssistantMessage :=
+    { content :=
+        #[ .thinking { thinking := "internal reasoning" }
+         , .text { text := "visible answer" }
+         ]
+      api := model.api
+      provider := model.provider
+      model := model.id
+      stopReason := .stop
+      timestamp := 2
+    }
+  let payload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+    model
+    { messages :=
+        #[ .user { content := #[LeanAgent.AI.text "hello"], timestamp := 1 }
+         , .assistant assistant
+         ]
+    }
+  match jsonArrayField? payload "messages" with
+  | some messages =>
+      match messages[1]? with
+      | some replayedAssistant =>
+          assertTrue (jsonStringField? replayedAssistant "role" == some "assistant")
+            "expected replayed assistant role"
+          assertTrue ((LeanAgent.Json.optVal? replayedAssistant "reasoning_content").isNone)
+            "expected thinking-as-text replay to omit reasoning_content"
+          match jsonArrayField? replayedAssistant "content" with
+          | some content =>
+              assertTrue (content.size == 2) "expected thinking and text replay blocks"
+              assertTrue (jsonStringField? content[0]! "type" == some "text")
+                "expected thinking text block"
+              assertTrue (jsonStringField? content[0]! "text" == some "internal reasoning")
+                "expected replayed thinking text"
+              assertTrue (jsonStringField? content[1]! "text" == some "visible answer")
+                "expected replayed assistant text"
+          | none => fail "expected assistant content array"
+      | none => fail "expected replayed assistant message"
+  | none => fail "expected OpenAI-compatible messages array"
+
+def testOpenAICompletionsContextAddsAnthropicCacheMarkers : IO Unit := do
+  let model :=
+    { openAICompletionsContextModel with
+      provider := LeanAgent.Models.openRouterProviderId
+      id := "anthropic/claude-sonnet-4"
+      cacheControlFormat := some "anthropic"
+    }
+  let tool : LeanAgent.AI.Tool :=
+    { name := "read"
+      description := "Read a file"
+      parameters := LeanAgent.Json.obj [("type", LeanAgent.Json.str "object")]
+    }
+  let payload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+    model
+    { systemPrompt := some "System prompt"
+      messages := #[.user { content := #[LeanAgent.AI.text "Hello"], timestamp := 1 }]
+      tools := #[tool]
+    }
+    { cacheRetention := some .long }
+  match jsonArrayField? payload "messages", jsonArrayField? payload "tools" with
+  | some messages, some tools =>
+      match messages[0]?, messages[messages.size - 1]?, tools[0]? with
+      | some instruction, some lastMessage, some lastTool =>
+          match jsonArrayField? instruction "content", jsonArrayField? lastMessage "content",
+              jsonObjectField? lastTool "cache_control" with
+          | some instructionContent, some lastContent, some toolCacheControl =>
+              match jsonObjectField? instructionContent[0]! "cache_control",
+                  jsonObjectField? lastContent[0]! "cache_control" with
+              | some instructionCacheControl, some lastCacheControl =>
+                  assertTrue (jsonStringField? instructionCacheControl "type" == some "ephemeral")
+                    "expected instruction cache-control type"
+                  assertTrue (jsonStringField? instructionCacheControl "ttl" == some "1h")
+                    "expected instruction cache-control ttl"
+                  assertTrue (jsonStringField? lastCacheControl "type" == some "ephemeral")
+                    "expected last message cache-control type"
+                  assertTrue (jsonStringField? lastCacheControl "ttl" == some "1h")
+                    "expected last message cache-control ttl"
+                  assertTrue (jsonStringField? toolCacheControl "type" == some "ephemeral")
+                    "expected tool cache-control type"
+                  assertTrue (jsonStringField? toolCacheControl "ttl" == some "1h")
+                    "expected tool cache-control ttl"
+              | _, _ => fail "expected cache_control markers on instruction and last message text"
+          | _, _, _ => fail "expected cache markers on messages and tool"
+      | _, _, _ => fail "expected instruction message, last conversation message, and last tool"
+  | _, _ => fail "expected OpenAI-compatible messages and tools arrays"
+
+def testOpenAICompletionsContextStrictCompat : IO Unit := do
+  let tool : LeanAgent.AI.Tool :=
+    { name := "read"
+      description := "Read a file"
+      parameters := LeanAgent.Json.obj [("type", LeanAgent.Json.str "object")]
+    }
+  let enabledPayload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+    openAICompletionsContextModel
+    { messages := #[.user { content := #[LeanAgent.AI.text "Hello"], timestamp := 1 }]
+      tools := #[tool]
+    }
+  let disabledPayload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+    { openAICompletionsContextModel with supportsStrictMode := false }
+    { messages := #[.user { content := #[LeanAgent.AI.text "Hello"], timestamp := 1 }]
+      tools := #[tool]
+    }
+  match jsonArrayField? enabledPayload "tools", jsonArrayField? disabledPayload "tools" with
+  | some enabledTools, some disabledTools =>
+      match jsonObjectField? enabledTools[0]! "function", jsonObjectField? disabledTools[0]! "function" with
+      | some enabledFn, some disabledFn =>
+          assertTrue
+            (LeanAgent.Json.optVal? enabledFn "strict" == some (LeanAgent.Json.bool false))
+            "expected strict=false when compat allows strict mode"
+          assertTrue ((LeanAgent.Json.optVal? disabledFn "strict").isNone)
+            "expected strict to be omitted when compat disables it"
+      | _, _ => fail "expected encoded tool functions"
+  | _, _ => fail "expected encoded tools arrays"
+
+def testOpenAICompletionsContextSetsZaiToolStream : IO Unit := do
+  let tool : LeanAgent.AI.Tool :=
+    { name := "ping"
+      description := "Ping tool"
+      parameters := LeanAgent.Json.obj [("type", LeanAgent.Json.str "object")]
+    }
+  let payload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+    { openAICompletionsContextModel with
+      provider := LeanAgent.Models.zaiProviderId
+      zaiToolStream := true
+    }
+    { messages := #[.user { content := #[LeanAgent.AI.text "Hello"], timestamp := 1 }]
+      tools := #[tool]
+    }
+  let withoutTools := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+    { openAICompletionsContextModel with
+      provider := LeanAgent.Models.zaiProviderId
+      zaiToolStream := true
+    }
+    { messages := #[.user { content := #[LeanAgent.AI.text "Hello"], timestamp := 1 }] }
+  assertTrue
+    (LeanAgent.Json.optVal? payload "tool_stream" == some (LeanAgent.Json.bool true))
+    "expected z.ai tool_stream when tools are present"
+  assertTrue ((LeanAgent.Json.optVal? withoutTools "tool_stream").isNone)
+    "expected tool_stream omission without tools"
+
+def testOpenAICompletionsParsesReasoningDetailsBeforeToolCall : IO Unit := do
+  let reasoningDetail :=
+    LeanAgent.Json.obj
+      [ ("type", LeanAgent.Json.str "reasoning.encrypted")
+      , ("id", LeanAgent.Json.str "call_1")
+      , ("data", LeanAgent.Json.str "encrypted-signature")
+      ]
+  let firstChunk :=
+    LeanAgent.Json.obj
+      [ ("id", LeanAgent.Json.str "chatcmpl-reasoning")
+      , ("model", LeanAgent.Json.str "repro-model")
+      , ("choices",
+          LeanAgent.Json.arr
+            #[LeanAgent.Json.obj
+              [ ("index", LeanAgent.Json.nat 0)
+              , ("delta",
+                  LeanAgent.Json.obj
+                    [("reasoning_details", LeanAgent.Json.arr #[reasoningDetail])])
+              , ("finish_reason", LeanAgent.Json.null)
+              ]])
+      ]
+  let secondChunk :=
+    LeanAgent.Json.obj
+      [ ("id", LeanAgent.Json.str "chatcmpl-reasoning")
+      , ("model", LeanAgent.Json.str "repro-model")
+      , ("choices",
+          LeanAgent.Json.arr
+            #[LeanAgent.Json.obj
+              [ ("index", LeanAgent.Json.nat 0)
+              , ("delta",
+                  LeanAgent.Json.obj
+                    [ ("tool_calls",
+                        LeanAgent.Json.arr
+                          #[LeanAgent.Json.obj
+                            [ ("index", LeanAgent.Json.nat 0)
+                            , ("id", LeanAgent.Json.str "call_1")
+                            , ("type", LeanAgent.Json.str "function")
+                            , ("function",
+                                LeanAgent.Json.obj
+                                  [ ("name", LeanAgent.Json.str "read")
+                                  , ("arguments", LeanAgent.Json.str "{\"path\":\"README.md\"}")
+                                  ])
+                            ]])
+                    ])
+              , ("finish_reason", LeanAgent.Json.str "tool_calls")
+              ]])
+      ]
+  let raw :=
+    "data: " ++ firstChunk.compress ++ "\n\n" ++
+    "data: " ++ secondChunk.compress ++ "\n\n" ++
+    "data: [DONE]\n\n"
+  match LeanAgent.AI.Api.OpenAICompletions.parseStreamingEventStream
+      "openai-completions"
+      "openrouter"
+      "repro-model"
+      7
+      raw with
+  | .ok stream =>
+      assertTrue (stream.result.stopReason == .toolUse) "expected tool-use stop reason"
+      match LeanAgent.AI.contentToolCalls stream.result.content |>.toList with
+      | [call] =>
+          assertTrue (call.id == "call_1") "expected tool-call id"
+          assertTrue (call.thoughtSignature == some reasoningDetail.compress)
+            "expected reasoning detail to bind to the matching tool call"
+      | _ => fail "expected one parsed tool call"
+  | .error err => fail s!"expected reasoning-detail parse success: {err}"
+
+def testOpenAICompletionsContextReplaysReasoningDetails : IO Unit := do
+  let reasoningDetail :=
+    LeanAgent.Json.obj
+      [ ("type", LeanAgent.Json.str "reasoning.encrypted")
+      , ("id", LeanAgent.Json.str "call_1")
+      , ("data", LeanAgent.Json.str "encrypted-signature")
+      ]
+  let assistant : LeanAgent.AI.AssistantMessage :=
+    { content :=
+        #[ .toolCall
+            { id := "call_1"
+              name := "read"
+              arguments := LeanAgent.Json.obj [("path", LeanAgent.Json.str "README.md")]
+              thoughtSignature := some reasoningDetail.compress
+            }
+         ]
+      api := "openai-completions"
+      provider := "openrouter"
+      model := "repro-model"
+      stopReason := .toolUse
+      timestamp := 2
+    }
+  let payload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+    { openAICompletionsContextModel with
+      provider := "openrouter"
+      id := "repro-model"
+    }
+    { messages :=
+        #[ .user { content := #[LeanAgent.AI.text "Use the read tool"], timestamp := 1 }
+         , .assistant assistant
+         ]
+    }
+  match jsonArrayField? payload "messages" with
+  | some messages =>
+      match messages[1]? with
+      | some replayedAssistant =>
+          match jsonArrayField? replayedAssistant "reasoning_details" with
+          | some details =>
+              assertTrue (details == #[reasoningDetail])
+                "expected reasoning_details replay on assistant tool-call message"
+          | none => fail "expected reasoning_details array on replayed assistant message"
+      | none => fail "expected replayed assistant message"
+  | none => fail "expected OpenAI-compatible messages array"
+
+def testOpenAICompletionsContextUsesOpenRouterReasoningObject : IO Unit := do
+  let payload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+    { openAICompletionsContextModel with
+      provider := LeanAgent.Models.openRouterProviderId
+      id := "deepseek/deepseek-r1"
+      reasoning := true
+      thinkingFormat := some "openrouter"
+    }
+    { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }] }
+    { reasoning := some .high }
+  match jsonObjectField? payload "reasoning" with
+  | some reasoning =>
+      assertTrue (jsonStringField? reasoning "effort" == some "high")
+        "expected OpenRouter reasoning object effort"
+      assertTrue ((LeanAgent.Json.optVal? payload "reasoning_effort").isNone)
+        "expected OpenRouter payload to omit top-level reasoning_effort"
+  | none => fail "expected OpenRouter reasoning object"
+
+def testOpenAICompletionsContextUsesDeepSeekThinkingToggle : IO Unit := do
+  let enabledPayload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+    { openAICompletionsContextModel with
+      provider := LeanAgent.Models.deepSeekProviderId
+      id := "deepseek-v4-pro"
+      reasoning := true
+      supportsDeveloperRole := false
+      thinkingFormat := some "deepseek"
+    }
+    { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }] }
+    { reasoning := some .high }
+  let disabledPayload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+    { openAICompletionsContextModel with
+      provider := LeanAgent.Models.deepSeekProviderId
+      id := "deepseek-v4-pro"
+      reasoning := true
+      supportsDeveloperRole := false
+      thinkingFormat := some "deepseek"
+    }
+    { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }] }
+    { offThinkingEnabled := true }
+  match jsonObjectField? enabledPayload "thinking", jsonObjectField? disabledPayload "thinking" with
+  | some enabledThinking, some disabledThinking =>
+      assertTrue (jsonStringField? enabledThinking "type" == some "enabled")
+        "expected DeepSeek thinking enable marker"
+      assertTrue (jsonStringField? disabledThinking "type" == some "disabled")
+        "expected DeepSeek thinking disable marker"
+      assertTrue (LeanAgent.Json.optVal? enabledPayload "reasoning_effort" == some (LeanAgent.Json.str "high"))
+        "expected DeepSeek reasoning_effort when thinking is enabled"
+      assertTrue ((LeanAgent.Json.optVal? disabledPayload "reasoning_effort").isNone)
+        "expected no DeepSeek reasoning_effort when thinking is off"
+  | _, _ => fail "expected DeepSeek thinking payload objects"
+
+def testOpenAICompletionsContextUsesQwenThinkingFlags : IO Unit := do
+  let qwenPayload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+    { openAICompletionsContextModel with
+      provider := "local-vllm"
+      id := "Qwen/Qwen3-Coder"
+      reasoning := true
+      thinkingFormat := some "qwen"
+    }
+    { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }] }
+    { reasoning := some .high }
+  let qwenChatTemplatePayload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+    { openAICompletionsContextModel with
+      provider := "local-vllm"
+      id := "Qwen/Qwen3-Coder"
+      reasoning := true
+      thinkingFormat := some "qwen-chat-template"
+    }
+    { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }] }
+    { reasoning := some .high }
+  assertTrue (LeanAgent.Json.optVal? qwenPayload "enable_thinking" == some (LeanAgent.Json.bool true))
+    "expected qwen enable_thinking flag"
+  match jsonObjectField? qwenChatTemplatePayload "chat_template_kwargs" with
+  | some kwargs =>
+      assertTrue (LeanAgent.Json.optVal? kwargs "enable_thinking" == some (LeanAgent.Json.bool true))
+        "expected qwen chat-template thinking flag"
+      assertTrue (LeanAgent.Json.optVal? kwargs "preserve_thinking" == some (LeanAgent.Json.bool true))
+        "expected qwen chat-template preserve_thinking flag"
+  | none => fail "expected qwen chat_template_kwargs"
+
+def testOpenAICompletionsContextUsesConfigurableChatTemplateKwargs : IO Unit := do
+  let kwargs :=
+    LeanAgent.Json.obj
+      [ ("thinking", LeanAgent.Json.obj [("$var", LeanAgent.Json.str "thinking.enabled")])
+      , ("preserve_thinking", LeanAgent.Json.bool true)
+      , ("reasoning_effort",
+          LeanAgent.Json.obj
+            [ ("$var", LeanAgent.Json.str "thinking.effort")
+            , ("omitWhenOff", LeanAgent.Json.bool true)
+            ])
+      ]
+  let enabledPayload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+    { openAICompletionsContextModel with
+      provider := "local-vllm"
+      id := "unsloth/gpt-oss-120b-GGUF"
+      reasoning := true
+      thinkingFormat := some "chat-template"
+      chatTemplateKwargs := some kwargs
+    }
+    { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }] }
+    { reasoning := some .xhigh
+      reasoningEffortValue := some "max"
+    }
+  let disabledPayload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+    { openAICompletionsContextModel with
+      provider := "local-vllm"
+      id := "unsloth/gpt-oss-120b-GGUF"
+      reasoning := true
+      thinkingFormat := some "chat-template"
+      chatTemplateKwargs := some kwargs
+    }
+    { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }] }
+    { offReasoningEffortValue := some "none"
+      offThinkingEnabled := true
+    }
+  match jsonObjectField? enabledPayload "chat_template_kwargs", jsonObjectField? disabledPayload "chat_template_kwargs" with
+  | some enabledKwargs, some disabledKwargs =>
+      assertTrue (LeanAgent.Json.optVal? enabledKwargs "thinking" == some (LeanAgent.Json.bool true))
+        "expected configurable chat-template thinking enable"
+      assertTrue (LeanAgent.Json.optVal? enabledKwargs "preserve_thinking" == some (LeanAgent.Json.bool true))
+        "expected configurable chat-template static kwarg"
+      assertTrue (LeanAgent.Json.optVal? enabledKwargs "reasoning_effort" == some (LeanAgent.Json.str "max"))
+        "expected configurable chat-template mapped effort"
+      assertTrue (LeanAgent.Json.optVal? disabledKwargs "thinking" == some (LeanAgent.Json.bool false))
+        "expected configurable chat-template thinking disable"
+      assertTrue ((LeanAgent.Json.optVal? disabledKwargs "reasoning_effort").isNone)
+        "expected omitWhenOff to remove disabled effort kwarg"
+  | _, _ => fail "expected configurable chat_template_kwargs payloads"
+
+def testOpenAICompletionsContextUsesAntLingReasoningObject : IO Unit := do
+  let payload := LeanAgent.AI.Api.OpenAICompletions.requestToStreamingJsonWithContextOptions
+    { openAICompletionsContextModel with
+      provider := LeanAgent.Models.antLingProviderId
+      id := "Ring-2.6-1T"
+      reasoning := true
+      supportsStore := false
+      supportsDeveloperRole := false
+      thinkingFormat := some "ant-ling"
+    }
+    { systemPrompt := some "Follow instructions."
+      messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }]
+    }
+    { maxTokens := some 123
+      maxTokensField := "max_tokens"
+      reasoning := some .high
+      reasoningEffortValue := some "high"
+      supportsReasoningEffort := false
+      cacheRetention := some .long
+      supportsLongCacheRetention := false
+      sessionId := some "ant-ling-session"
+    }
+  assertTrue (LeanAgent.Json.optVal? payload "max_tokens" == some (LeanAgent.Json.nat 123))
+    "expected Ant Ling max_tokens field"
+  assertTrue ((LeanAgent.Json.optVal? payload "store").isNone)
+    "expected Ant Ling to omit store"
+  assertTrue ((LeanAgent.Json.optVal? payload "prompt_cache_key").isNone)
+    "expected Ant Ling to omit prompt cache key"
+  match jsonObjectField? payload "reasoning" with
+  | some reasoning =>
+      assertTrue (jsonStringField? reasoning "effort" == some "high")
+        "expected Ant Ling reasoning object"
+      assertTrue ((LeanAgent.Json.optVal? payload "reasoning_effort").isNone)
+        "expected Ant Ling to omit top-level reasoning_effort"
+  | none => fail "expected Ant Ling reasoning object"
+
 def testAnthropicMessagesRequestPayload : IO Unit := do
   let assistant : LeanAgent.AI.AssistantMessage :=
     { content :=
@@ -4791,16 +5213,27 @@ def testOpenAICompatibleProviderFamilyCatalog : IO Unit := do
   match LeanAgent.Models.ProviderCatalog.model? catalog LeanAgent.Models.antLingProviderId "Ring-2.6-1T" with
   | some model =>
       assertTrue model.reasoning "expected Ant Ling Ring reasoning metadata"
+      assertTrue (!model.compat.supportsStore) "expected Ant Ling store compat metadata"
+      assertTrue (!model.compat.supportsReasoningEffort) "expected Ant Ling reasoning-effort compat metadata"
+      assertTrue (model.compat.maxTokensField == "max_tokens") "expected Ant Ling max_tokens compat metadata"
+      assertTrue (!model.compat.supportsLongCacheRetention) "expected Ant Ling long-cache suppression"
       assertTrue ((LeanAgent.Models.thinkingLevelMapValue? model (.level .xhigh)) == some (some "xhigh"))
         "expected Ant Ling xhigh mapping"
   | none => fail "expected Ant Ling reasoning model"
   match LeanAgent.Models.ProviderCatalog.model? catalog LeanAgent.Models.zaiProviderId "glm-5.2" with
   | some model =>
+      assertTrue model.compat.supportsReasoningEffort "expected Z.AI GLM-5.2 reasoning-effort compat"
+      assertTrue model.compat.zaiToolStream "expected Z.AI GLM-5.2 tool-stream compat"
       assertTrue (LeanAgent.Models.thinkingLevelPayloadValueD model (.level .xhigh) "xhigh" == "max")
         "expected Z.AI xhigh mapping"
       assertTrue (!((LeanAgent.Models.getSupportedThinkingLevels model).contains (.level .minimal)))
         "expected Z.AI minimal reasoning to be suppressed"
   | none => fail "expected Z.AI reasoning model"
+  match LeanAgent.Models.ProviderCatalog.model? catalog LeanAgent.Models.zaiProviderId "glm-5.1" with
+  | some model =>
+      assertTrue (!model.compat.supportsReasoningEffort)
+        "expected Z.AI GLM-5.1 to disable reasoning_effort"
+  | none => fail "expected Z.AI GLM-5.1 model"
   match LeanAgent.Models.ProviderCatalog.providerByApiKeyEnv? catalog LeanAgent.Models.anthropicOAuthTokenEnv with
   | some provider =>
       assertTrue (provider.id == LeanAgent.Models.anthropicProviderId) "expected Anthropic OAuth token env"
@@ -4965,6 +5398,7 @@ def testDefaultModelsRegistersOpenAICompatibleFamily : IO Unit := do
   match ← collection.getModel? LeanAgent.Models.zaiCodingCNProviderId "glm-5.2" with
   | some model =>
       assertTrue (model.compat.thinkingFormat == some "zai") "expected Z.AI Coding CN thinking compat"
+      assertTrue model.compat.zaiToolStream "expected Z.AI Coding CN tool-stream compat"
       assertTrue (model.maxTokens == 131072) "expected Z.AI Coding CN max tokens"
   | none => fail "expected Z.AI Coding CN model in default runtime collection"
   match ← collection.getModel? LeanAgent.Models.kimiCodingProviderId LeanAgent.Models.kimiCodingDefaultModel with
@@ -12875,6 +13309,17 @@ def main : IO UInt32 := do
     testOpenAICompletionsIncludesEmptyToolsForToolHistory
     testOpenAICompletionsContextSerializesUserImages
     testOpenAICompletionsContextBatchesToolResultImages
+    testOpenAICompletionsContextReplaysThinkingAsText
+    testOpenAICompletionsContextAddsAnthropicCacheMarkers
+    testOpenAICompletionsContextStrictCompat
+    testOpenAICompletionsContextSetsZaiToolStream
+    testOpenAICompletionsParsesReasoningDetailsBeforeToolCall
+    testOpenAICompletionsContextReplaysReasoningDetails
+    testOpenAICompletionsContextUsesOpenRouterReasoningObject
+    testOpenAICompletionsContextUsesDeepSeekThinkingToggle
+    testOpenAICompletionsContextUsesQwenThinkingFlags
+    testOpenAICompletionsContextUsesConfigurableChatTemplateKwargs
+    testOpenAICompletionsContextUsesAntLingReasoningObject
     testOpenAICompletionsSerializesOptions
     testOpenAICompletionsUsesMappedReasoningEffort
     testOpenAICompletionsCompatSuppressesUnsupportedFields

@@ -12,8 +12,13 @@ namespace LeanAgent.Models
 structure ModelCompat where
   supportsStore : Bool := true
   supportsDeveloperRole : Bool := true
+  requiresThinkingAsText : Bool := false
   requiresReasoningContentOnAssistantMessages : Bool := false
   thinkingFormat : Option String := none
+  chatTemplateKwargs : Option Lean.Json := none
+  zaiToolStream : Bool := false
+  supportsStrictMode : Bool := true
+  cacheControlFormat : Option String := none
   supportsReasoningEffort : Bool := true
   maxTokensField : String := "max_tokens"
   supportsLongCacheRetention : Bool := true
@@ -23,7 +28,7 @@ structure ModelCompat where
   supportsCacheControlOnTools : Bool := true
   allowEmptySignature : Bool := false
   forceAdaptiveThinking : Bool := false
-deriving Repr, BEq
+deriving BEq
 
 structure ModelInfo where
   id : String
@@ -41,7 +46,7 @@ structure ModelInfo where
   supportsJsonOutput : Bool := true
   headers : LeanAgent.AI.Auth.ProviderHeaders := #[]
   compat : ModelCompat := {}
-deriving Repr, BEq
+deriving BEq
 
 def ModelInfo.qualifiedId (model : ModelInfo) : String :=
   model.provider ++ "/" ++ model.id
