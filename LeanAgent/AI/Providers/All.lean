@@ -44,8 +44,51 @@ def cloudflareProviderIds : Array String :=
    , LeanAgent.AI.Providers.CloudflareWorkersAI.providerId
    ]
 
+def catalogProviderIds : Array String :=
+  #[ LeanAgent.Models.deepSeekProviderId
+   , LeanAgent.Models.openAIProviderId
+   , LeanAgent.Models.openAICodexProviderId
+   , LeanAgent.Models.githubCopilotProviderId
+   , LeanAgent.Models.openRouterProviderId
+   , LeanAgent.Models.groqProviderId
+   , LeanAgent.Models.xaiProviderId
+   , LeanAgent.Models.cerebrasProviderId
+   , LeanAgent.Models.togetherProviderId
+   , LeanAgent.Models.fireworksProviderId
+   , LeanAgent.Models.antLingProviderId
+   , LeanAgent.Models.huggingFaceProviderId
+   , LeanAgent.Models.moonshotAIProviderId
+   , LeanAgent.Models.moonshotAICNProviderId
+   , LeanAgent.Models.nvidiaProviderId
+   , LeanAgent.Models.xiaomiProviderId
+   , LeanAgent.Models.xiaomiTokenPlanAMSProviderId
+   , LeanAgent.Models.xiaomiTokenPlanCNProviderId
+   , LeanAgent.Models.xiaomiTokenPlanSGPProviderId
+   , LeanAgent.Models.zaiProviderId
+   , LeanAgent.Models.zaiCodingCNProviderId
+   , LeanAgent.Models.anthropicProviderId
+   , LeanAgent.Models.kimiCodingProviderId
+   , LeanAgent.Models.minimaxProviderId
+   , LeanAgent.Models.minimaxCNProviderId
+   , LeanAgent.Models.vercelAIGatewayProviderId
+   , LeanAgent.Models.opencodeProviderId
+   , LeanAgent.Models.opencodeGoProviderId
+   , LeanAgent.Models.googleProviderId
+   , LeanAgent.Models.googleVertexProviderId
+   , LeanAgent.Models.mistralProviderId
+   , LeanAgent.Models.amazonBedrockProviderId
+   , LeanAgent.Models.azureOpenAIResponsesProviderId
+   ]
+
+def appendUniqueProviderIds (base extra : Array String) : Array String :=
+  extra.foldl
+    (fun ids providerId =>
+      if ids.contains providerId then ids else ids.push providerId)
+    base
+
 def getBuiltinProviders : Array String :=
-  LeanAgent.Models.defaultCatalog.providers.map (fun provider => provider.id) ++ cloudflareProviderIds
+  appendUniqueProviderIds catalogProviderIds cloudflareProviderIds
+
 
 def cloudflareModels : Array LeanAgent.Models.ModelInfo :=
   LeanAgent.AI.Providers.CloudflareAIGateway.models ++
