@@ -671,6 +671,135 @@ def testOpenAICompletionsParsesStreamingToolCall : IO Unit := do
         "expected tool-call delta"
   | .error err => fail s!"streaming tool parse failed: {err}"
 
+def testOpenAICompletionsCoalescesStreamingToolCallsByStableIndex : IO Unit := do
+  let raw := String.intercalate "\n"
+    [ "data: {\"id\":\"chatcmpl-kimi-bad-stream\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"functions.read:0\",\"type\":\"function\",\"function\":{\"name\":\"read\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}"
+    , ""
+    , "data: {\"id\":\"chatcmpl-kimi-bad-stream\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"chatcmpl-tool-a\",\"type\":\"function\",\"function\":{\"arguments\":\"{\\\"path\\\":\\\"README\"}}]},\"finish_reason\":null}]}"
+    , ""
+    , "data: {\"id\":\"chatcmpl-kimi-bad-stream\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"chatcmpl-tool-b\",\"type\":\"function\",\"function\":{\"arguments\":\".md\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{\"reasoning_tokens\":0}}}"
+    , ""
+    , "data: [DONE]"
+    , ""
+    ]
+  match LeanAgent.AI.Api.OpenAICompletions.parseStreamingEventStream
+    "openai-completions" "openai" "gpt-4o-mini" 10 raw with
+  | .ok stream =>
+      let toolEventIndexes := stream.events.foldl (init := #[]) fun acc event =>
+        match event with
+        | .toolCallStart index _ => acc.push index
+        | .toolCallDelta index _ _ => acc.push index
+        | .toolCallEnd index _ _ => acc.push index
+        | _ => acc
+      assertTrue (stream.result.stopReason == .toolUse) "expected tool-use stop reason"
+      assertTrue (toolEventIndexes.all fun index => index == 0)
+        "expected stable index tool deltas to stay on one content index"
+      match LeanAgent.AI.contentToolCalls stream.result.content |>.toList with
+      | [call] =>
+          assertTrue (call.id == "functions.read:0") "expected original tool id to win"
+          assertTrue (call.name == "read") "expected original tool name to win"
+          assertTrue
+            (LeanAgent.Json.optVal? call.arguments "path" == some (LeanAgent.Json.str "README.md"))
+            "expected coalesced tool call arguments"
+      | _ => fail "expected one coalesced tool call"
+  | .error err => fail s!"stable-index streaming tool parse failed: {err}"
+
+def testOpenAICompletionsAccumulatesMixedParallelToolDeltas : IO Unit := do
+  let raw := String.intercalate "\n"
+    [ "data: {\"id\":\"chatcmpl-mixed-deltas\",\"choices\":[{\"delta\":{\"content\":\"answer 1\",\"reasoning_content\":\"think 1\",\"tool_calls\":[{\"index\":0,\"id\":\"tc_read_initial\",\"type\":\"function\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"path\\\":\\\"README\"}},{\"index\":1,\"id\":\"tc_grep_initial\",\"type\":\"function\",\"function\":{\"name\":\"grep\",\"arguments\":\"{\\\"pattern\\\":\\\"TODO\"}},{\"id\":\"tc_list_no_index\",\"type\":\"function\",\"function\":{\"name\":\"list\",\"arguments\":\"{\\\"path\\\":\\\"packages\"}},{\"id\":\"tc_write_no_index\",\"type\":\"function\",\"function\":{\"name\":\"write\",\"arguments\":\"{\\\"path\\\":\\\"out\"}}]},\"finish_reason\":null}]}"
+    , ""
+    , "data: {\"id\":\"chatcmpl-mixed-deltas\",\"choices\":[{\"delta\":{\"content\":\" answer 2\",\"tool_calls\":[{\"index\":1,\"id\":\"tc_grep_changed\",\"type\":\"function\",\"function\":{\"arguments\":\"\\\",\\\"path\\\":\\\"src\"}},{\"id\":\"tc_write_no_index\",\"type\":\"function\",\"function\":{\"arguments\":\".txt\\\",\\\"content\\\":\\\"ok\\\"}\"}},{\"id\":\"tc_list_no_index\",\"type\":\"function\",\"function\":{\"arguments\":\"/ai\\\"}\"}}]},\"finish_reason\":null}]}"
+    , ""
+    , "data: {\"id\":\"chatcmpl-mixed-deltas\",\"choices\":[{\"delta\":{\"content\":\"\\n\",\"reasoning_content\":\" think 2\",\"tool_calls\":[{\"index\":0,\"id\":\"tc_read_changed\",\"type\":\"function\",\"function\":{\"arguments\":\".md\\\"}\"}},{\"index\":1,\"type\":\"function\",\"function\":{\"arguments\":\"\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":8,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{\"reasoning_tokens\":2}}}"
+    , ""
+    , "data: [DONE]"
+    , ""
+    ]
+  match LeanAgent.AI.Api.OpenAICompletions.parseStreamingEventStream
+    "openai-completions" "openai" "gpt-4o-mini" 10 raw with
+  | .ok stream =>
+      let eventTypes := stream.events.foldl (init := #[]) fun acc event =>
+        acc.push <|
+          match event with
+          | .textStart _ _ => "text_start"
+          | .textDelta _ _ _ => "text_delta"
+          | .textEnd _ _ _ => "text_end"
+          | .thinkingStart _ _ => "thinking_start"
+          | .thinkingDelta _ _ _ => "thinking_delta"
+          | .thinkingEnd _ _ _ => "thinking_end"
+          | .toolCallStart _ _ => "toolcall_start"
+          | .toolCallDelta _ _ _ => "toolcall_delta"
+          | .toolCallEnd _ _ _ => "toolcall_end"
+          | .start _ => "start"
+          | .done _ _ => "completion"
+          | .error _ _ => "error"
+      let toolEventsByContentIndex := stream.events.foldl (init := #[]) fun acc event =>
+        let pushToolEvent (index : Nat) (label : String) :=
+          let existing := acc.findSome? fun (entryIndex, labels) =>
+            if entryIndex == index then some labels else none
+          let labels := existing.getD #[]
+          let next := (labels.push label)
+          if acc.any fun (entryIndex, _) => entryIndex == index then
+            acc.map fun entry => if entry.fst == index then (index, next) else entry
+          else
+            acc.push (index, next)
+        match event with
+        | .toolCallStart index _ =>
+            pushToolEvent index "toolcall_start"
+        | .toolCallDelta index _ _ =>
+            pushToolEvent index "toolcall_delta"
+        | .toolCallEnd index _ _ =>
+            pushToolEvent index "toolcall_end"
+        | _ => acc
+      let toolEventsFor (index : Nat) : Array String :=
+        (toolEventsByContentIndex.findSome? fun (entryIndex, labels) =>
+          if entryIndex == index then some labels else none).getD #[]
+      assertTrue (stream.result.stopReason == .toolUse) "expected mixed-delta tool-use stop reason"
+      assertTrue ((eventTypes.filter (fun value => value == "text_start")).size == 1) "expected one text start"
+      assertTrue ((eventTypes.filter (fun value => value == "text_delta")).size == 3) "expected three text deltas"
+      assertTrue ((eventTypes.filter (fun value => value == "thinking_start")).size == 1) "expected one thinking start"
+      assertTrue ((eventTypes.filter (fun value => value == "thinking_delta")).size == 2) "expected two thinking deltas"
+      assertTrue ((eventTypes.filter (fun value => value == "toolcall_start")).size == 4) "expected four toolcall starts"
+      assertTrue ((eventTypes.filter (fun value => value == "toolcall_end")).size == 4) "expected four toolcall ends"
+      assertTrue (toolEventsFor 2 == #["toolcall_start", "toolcall_delta", "toolcall_delta", "toolcall_end"])
+        "expected read tool call events to stay grouped"
+      assertTrue (toolEventsFor 3 == #["toolcall_start", "toolcall_delta", "toolcall_delta", "toolcall_delta", "toolcall_end"])
+        "expected grep tool call events to stay grouped"
+      assertTrue (toolEventsFor 4 == #["toolcall_start", "toolcall_delta", "toolcall_delta", "toolcall_end"])
+        "expected list tool call events to stay grouped"
+      assertTrue (toolEventsFor 5 == #["toolcall_start", "toolcall_delta", "toolcall_delta", "toolcall_end"])
+        "expected write tool call events to stay grouped"
+      assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "answer 1 answer 2\n\nthink 1 think 2")
+        "expected mixed deltas to preserve final text and thinking blocks"
+      match stream.result.content.toList with
+      | [ .text text, .thinking thinking, .toolCall readCall, .toolCall grepCall, .toolCall listCall, .toolCall writeCall ] =>
+          assertTrue (text.text == "answer 1 answer 2\n") "expected accumulated text content"
+          assertTrue (thinking.thinking == "think 1 think 2") "expected accumulated thinking content"
+          assertTrue (thinking.thinkingSignature == some "reasoning_content")
+            "expected mixed thinking signature"
+          assertTrue (readCall.id == "tc_read_initial") "expected read tool id"
+          assertTrue (readCall.name == "read") "expected read tool name"
+          assertTrue (grepCall.id == "tc_grep_initial") "expected grep tool id"
+          assertTrue (grepCall.name == "grep") "expected grep tool name"
+          assertTrue (listCall.id == "tc_list_no_index") "expected list tool id"
+          assertTrue (listCall.name == "list") "expected list tool name"
+          assertTrue (writeCall.id == "tc_write_no_index") "expected write tool id"
+          assertTrue (writeCall.name == "write") "expected write tool name"
+          assertTrue (LeanAgent.Json.optVal? readCall.arguments "path" == some (LeanAgent.Json.str "README.md"))
+            "expected read call arguments"
+          assertTrue (LeanAgent.Json.optVal? grepCall.arguments "pattern" == some (LeanAgent.Json.str "TODO"))
+            "expected grep pattern argument"
+          assertTrue (LeanAgent.Json.optVal? grepCall.arguments "path" == some (LeanAgent.Json.str "src"))
+            "expected grep path argument"
+          assertTrue (LeanAgent.Json.optVal? listCall.arguments "path" == some (LeanAgent.Json.str "packages/ai"))
+            "expected list call arguments"
+          assertTrue (LeanAgent.Json.optVal? writeCall.arguments "path" == some (LeanAgent.Json.str "out.txt"))
+            "expected write path argument"
+          assertTrue (LeanAgent.Json.optVal? writeCall.arguments "content" == some (LeanAgent.Json.str "ok"))
+            "expected write content argument"
+      | _ => fail "expected mixed delta content ordering"
+  | .error err => fail s!"mixed-delta streaming parse failed: {err}"
+
 def testOpenAICompletionsParsesStreamingThinking : IO Unit := do
   let raw := String.intercalate "\n"
     [ "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"think\"},\"finish_reason\":null}]}"
@@ -5624,6 +5753,17 @@ def testOpenCodeCatalogMaxTokensCompat : IO Unit := do
       assertTrue (model.compat.thinkingFormat == some "openrouter")
         "expected OpenRouter Kimi K2.6 thinking format metadata"
   | none => fail "expected OpenRouter Kimi K2.6 model"
+  match LeanAgent.Models.ProviderCatalog.model? catalog LeanAgent.Models.openRouterProviderId "moonshotai/kimi-k2.7-code" with
+  | some model =>
+      assertTrue (!model.compat.supportsDeveloperRole)
+        "expected OpenRouter Kimi K2.7 Code developer-role compat metadata"
+      assertTrue (!model.compat.requiresReasoningContentOnAssistantMessages)
+        "expected OpenRouter Kimi K2.7 Code to omit reasoning-content replay requirement"
+      assertTrue (model.compat.thinkingFormat == some "openrouter")
+        "expected OpenRouter Kimi K2.7 Code thinking format metadata"
+      assertTrue (model.maxTokens == 16384)
+        "expected OpenRouter Kimi K2.7 Code output limit"
+  | none => fail "expected OpenRouter Kimi K2.7 Code model"
   for providerId in
     #[ LeanAgent.Models.xiaomiProviderId
      , LeanAgent.Models.xiaomiTokenPlanAMSProviderId
@@ -10235,6 +10375,61 @@ def httpServerScript : String :=
     , "            self.end_headers()"
     , "            self.wfile.write(payload)"
     , "            return"
+    , "        if self.path == '/response-model-openai/chat/completions':"
+    , "            request = json.loads(body)"
+    , "            requested = request.get('model') or ''"
+    , "            if requested == 'openrouter/auto':"
+    , "                first_model = 'anthropic/claude-opus-4.8'"
+    , "                second_model = 'anthropic/claude-opus-4.8'"
+    , "            elif requested == 'openrouter/same':"
+    , "                first_model = requested"
+    , "                second_model = requested"
+    , "            else:"
+    , "                first_model = None"
+    , "                second_model = ''"
+    , "            first_chunk = {'id': 'chatcmpl_response_model', 'choices': [{'delta': {'content': 'hi'}, 'finish_reason': None}]}"
+    , "            second_chunk = {'id': 'chatcmpl_response_model', 'choices': [{'delta': {'content': '!'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 1, 'completion_tokens': 2}}"
+    , "            if first_model is not None:"
+    , "                first_chunk['model'] = first_model"
+    , "            if second_model is not None:"
+    , "                second_chunk['model'] = second_model"
+    , "            payload = ("
+    , "                'data: ' + json.dumps(first_chunk) + '\\n\\n' +"
+    , "                'data: ' + json.dumps(second_chunk) + '\\n\\n' +"
+    , "                'data: [DONE]\\n\\n'"
+    , "            ).encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'text/event-stream')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
+    , "        if self.path == '/finish-reason-openai/chat/completions':"
+    , "            request = json.loads(body)"
+    , "            requested = request.get('model') or ''"
+    , "            if requested == 'openrouter/network-error':"
+    , "                chunks = ["
+    , "                    {'id': 'chatcmpl-finish-error', 'choices': [{'delta': {'content': 'partial'}, 'finish_reason': None}]},"
+    , "                    {'id': 'chatcmpl-finish-error', 'choices': [{'delta': {}, 'finish_reason': 'network_error'}], 'usage': {'prompt_tokens': 1, 'completion_tokens': 1, 'prompt_tokens_details': {'cached_tokens': 0}, 'completion_tokens_details': {'reasoning_tokens': 0}}},"
+    , "                ]"
+    , "            elif requested == 'openrouter/null-chunks':"
+    , "                chunks = ["
+    , "                    None,"
+    , "                    {'id': 'chatcmpl-null-chunks', 'choices': [{'delta': {'content': 'OK'}, 'finish_reason': None}]},"
+    , "                    {'id': 'chatcmpl-null-chunks', 'choices': [{'delta': {}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 3, 'completion_tokens': 1, 'prompt_tokens_details': {'cached_tokens': 0}, 'completion_tokens_details': {'reasoning_tokens': 0}}},"
+    , "                ]"
+    , "            else:"
+    , "                chunks = ["
+    , "                    {'id': 'chatcmpl-missing-finish', 'choices': [{'delta': {'content': 'partial'}, 'finish_reason': None}]},"
+    , "                    {'id': 'chatcmpl-missing-finish', 'choices': [{'delta': {'content': ' answer'}, 'finish_reason': None}]},"
+    , "                ]"
+    , "            payload = (''.join(['data: ' + json.dumps(chunk) + '\\n\\n' for chunk in chunks]) + 'data: [DONE]\\n\\n').encode('utf-8')"
+    , "            self.send_response(200)"
+    , "            self.send_header('Content-Type', 'text/event-stream')"
+    , "            self.send_header('Content-Length', str(len(payload)))"
+    , "            self.end_headers()"
+    , "            self.wfile.write(payload)"
+    , "            return"
     , "        if self.path == '/openai-typed/chat/completions':"
     , "            request = json.loads(body)"
     , "            tool_choice = request.get('tool_choice')"
@@ -12130,6 +12325,124 @@ def testOpenAICompatibleStreamsUsesStreamingRuntime : IO Unit := do
     assertTrue (LeanAgent.AI.contentPlainText stream.result.content == "streamed") "expected runtime streamed text"
     assertTrue (stream.result.api == "openai-completions") "expected runtime api"
     assertTrue (stream.result.provider == LeanAgent.Models.deepSeekProviderId) "expected runtime provider"
+
+def openAICompatibleResponseModelTestModel (id baseUrl : String) : LeanAgent.Models.ModelInfo :=
+  { id := id
+    name := "OpenAI-compatible response-model test"
+    provider := LeanAgent.Models.openRouterProviderId
+    api := "openai-completions"
+    baseUrl := baseUrl
+    contextWindow := 200000
+    maxTokens := 8192
+    reasoning := false
+    input := #["text"]
+  }
+
+def testOpenAICompatibleCompleteSimpleSurfacesRoutedResponseModel : IO Unit := do
+  let port := 18137
+  withHttpServer port do
+    let model := openAICompatibleResponseModelTestModel
+      "openrouter/auto"
+      s!"http://127.0.0.1:{port}/response-model-openai"
+    let result ← LeanAgent.AI.Compat.completeSimple
+      model
+      { messages := #[.user { content := #[LeanAgent.AI.text "hi"], timestamp := 1 }] }
+      { apiKey := some "test-key" }
+    assertTrue (result.model == "openrouter/auto")
+      "expected requested router model to stay pinned on result"
+    assertTrue (result.responseModel == some "anthropic/claude-opus-4.8")
+      "expected routed chunk.model to surface on responseModel"
+    assertTrue (result.provider == LeanAgent.Models.openRouterProviderId)
+      "expected OpenRouter provider to be preserved"
+    assertTrue (result.stopReason == .stop)
+      "expected routed response-model stream to stop normally"
+
+def testOpenAICompatibleCompleteSimpleOmitsMatchingResponseModel : IO Unit := do
+  let port := 18138
+  withHttpServer port do
+    let model := openAICompatibleResponseModelTestModel
+      "openrouter/same"
+      s!"http://127.0.0.1:{port}/response-model-openai"
+    let result ← LeanAgent.AI.Compat.completeSimple
+      model
+      { messages := #[.user { content := #[LeanAgent.AI.text "hi"], timestamp := 1 }] }
+      { apiKey := some "test-key" }
+    assertTrue (result.model == "openrouter/same")
+      "expected same-id response-model test to preserve requested model"
+    assertTrue (result.responseModel == none)
+      "expected same chunk.model to be omitted from responseModel"
+
+def testOpenAICompatibleCompleteSimpleIgnoresEmptyOrMissingResponseModel : IO Unit := do
+  let port := 18139
+  withHttpServer port do
+    let model := openAICompatibleResponseModelTestModel
+      "openrouter/missing"
+      s!"http://127.0.0.1:{port}/response-model-openai"
+    let result ← LeanAgent.AI.Compat.completeSimple
+      model
+      { messages := #[.user { content := #[LeanAgent.AI.text "hi"], timestamp := 1 }] }
+      { apiKey := some "test-key" }
+    assertTrue (result.model == "openrouter/missing")
+      "expected missing-model response-model test to preserve requested model"
+    assertTrue (result.responseModel == none)
+      "expected empty or missing chunk.model to leave responseModel unset"
+    assertTrue (LeanAgent.AI.contentPlainText result.content == "hi!")
+      "expected response-model runtime to preserve streamed content"
+
+def testOpenAICompatibleCompleteSimpleMapsUnknownFinishReasonToError : IO Unit := do
+  let port := 18140
+  withHttpServer port do
+    let model := openAICompatibleResponseModelTestModel
+      "openrouter/network-error"
+      s!"http://127.0.0.1:{port}/finish-reason-openai"
+    let result ← LeanAgent.AI.Compat.completeSimple
+      model
+      { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }] }
+      { apiKey := some "test-key" }
+    assertTrue (result.stopReason == .error)
+      "expected non-standard provider finish_reason to map to error"
+    assertTrue (result.errorMessage == some "Provider finish_reason: network_error")
+      "expected provider finish_reason error message"
+    assertTrue (LeanAgent.AI.contentPlainText result.content == "partial")
+      "expected partial content to survive finish_reason error mapping"
+
+def testOpenAICompatibleCompleteSimpleIgnoresNullStreamChunks : IO Unit := do
+  let port := 18141
+  withHttpServer port do
+    let model := openAICompatibleResponseModelTestModel
+      "openrouter/null-chunks"
+      s!"http://127.0.0.1:{port}/finish-reason-openai"
+    let result ← LeanAgent.AI.Compat.completeSimple
+      model
+      { messages := #[.user { content := #[LeanAgent.AI.text "Reply with exactly OK"], timestamp := 1 }] }
+      { apiKey := some "test-key" }
+    assertTrue (result.stopReason == .stop)
+      "expected null stream chunks to be ignored"
+    assertTrue (result.errorMessage.isNone)
+      "expected null stream chunks not to set an error message"
+    assertTrue (result.responseId == some "chatcmpl-null-chunks")
+      "expected null stream chunks path to preserve response id"
+    assertTrue (result.usage.totalTokens == 4)
+      "expected null stream chunks path to preserve usage"
+    assertTrue (LeanAgent.AI.contentPlainText result.content == "OK")
+      "expected null stream chunks path to preserve streamed content"
+
+def testOpenAICompatibleCompleteSimpleErrorsWhenFinishReasonIsMissing : IO Unit := do
+  let port := 18142
+  withHttpServer port do
+    let model := openAICompatibleResponseModelTestModel
+      "openrouter/missing-finish-reason"
+      s!"http://127.0.0.1:{port}/finish-reason-openai"
+    let result ← LeanAgent.AI.Compat.completeSimple
+      model
+      { messages := #[.user { content := #[LeanAgent.AI.text "Reply with a longer sentence"], timestamp := 1 }] }
+      { apiKey := some "test-key" }
+    assertTrue (result.stopReason == .error)
+      "expected missing finish_reason to become an error"
+    assertTrue (result.errorMessage == some "Stream ended without finish_reason")
+      "expected missing finish_reason error message"
+    assertTrue (LeanAgent.AI.contentPlainText result.content == "partial answer")
+      "expected missing finish_reason path to preserve partial content"
 
 def testOpenAICompatibleStreamsApplyModelCost : IO Unit := do
   let port := 18094
@@ -14194,6 +14507,8 @@ def main : IO UInt32 := do
     testOpenAICompletionsStreamingPayloadCanOmitUsageOption
     testOpenAICompletionsParsesStreamingText
     testOpenAICompletionsParsesStreamingToolCall
+    testOpenAICompletionsCoalescesStreamingToolCallsByStableIndex
+    testOpenAICompletionsAccumulatesMixedParallelToolDeltas
     testOpenAICompletionsParsesStreamingThinking
     testOpenAICompletionsParsesOpenCodeGoStreamingReasoning
     testOpenAICompletionsParsesGenericStreamingReasoningField
@@ -14441,6 +14756,12 @@ def main : IO UInt32 := do
     testOpenAICompletionsStreamWithOptionsLocal
     testCompatOpenAICompletionsTypedLegacyAliasLocal
     testOpenAICompatibleStreamsUsesStreamingRuntime
+    testOpenAICompatibleCompleteSimpleSurfacesRoutedResponseModel
+    testOpenAICompatibleCompleteSimpleOmitsMatchingResponseModel
+    testOpenAICompatibleCompleteSimpleIgnoresEmptyOrMissingResponseModel
+    testOpenAICompatibleCompleteSimpleMapsUnknownFinishReasonToError
+    testOpenAICompatibleCompleteSimpleIgnoresNullStreamChunks
+    testOpenAICompatibleCompleteSimpleErrorsWhenFinishReasonIsMissing
     testOpenAICompatibleStreamsApplyModelCost
     testOpenAICompatibleStreamsDetectOpenRouterDeveloperRole
     testOpenAICompatibleStreamsDetectMoonshotCompatDefaults

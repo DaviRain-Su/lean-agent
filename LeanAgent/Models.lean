@@ -569,6 +569,20 @@ def openRouterKimiK26 : ModelInfo :=
     input := #["text", "image"]
   }
 
+def openRouterKimiK27Code : ModelInfo :=
+  { id := "moonshotai/kimi-k2.7-code"
+    name := "MoonshotAI: Kimi K2.7 Code"
+    provider := openRouterProviderId
+    api := "openai-completions"
+    baseUrl := openRouterBaseUrl
+    cost := cost 0.74 3.5 0.15 0.0
+    contextWindow := 262144
+    maxTokens := 16384
+    reasoning := true
+    compat := { openRouterCompat with supportsDeveloperRole := false }
+    input := #["text", "image"]
+  }
+
 def groqGptOss120B : ModelInfo :=
   { id := groqDefaultModel
     name := "GPT OSS 120B"
@@ -1768,7 +1782,7 @@ def openRouterProviderInfo : ProviderInfo :=
     baseUrl := openRouterBaseUrl
     apiKeyEnv := openRouterApiKeyEnv
     defaultModel := openRouterDefaultModel
-    models := #[openRouterGptOss120B, openRouterKimiK26]
+    models := #[openRouterGptOss120B, openRouterKimiK26, openRouterKimiK27Code]
   }
 
 def groqProviderInfo : ProviderInfo :=

@@ -1577,6 +1577,14 @@ def natFieldD (json : Lean.Json) (key : String) (default : Nat := 0) : Nat :=
       | .error _ => default
   | none => default
 
+def natField? (json : Lean.Json) (key : String) : Option Nat :=
+  match LeanAgent.Json.optVal? json key with
+  | some value =>
+      match value.getNat? with
+      | .ok number => some number
+      | .error _ => none
+  | none => none
+
 def objField? (json : Lean.Json) (key : String) : Option Lean.Json :=
   match LeanAgent.Json.optVal? json key with
   | some value =>
@@ -1635,12 +1643,14 @@ structure StreamingState where
   thinking : String := ""
   thinkingSignature : Option String := none
   toolStates : Array StreamingToolState := #[]
+  toolIndexAliases : Array (Nat × Nat) := #[]
   pendingReasoningDetails : Array (String × String) := #[]
   order : Array StreamBlockKey := #[]
   responseId : Option String := none
   responseModel : Option String := none
   usage : Option LeanAgent.ProviderUsage := none
   finishReason : Option String := none
+  sawFinishReason : Bool := false
 deriving BEq
 
 inductive ParsedStreamEvent where
@@ -1690,6 +1700,20 @@ def upsertPendingReasoningDetail
   else
     pending.push (id, signature)
 
+def toolIndexAlias? (aliases : Array (Nat × Nat)) (providerIndex : Nat) : Option Nat :=
+  aliases.findSome? fun entry => if entry.fst == providerIndex then some entry.snd else none
+
+def upsertToolIndexAlias
+    (aliases : Array (Nat × Nat))
+    (providerIndex internalIndex : Nat) : Array (Nat × Nat) :=
+  if aliases.any fun entry => entry.fst == providerIndex then
+    aliases.map fun entry => if entry.fst == providerIndex then (providerIndex, internalIndex) else entry
+  else
+    aliases.push (providerIndex, internalIndex)
+
+def syntheticToolStreamIndex (ordinal : Nat) : Nat :=
+  1000000 + ordinal
+
 def pendingReasoningDetail?
     (pending : Array (String × String))
     (id : String) : Option String :=
@@ -1733,10 +1757,31 @@ def contentFromState (state : StreamingState) : Array LeanAgent.AI.ContentBlock 
         (findToolState? state.toolStates streamIndex).map fun toolState =>
           LeanAgent.AI.ContentBlock.toolCall (toolCallFromStatePartial toolState)
 
+def openAICompatibleStopReasonAndError
+    (finishReason : Option String)
+    (sawFinishReason : Bool) : LeanAgent.AI.StopReason × Option String :=
+  match finishReason with
+  | some "stop" => (.stop, none)
+  | some "end" => (.stop, none)
+  | some "length" => (.length, none)
+  | some "function_call" => (.toolUse, none)
+  | some "tool_calls" => (.toolUse, none)
+  | some "tool_use" => (.toolUse, none)
+  | some "content_filter" => (.error, some "Provider finish_reason: content_filter")
+  | some "network_error" => (.error, some "Provider finish_reason: network_error")
+  | some reason => (.error, some s!"Provider finish_reason: {reason}")
+  | none =>
+      if sawFinishReason then
+        (.stop, none)
+      else
+        (.error, some "Stream ended without finish_reason")
+
 def messageFromStreamingState
     (api provider model : String)
     (timestamp : Nat)
     (state : StreamingState) : LeanAgent.AI.AssistantMessage :=
+  let (stopReason, errorMessage) :=
+    openAICompatibleStopReasonAndError state.finishReason state.sawFinishReason
   { content := contentFromState state
     api := api
     provider := provider
@@ -1744,7 +1789,8 @@ def messageFromStreamingState
     responseId := state.responseId
     responseModel := state.responseModel
     usage := (state.usage.map LeanAgent.AI.usageFromLegacyProviderUsage).getD LeanAgent.AI.Usage.empty
-    stopReason := LeanAgent.AI.stopReasonFromLegacyFinish state.finishReason (!state.toolStates.isEmpty)
+    stopReason := stopReason
+    errorMessage := errorMessage
     timestamp := timestamp
   }
 
@@ -1841,14 +1887,34 @@ def applyThinkingDelta
     ({ state with thinking := state.thinking ++ delta, thinkingSignature := some signature },
       events.push (.thinkingDelta index delta))
 
-def toolDeltaStreamIndex (toolDelta : Lean.Json) (fallback : Nat) : Nat :=
-  natFieldD toolDelta "index" fallback
+def resolvedToolDeltaStreamIndex
+    (state : StreamingState)
+    (toolDelta : Lean.Json) : Nat × Array (Nat × Nat) :=
+  let toolId := optionalStringField toolDelta "id"
+  match natField? toolDelta "index" with
+  | some providerIndex =>
+      match toolIndexAlias? state.toolIndexAliases providerIndex with
+      | some internalIndex => (internalIndex, state.toolIndexAliases)
+      | none =>
+          match findToolState? state.toolStates providerIndex with
+          | some _ => (providerIndex, state.toolIndexAliases)
+          | none =>
+              match toolId.bind (findToolStateById? state.toolStates) with
+              | some existing =>
+                  let aliases :=
+                    upsertToolIndexAlias state.toolIndexAliases providerIndex existing.streamIndex
+                  (existing.streamIndex, aliases)
+              | none => (providerIndex, state.toolIndexAliases)
+  | none =>
+      match toolId.bind (findToolStateById? state.toolStates) with
+      | some existing => (existing.streamIndex, state.toolIndexAliases)
+      | none => (syntheticToolStreamIndex state.toolStates.size, state.toolIndexAliases)
 
 def applyToolDelta
     (state : StreamingState)
     (events : Array ParsedStreamEvent)
     (toolDelta : Lean.Json) : StreamingState × Array ParsedStreamEvent :=
-  let streamIndex := toolDeltaStreamIndex toolDelta state.toolStates.size
+  let (streamIndex, toolIndexAliases) := resolvedToolDeltaStreamIndex state toolDelta
   let key := StreamBlockKey.tool streamIndex
   let (state, contentIndex, created) := ensureBlock state key
   let current := (findToolState? state.toolStates streamIndex).getD { streamIndex := streamIndex }
@@ -1887,6 +1953,7 @@ def applyToolDelta
   let state :=
     { state with
       toolStates := upsertToolState state.toolStates next
+      toolIndexAliases := toolIndexAliases
       pendingReasoningDetails := pendingReasoningDetails
     }
   let events := if created then events.push (.toolCallStart contentIndex) else events
@@ -1946,7 +2013,18 @@ def applyStreamingChunk
         match optionalStringField choice "finish_reason" with
         | some value => some value
         | none => state.finishReason
-      let state := { state with responseId := responseId, responseModel := responseModel, usage := usage, finishReason := finishReason }
+      let sawFinishReason :=
+        match optionalStringField choice "finish_reason" with
+        | some _ => true
+        | none => state.sawFinishReason
+      let state :=
+        { state with
+          responseId := responseId
+          responseModel := responseModel
+          usage := usage
+          finishReason := finishReason
+          sawFinishReason := sawFinishReason
+        }
       match optionalObjectField choice "delta" with
       | none => (state, events)
       | some delta =>
