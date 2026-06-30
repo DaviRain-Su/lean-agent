@@ -5335,6 +5335,33 @@ def testTogetherCatalogReasoningEffortCompat : IO Unit := do
   let rendered := LeanAgent.Models.renderCatalog catalog
   assertTrue (rendered.contains "together/openai/gpt-oss-20b")
     "expected Together GPT OSS 20B model in catalog"
+
+def testOpenCodeCatalogMaxTokensCompat : IO Unit := do
+  let catalog := LeanAgent.Models.defaultCatalog
+  match LeanAgent.Models.ProviderCatalog.model? catalog LeanAgent.Models.opencodeProviderId "big-pickle" with
+  | some model =>
+      assertTrue (model.compat.maxTokensField == "max_tokens")
+        "expected OpenCode big-pickle max_tokens compat metadata"
+  | none => fail "expected OpenCode big-pickle model"
+  match LeanAgent.Models.ProviderCatalog.model? catalog LeanAgent.Models.opencodeProviderId "kimi-k2.6" with
+  | some model =>
+      assertTrue (model.compat.maxTokensField == "max_tokens")
+        "expected OpenCode Kimi K2.6 max_tokens compat metadata"
+      assertTrue (!model.compat.supportsLongCacheRetention)
+        "expected OpenCode Kimi K2.6 long-cache suppression"
+  | none => fail "expected OpenCode Kimi K2.6 model"
+  match LeanAgent.Models.ProviderCatalog.model? catalog LeanAgent.Models.opencodeGoProviderId "glm-5.2" with
+  | some model =>
+      assertTrue (model.compat.maxTokensField == "max_tokens")
+        "expected OpenCode Go GLM-5.2 max_tokens compat metadata"
+  | none => fail "expected OpenCode Go GLM-5.2 model"
+  match LeanAgent.Models.ProviderCatalog.model? catalog LeanAgent.Models.opencodeGoProviderId "qwen3.6-plus" with
+  | some model =>
+      assertTrue (model.compat.maxTokensField == "max_tokens")
+        "expected OpenCode Go Qwen3.6 Plus max_tokens compat metadata"
+      assertTrue (model.compat.thinkingFormat == some "qwen")
+        "expected OpenCode Go Qwen3.6 Plus qwen thinking compat"
+  | none => fail "expected OpenCode Go Qwen3.6 Plus model"
   assertTrue (LeanAgent.Models.kimiCodingModels.size == 3) "expected generated Kimi Coding model catalog"
   assertTrue (LeanAgent.Models.minimaxModels.size == 3) "expected generated MiniMax model catalog"
   assertTrue (LeanAgent.Models.minimaxCNModels.size == 3) "expected generated MiniMax CN model catalog"
@@ -12070,6 +12097,71 @@ def testOpenAICompatibleStreamsDetectTogetherReasoningOnlyCompat : IO Unit := do
         | none => fail "expected Together reasoning-only fallback tool function"
     | none => fail "expected Together reasoning-only fallback tools array"
 
+def testOpenAICompatibleStreamsUseOpenCodeMaxTokensCompat : IO Unit := do
+  let port := 18117
+  withHttpServer port do
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := "big-pickle"
+        name := "Big Pickle"
+        provider := LeanAgent.Models.opencodeProviderId
+        api := "openai-completions"
+        baseUrl := s!"http://127.0.0.1:{port}/runtime-stream-openai"
+        contextWindow := 200000
+        maxTokens := 32000
+        reasoning := true
+        compat := LeanAgent.Models.opencodeOpenAICompat
+        input := #["text"]
+      }
+    let payloadRef ← IO.mkRef Lean.Json.null
+    let _ ← LeanAgent.AI.Providers.Streams.openAICompatibleStreams.streamSimple
+      model
+      { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }] }
+      { apiKey := some "test-key"
+        maxTokens := some 123
+        onPayload := some fun payload _ => do
+          payloadRef.set payload
+          pure none
+      }
+    let payload ← payloadRef.get
+    assertTrue (LeanAgent.Json.optVal? payload "max_tokens" == some (LeanAgent.Json.nat 123))
+      "expected OpenCode compat metadata to use max_tokens"
+    assertTrue ((LeanAgent.Json.optVal? payload "max_completion_tokens").isNone)
+      "expected OpenCode compat metadata to omit max_completion_tokens"
+
+def testOpenAICompatibleStreamsUseOpenCodeGoMaxTokensCompat : IO Unit := do
+  let port := 18118
+  withHttpServer port do
+    let model : LeanAgent.Models.ModelInfo :=
+      { id := "qwen3.6-plus"
+        name := "Qwen3.6 Plus"
+        provider := LeanAgent.Models.opencodeGoProviderId
+        api := "openai-completions"
+        baseUrl := s!"http://127.0.0.1:{port}/runtime-stream-openai"
+        contextWindow := 1000000
+        maxTokens := 65536
+        reasoning := true
+        compat := LeanAgent.Models.opencodeQwenCompat
+        input := #["text", "image"]
+      }
+    let payloadRef ← IO.mkRef Lean.Json.null
+    let _ ← LeanAgent.AI.Providers.Streams.openAICompatibleStreams.streamSimple
+      model
+      { messages := #[.user { content := #[LeanAgent.AI.text "Hi"], timestamp := 1 }] }
+      { apiKey := some "test-key"
+        maxTokens := some 123
+        reasoning := some .high
+        onPayload := some fun payload _ => do
+          payloadRef.set payload
+          pure none
+      }
+    let payload ← payloadRef.get
+    assertTrue (LeanAgent.Json.optVal? payload "max_tokens" == some (LeanAgent.Json.nat 123))
+      "expected OpenCode Go compat metadata to use max_tokens"
+    assertTrue ((LeanAgent.Json.optVal? payload "max_completion_tokens").isNone)
+      "expected OpenCode Go compat metadata to omit max_completion_tokens"
+    assertTrue (LeanAgent.Json.optVal? payload "enable_thinking" == some (LeanAgent.Json.bool true))
+      "expected OpenCode Go qwen compat metadata to preserve qwen thinking payload"
+
 def testOpenAICompatibleStreamsClampMaxTokens : IO Unit := do
   let port := 18091
   withHttpServer port do
@@ -13766,6 +13858,7 @@ def main : IO UInt32 := do
     testModelCatalogDeepSeekDefaults
     testOpenAICompatibleProviderFamilyCatalog
     testTogetherCatalogReasoningEffortCompat
+    testOpenCodeCatalogMaxTokensCompat
     testDefaultModelsRegistersOpenAICompatibleFamily
     testOpenAICompatibleProviderFactoriesMatchCatalog
     testBuiltinModelsGitHubCopilotOAuthFiltersModelList
@@ -13923,6 +14016,8 @@ def main : IO UInt32 := do
     testOpenAICompatibleStreamsDetectMoonshotCompatDefaults
     testOpenAICompatibleStreamsUseTogetherGptOssReasoningEffort
     testOpenAICompatibleStreamsDetectTogetherReasoningOnlyCompat
+    testOpenAICompatibleStreamsUseOpenCodeMaxTokensCompat
+    testOpenAICompatibleStreamsUseOpenCodeGoMaxTokensCompat
     testOpenAICompatibleStreamsClampMaxTokens
     testCloudflareAIGatewayOpenAICompatibleHeaderAuthLocal
     testOpenRouterImagesRequestPayload
