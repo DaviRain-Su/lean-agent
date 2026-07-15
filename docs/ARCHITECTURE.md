@@ -4,7 +4,8 @@ LeanAgent follows Pi's package boundaries while using Lean modules instead of
 TypeScript packages. `vendor/pi` is the comparison target.
 
 AI-module parity is tracked in [`docs/AI_PARITY.md`](AI_PARITY.md). Update that
-ledger whenever `packages/ai` coverage changes.
+ledger whenever `packages/ai` coverage changes. Agent-runtime parity with
+`packages/agent` is tracked in [`docs/AGENT_PARITY.md`](AGENT_PARITY.md).
 
 ## Module Map
 

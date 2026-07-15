@@ -12,7 +12,8 @@ terminology. Do not edit files under `vendor/pi` as part of LeanAgent
 implementation work.
 
 AI-module parity is tracked in [`docs/AI_PARITY.md`](AI_PARITY.md). That ledger
-must be updated before marking any Pi `packages/ai` area complete.
+must be updated before marking any Pi `packages/ai` area complete. Agent-runtime
+parity is tracked in [`docs/AGENT_PARITY.md`](AGENT_PARITY.md).
 
 ## Product Goal
 

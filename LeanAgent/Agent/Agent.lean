@@ -31,7 +31,8 @@ Stateful agent wrapper. All methods return an updated `Agent` value
 -/
 structure Agent where
   state : AgentState
-  listeners : Array (AgentEvent → Option AbortSignal → IO Unit) := #[]
+  listeners : Array AgentListener := #[]
+  nextListenerId : Nat := 0
   steeringQueue : PendingMessageQueue := { mode := .oneAtATime }
   followUpQueue : PendingMessageQueue := { mode := .oneAtATime }
   convertToLlm : AgentMessage → Option LeanAgent.AI.Message := defaultConvertToLlm
@@ -111,9 +112,24 @@ def Agent.create (options : AgentOptions := default) : Agent :=
 -- Agent methods (functional update)
 ----------------------------------------------------------------------------
 
-/-- Subscribe a listener to agent events. -/
-def Agent.subscribe (agent : Agent) (listener : AgentEvent → Option AbortSignal → IO Unit) : Agent :=
-  { agent with listeners := agent.listeners.push listener }
+/--
+Subscribe a listener to agent events. Returns the updated agent and a handle
+for `unsubscribe` (Pi `subscribe` → disposer).
+-/
+def Agent.subscribe
+    (agent : Agent)
+    (listener : AgentEvent → Option AbortSignal → IO Unit) :
+    Agent × ListenerHandle :=
+  let handle : ListenerHandle := { id := agent.nextListenerId }
+  let entry : AgentListener := { id := handle.id, callback := listener }
+  ({ agent with
+      listeners := agent.listeners.push entry
+      nextListenerId := agent.nextListenerId + 1
+    }, handle)
+
+/-- Remove a previously registered listener by handle. -/
+def Agent.unsubscribe (agent : Agent) (handle : ListenerHandle) : Agent :=
+  { agent with listeners := agent.listeners.filter fun l => l.id != handle.id }
 
 /-- Add a steering message to the queue. -/
 def Agent.steer (agent : Agent) (message : AgentMessage) : Agent :=
@@ -179,36 +195,76 @@ def modelThinkingLevelToOption (level : LeanAgent.AI.ModelThinkingLevel) : Optio
   | .off => none
   | .level l => some l
 
-/-- Create an AgentLoopConfig from the current agent configuration. -/
-def Agent.createLoopConfig (agent : Agent) (skipInitialSteeringPoll : Bool) : AgentLoopConfig :=
-  { model := agent.state.model
-    convertToLlm := agent.convertToLlm
-    transformContext := agent.transformContext
-    getApiKey := agent.getApiKey
-    onPayload := agent.onPayload
-    onResponse := agent.onResponse
-    beforeToolCall := agent.beforeToolCall
-    afterToolCall := agent.afterToolCall
-    shouldStopAfterTurn := none
-    prepareNextTurn := agent.prepareNextTurn
-    getSteeringMessages :=
-      if skipInitialSteeringPoll then
-        none
-      else
+/--
+Drain steering messages from the live agent ref, writing the reduced queue back.
+Matches Pi's mutable `steeringQueue.drain()` semantics.
+-/
+def Agent.drainSteeringMessages (agentRef : IO.Ref Agent) : IO (Array AgentMessage) := do
+  let current ← agentRef.get
+  let (msgs, nextQueue) := current.steeringQueue.drain
+  agentRef.set { current with steeringQueue := nextQueue }
+  pure msgs
+
+/--
+Drain follow-up messages from the live agent ref, writing the reduced queue back.
+Matches Pi's mutable `followUpQueue.drain()` semantics.
+-/
+def Agent.drainFollowUpMessages (agentRef : IO.Ref Agent) : IO (Array AgentMessage) := do
+  let current ← agentRef.get
+  let (msgs, nextQueue) := current.followUpQueue.drain
+  agentRef.set { current with followUpQueue := nextQueue }
+  pure msgs
+
+/--
+Create an AgentLoopConfig bound to a live `IO.Ref Agent`.
+
+Queue drains must update the ref so subsequent polls and the returned agent keep
+the reduced queues (Pi class fields are mutable; Lean values are not).
+
+When `skipInitialSteeringPoll` is true, the first steering poll returns `[]`
+and later polls drain normally — matching Pi `createLoopConfig({ skipInitialSteeringPoll })`.
+-/
+def Agent.createLoopConfig
+    (agentRef : IO.Ref Agent)
+    (skipInitialSteeringPoll : Bool) : IO AgentLoopConfig := do
+  let agent ← agentRef.get
+  let skipRef ← IO.mkRef skipInitialSteeringPoll
+  pure
+    { model := agent.state.model
+      convertToLlm := agent.convertToLlm
+      transformContext := agent.transformContext
+      getApiKey := agent.getApiKey
+      onPayload := agent.onPayload
+      onResponse := agent.onResponse
+      beforeToolCall := agent.beforeToolCall
+      afterToolCall := agent.afterToolCall
+      shouldStopAfterTurn := none
+      prepareNextTurn := agent.prepareNextTurn
+      getSteeringMessages :=
         some (do
-          let (msgs, _) := agent.steeringQueue.drain
-          pure msgs)
-    getFollowUpMessages :=
-      some (do
-        let (msgs, _) := agent.followUpQueue.drain
-        pure msgs)
-    toolExecution := agent.toolExecution
-    reasoning := modelThinkingLevelToOption agent.state.thinkingLevel
-    thinkingBudgets := agent.thinkingBudgets
-    transport := some agent.transport
-    sessionId := agent.sessionId
-    maxRetryDelayMs := agent.maxRetryDelayMs
-  }
+          let skip ← skipRef.get
+          if skip then
+            skipRef.set false
+            pure #[]
+          else
+            Agent.drainSteeringMessages agentRef)
+      getFollowUpMessages :=
+        some (Agent.drainFollowUpMessages agentRef)
+      toolExecution := agent.toolExecution
+      reasoning := modelThinkingLevelToOption agent.state.thinkingLevel
+      thinkingBudgets := agent.thinkingBudgets
+      transport := some agent.transport
+      sessionId := agent.sessionId
+      maxRetryDelayMs := agent.maxRetryDelayMs
+    }
+
+/-- True when a run is currently active (Pi rejects nested `prompt`/`continue`). -/
+def Agent.isBusy (agent : Agent) : Bool :=
+  agent.activeRun.isSome || agent.state.isStreaming
+
+def Agent.throwIfBusy (agent : Agent) (message : String) : IO Unit := do
+  if agent.isBusy then
+    throw (IO.userError message)
 
 /-- Process an agent event: update state and notify listeners. -/
 def Agent.processEvents (agent : Agent) (event : AgentEvent) : IO Agent := do
@@ -249,7 +305,7 @@ def Agent.processEvents (agent : Agent) (event : AgentEvent) : IO Agent := do
         pure (some { isAborted := pure aborted, message := run.abortMessage } : Option AbortSignal)
     | none => pure none
   for listener in agent.listeners do
-    listener event signal
+    listener.callback event signal
   pure agent
 
 /-- Handle a run failure: set error message and clean up. -/
@@ -303,20 +359,33 @@ def Agent.runWithLifecycle
 ----------------------------------------------------------------------------
 
 /--
-Send an array of AgentMessages as prompts to the agent.
+Run the agent loop with the given prompt messages, bound to a live agent ref
+so steering/follow-up drains persist.
 -/
-def Agent.promptMessages (agent : Agent) (messages : Array AgentMessage) : IO Agent :=
+def Agent.runPromptMessages
+    (agent : Agent)
+    (messages : Array AgentMessage)
+    (skipInitialSteeringPoll : Bool := false) : IO Agent := do
+  agent.throwIfBusy
+    "Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion."
   agent.runWithLifecycle fun runningAgent signal => do
-    let context := runningAgent.createContextSnapshot
-    let config := runningAgent.createLoopConfig false
     let agentRef ← IO.mkRef runningAgent
+    let context := runningAgent.createContextSnapshot
+    let config ← Agent.createLoopConfig agentRef skipInitialSteeringPoll
+    let streamFn := runningAgent.streamFn
     let emit : AgentEventSink := fun event => do
       let current ← agentRef.get
       let updated ← current.processEvents event
       agentRef.set updated
-    let finalMessages ← runAgentLoop messages context config emit signal runningAgent.streamFn
+    let finalMessages ← runAgentLoop messages context config emit signal streamFn
     let current ← agentRef.get
     pure { current with state := { current.state with messages := finalMessages } }
+
+/--
+Send an array of AgentMessages as prompts to the agent.
+-/
+def Agent.promptMessages (agent : Agent) (messages : Array AgentMessage) : IO Agent :=
+  Agent.runPromptMessages agent messages false
 
 /--
 Send a text prompt to the agent. Normalizes the input to an AgentMessage
@@ -332,28 +401,52 @@ def Agent.prompt (agent : Agent) (input : String) : IO Agent := do
   Agent.promptMessages agent #[agentMsg]
 
 /--
-Continue the agent from its current state. Validates that the last message
-is not an assistant message.
+Send a single AgentMessage prompt (Pi `prompt(message)` overload).
+-/
+def Agent.promptMessage (agent : Agent) (message : AgentMessage) : IO Agent :=
+  Agent.promptMessages agent #[message]
+
+/--
+Continue the agent from its current state.
+
+Aligns with Pi `Agent.continue`:
+- empty transcript → error
+- last message is assistant → drain one-at-a-time/all steering, else follow-ups;
+  if both empty → error
+- otherwise continue the loop from the current transcript
 -/
 def Agent.continue (agent : Agent) : IO Agent := do
-  -- Validate last message
+  agent.throwIfBusy
+    "Agent is already processing. Wait for completion before continuing."
   match agent.state.messages.back? with
   | none => throw (IO.userError "cannot continue an empty session")
-  | some lastMsg =>
-      match lastMsg with
-      | .ofMessage (.assistant _) =>
-          throw (IO.userError "cannot continue after an assistant message; add a new prompt first")
-      | _ => pure ()
-  agent.runWithLifecycle fun runningAgent signal => do
-    let context := runningAgent.createContextSnapshot
-    let config := runningAgent.createLoopConfig true
-    let agentRef ← IO.mkRef runningAgent
-    let emit : AgentEventSink := fun event => do
-      let current ← agentRef.get
-      let updated ← current.processEvents event
-      agentRef.set updated
-    let finalMessages ← runAgentLoopContinue context config emit signal runningAgent.streamFn
-    let current ← agentRef.get
-    pure { current with state := { current.state with messages := finalMessages } }
+  | some (.ofMessage (.assistant _)) =>
+      -- Pi: resume from assistant tail via queued steering, then follow-ups.
+      let agentRef ← IO.mkRef agent
+      let steering ← Agent.drainSteeringMessages agentRef
+      if !steering.isEmpty then
+        let agent ← agentRef.get
+        Agent.runPromptMessages agent steering (skipInitialSteeringPoll := true)
+      else
+        let followUps ← Agent.drainFollowUpMessages agentRef
+        if followUps.isEmpty then
+          throw (IO.userError
+            "cannot continue after an assistant message; add a new prompt first")
+        else
+          let agent ← agentRef.get
+          Agent.runPromptMessages agent followUps false
+  | some _ =>
+      agent.runWithLifecycle fun runningAgent signal => do
+        let agentRef ← IO.mkRef runningAgent
+        let context := runningAgent.createContextSnapshot
+        let config ← Agent.createLoopConfig agentRef false
+        let streamFn := runningAgent.streamFn
+        let emit : AgentEventSink := fun event => do
+          let current ← agentRef.get
+          let updated ← current.processEvents event
+          agentRef.set updated
+        let finalMessages ← runAgentLoopContinue context config emit signal streamFn
+        let current ← agentRef.get
+        pure { current with state := { current.state with messages := finalMessages } }
 
 end LeanAgent.Agent

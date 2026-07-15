@@ -67,6 +67,9 @@ Reference and planning docs:
 - [Product roadmap](docs/PRD.md)
 - [Architecture notes](docs/ARCHITECTURE.md)
 - [AI parity ledger](docs/AI_PARITY.md)
+- [Agent parity ledger](docs/AGENT_PARITY.md)
+- [Full Agent port goal (long-running)](docs/goals/AGENT_FULL_PARITY_GOAL.md)
+- [Full Agent port implementer prompt](docs/goals/AGENT_FULL_PARITY_PROMPT.md)
 
 ## Quick Start
 

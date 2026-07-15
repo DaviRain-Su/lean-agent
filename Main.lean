@@ -307,7 +307,7 @@ def sinkForRuntime (runtime : Runtime) (repl : Bool) : LeanAgent.Agent.AgentEven
 
 def runtimeWithEventSink (runtime : Runtime) (repl : Bool) : Runtime :=
   let sink := sinkForRuntime runtime repl
-  let agent := runtime.session.agent.subscribe (fun event _ => sink event)
+  let (agent, _handle) := runtime.session.agent.subscribe (fun event _ => sink event)
   { runtime with session := { runtime.session with agent := agent } }
 
 def persistSessionAgent

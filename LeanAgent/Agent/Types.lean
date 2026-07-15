@@ -135,6 +135,13 @@ instance : Inhabited AgentState where
           baseUrl := ""
         }
     }
+
+/-- Opaque handle returned by `Agent.subscribe` for later `unsubscribe`. -/
+structure ListenerHandle where
+  id : Nat
+deriving BEq, Repr
+
+----------------------------------------------------------------------------
 -- AgentEvent
 ----------------------------------------------------------------------------
 
@@ -155,6 +162,11 @@ inductive AgentEvent where
   | toolExecutionEnd (toolCallId : String) (toolName : String) (result : AgentToolResult) (isError : Bool)
 
 abbrev AgentEventSink := AgentEvent → IO Unit
+
+/-- Registered agent event listener with stable id (Pi unsubscribe handle). -/
+structure AgentListener where
+  id : Nat
+  callback : AgentEvent → Option LeanAgent.AI.Util.Abort.AbortSignal → IO Unit
 
 ----------------------------------------------------------------------------
 -- Hook context types

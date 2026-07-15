@@ -10450,6 +10450,660 @@ def testAgentSessionRejectsAssistantContinue : IO Unit := do
       pure true
   assertTrue failed "assistant-final session should not continue"
 
+/-- Mock streamFn that returns a stop assistant message with the given text. -/
+def mockStopStreamFn (text : String) : LeanAgent.Agent.StreamFn :=
+  fun model _ _ => do
+    let timestamp ← IO.monoMsNow
+    let message : LeanAgent.AI.AssistantMessage :=
+      { content := #[.text { text := text }]
+        api := model.api
+        provider := model.provider
+        model := model.id
+        stopReason := .stop
+        timestamp := timestamp
+      }
+    pure { events := #[.done .stop message], finalResult := message }
+
+def fakeAgentModelInfo : LeanAgent.Models.ModelInfo :=
+  { id := "fake", name := "fake", provider := "fake", api := "fake", baseUrl := "" }
+
+def agentUserMessage (text : String) (timestamp : Nat) : LeanAgent.Agent.AgentMessage :=
+  .ofMessage (.user { content := #[.text { text := text }], timestamp := timestamp })
+
+def agentAssistantMessage (text : String) (timestamp : Nat) : LeanAgent.Agent.AgentMessage :=
+  .ofMessage (.assistant
+    { content := #[.text { text := text }]
+      api := "fake"
+      provider := "fake"
+      model := "fake"
+      stopReason := .stop
+      timestamp := timestamp
+    })
+
+def agentMessagePlainText : LeanAgent.Agent.AgentMessage → Option String
+  | .ofMessage (.user m) => some (LeanAgent.AI.contentPlainText m.content)
+  | .ofMessage (.assistant m) => some (LeanAgent.AI.contentPlainText m.content)
+  | .ofMessage (.toolResult m) => some (LeanAgent.AI.contentPlainText m.content)
+  | .custom _ content _ _ => some (LeanAgent.AI.contentPlainText content)
+
+/-- PendingMessageQueue drain modes match Pi one-at-a-time / all. -/
+def testAgentPendingMessageQueueDrainModes : IO Unit := do
+  let ts := 1
+  let m1 := agentUserMessage "one" ts
+  let m2 := agentUserMessage "two" ts
+  let m3 := agentUserMessage "three" ts
+  let oneAtATime : LeanAgent.Agent.PendingMessageQueue :=
+    { mode := .oneAtATime, messages := #[m1, m2, m3] }
+  let (first, rest) := oneAtATime.drain
+  assertTrue (first.size == 1) "one-at-a-time should drain one message"
+  assertTrue (agentMessagePlainText first[0]! == some "one") "one-at-a-time drains head first"
+  assertTrue (rest.messages.size == 2) "one-at-a-time leaves remaining messages"
+  let allMode : LeanAgent.Agent.PendingMessageQueue :=
+    { mode := .all, messages := #[m1, m2, m3] }
+  let (allMsgs, cleared) := allMode.drain
+  assertTrue (allMsgs.size == 3) "all mode drains every message"
+  assertTrue cleared.messages.isEmpty "all mode empties the queue"
+
+/-- Steer/followUp queue on the agent without entering the transcript. -/
+def testAgentSteerAndFollowUpQueueOnly : IO Unit := do
+  let agent := LeanAgent.Agent.Agent.create
+    { initialState := { systemPrompt := "", model := fakeAgentModelInfo } }
+  let agent := agent.steer (agentUserMessage "steering" 1)
+  let agent := agent.followUp (agentUserMessage "follow-up" 2)
+  assertTrue agent.hasQueuedMessages "queued messages should be reported"
+  assertTrue agent.state.messages.isEmpty "queued messages must not enter transcript until drained"
+  assertTrue (agent.steeringQueue.messages.size == 1) "steering queue size"
+  assertTrue (agent.followUpQueue.messages.size == 1) "follow-up queue size"
+
+/--
+createLoopConfig drains write back through the agent ref (Pi mutable queue parity).
+-/
+def testAgentLoopConfigDrainUpdatesAgentRef : IO Unit := do
+  let agent := LeanAgent.Agent.Agent.create
+    { initialState := { systemPrompt := "", model := fakeAgentModelInfo }
+      steeringMode := .oneAtATime
+    }
+  let agent :=
+    agent.steer (agentUserMessage "s1" 1)
+      |>.steer (agentUserMessage "s2" 2)
+      |>.followUp (agentUserMessage "f1" 3)
+  let agentRef ← IO.mkRef agent
+  let config ← LeanAgent.Agent.Agent.createLoopConfig agentRef false
+  let steering1 ← config.getSteeringMessages.getD (pure #[])
+  assertTrue (steering1.size == 1) "first steering poll drains one message"
+  assertTrue (agentMessagePlainText steering1[0]! == some "s1") "first drained steering is s1"
+  let after1 ← agentRef.get
+  assertTrue (after1.steeringQueue.messages.size == 1) "steering queue retains s2 after drain"
+  let steering2 ← config.getSteeringMessages.getD (pure #[])
+  assertTrue (agentMessagePlainText steering2[0]! == some "s2") "second poll drains s2"
+  let after2 ← agentRef.get
+  assertTrue after2.steeringQueue.messages.isEmpty "steering queue empty after second drain"
+  let followUps ← config.getFollowUpMessages.getD (pure #[])
+  assertTrue (followUps.size == 1) "follow-up drain returns queued message"
+  let afterFollow ← agentRef.get
+  assertTrue afterFollow.followUpQueue.messages.isEmpty "follow-up queue emptied by drain"
+
+/-- skipInitialSteeringPoll skips only the first poll, then drains normally. -/
+def testAgentLoopConfigSkipInitialSteeringPoll : IO Unit := do
+  let agent := LeanAgent.Agent.Agent.create
+    { initialState := { systemPrompt := "", model := fakeAgentModelInfo }
+      steeringMode := .oneAtATime
+    }
+  let agent := agent.steer (agentUserMessage "queued" 1)
+  let agentRef ← IO.mkRef agent
+  let config ← LeanAgent.Agent.Agent.createLoopConfig agentRef true
+  let first ← config.getSteeringMessages.getD (pure #[])
+  assertTrue first.isEmpty "first poll is skipped"
+  let stillQueued ← agentRef.get
+  assertTrue (stillQueued.steeringQueue.messages.size == 1) "skip must not drain the queue"
+  let second ← config.getSteeringMessages.getD (pure #[])
+  assertTrue (second.size == 1) "second poll drains after skip"
+  assertTrue (agentMessagePlainText second[0]! == some "queued") "drained message text"
+
+/-- continue() after assistant drains one-at-a-time steering across turns (Pi agent.test.ts). -/
+def testAgentContinueOneAtATimeSteeringFromAssistantTail : IO Unit := do
+  let responseCount ← IO.mkRef (0 : Nat)
+  let streamFn : LeanAgent.Agent.StreamFn := fun model _ _ => do
+    let n ← responseCount.modifyGet fun c => (c + 1, c + 1)
+    let timestamp ← IO.monoMsNow
+    let message : LeanAgent.AI.AssistantMessage :=
+      { content := #[.text { text := s!"Processed {n}" }]
+        api := model.api
+        provider := model.provider
+        model := model.id
+        stopReason := .stop
+        timestamp := timestamp
+      }
+    pure { events := #[.done .stop message], finalResult := message }
+  let agent := LeanAgent.Agent.Agent.create
+    { initialState :=
+        { systemPrompt := ""
+          model := fakeAgentModelInfo
+          messages :=
+            #[ agentUserMessage "Initial" 1
+             , agentAssistantMessage "Initial response" 2
+             ]
+        }
+      streamFn := streamFn
+      steeringMode := .oneAtATime
+    }
+  let agent :=
+    agent.steer (agentUserMessage "Steering 1" 3)
+      |>.steer (agentUserMessage "Steering 2" 4)
+  let agent ← agent.continue
+  let count ← responseCount.get
+  assertTrue (count == 2) s!"expected two assistant turns for one-at-a-time steering, got {count}"
+  assertTrue agent.steeringQueue.messages.isEmpty "steering queue should be empty after continue"
+  let recent := agent.state.messages.extract (agent.state.messages.size - 4) agent.state.messages.size
+  assertTrue (recent.size == 4) "expected four trailing messages"
+  assertTrue (agentMessagePlainText recent[0]! == some "Steering 1") "first resumed user is Steering 1"
+  assertTrue (agentMessagePlainText recent[1]! == some "Processed 1") "first assistant response"
+  assertTrue (agentMessagePlainText recent[2]! == some "Steering 2") "second resumed user is Steering 2"
+  assertTrue (agentMessagePlainText recent[3]! == some "Processed 2") "second assistant response"
+
+/-- continue() after assistant processes queued follow-ups (Pi agent.test.ts). -/
+def testAgentContinueFollowUpFromAssistantTail : IO Unit := do
+  let agent := LeanAgent.Agent.Agent.create
+    { initialState :=
+        { systemPrompt := ""
+          model := fakeAgentModelInfo
+          messages :=
+            #[ agentUserMessage "Initial" 1
+             , agentAssistantMessage "Initial response" 2
+             ]
+        }
+      streamFn := mockStopStreamFn "Processed"
+    }
+  let agent := agent.followUp (agentUserMessage "Queued follow-up" 3)
+  let agent ← agent.continue
+  assertTrue agent.followUpQueue.messages.isEmpty "follow-up queue drained"
+  let hasFollowUp :=
+    agent.state.messages.any fun msg => agentMessagePlainText msg == some "Queued follow-up"
+  assertTrue hasFollowUp "follow-up user message should enter the transcript"
+  match agent.state.messages.back? with
+  | some msg =>
+      assertTrue (agentMessagePlainText msg == some "Processed") "final message is assistant reply"
+  | none => fail "expected non-empty transcript after continue"
+
+----------------------------------------------------------------------------
+-- Agent loop offline parity (Pi agent-loop.test.ts + agent.test.ts)
+----------------------------------------------------------------------------
+
+def makeEchoTool
+    (executed : IO.Ref (Array String))
+    (terminateValue? : Option String := none) :
+    LeanAgent.Agent.AgentTool :=
+  { name := "echo"
+    label := "Echo"
+    description := "Echo tool"
+    parameters := LeanAgent.Json.obj []
+    execute := fun _toolCallId args _signal _onUpdate => do
+      let value :=
+        match LeanAgent.Json.optVal? args "value" with
+        | some (.str s) => s
+        | _ => args.compress
+      executed.modify (fun xs => xs.push value)
+      pure
+        { content := #[.text { text := s!"echoed: {value}" }]
+          details := some (LeanAgent.Json.obj [("value", LeanAgent.Json.str value)])
+          terminate :=
+            match terminateValue? with
+            | some t => value == t
+            | none => false
+        }
+  }
+
+def assistantToolUseMessage
+    (toolCalls : Array LeanAgent.AI.ToolCall)
+    (model : LeanAgent.Models.ModelInfo)
+    (timestamp : Nat) : LeanAgent.AI.AssistantMessage :=
+  { content := toolCalls.map fun call => .toolCall call
+    api := model.api
+    provider := model.provider
+    model := model.id
+    stopReason := .toolUse
+    timestamp := timestamp
+  }
+
+def assistantStopMessage
+    (text : String)
+    (model : LeanAgent.Models.ModelInfo)
+    (timestamp : Nat) : LeanAgent.AI.AssistantMessage :=
+  { content := #[.text { text := text }]
+    api := model.api
+    provider := model.provider
+    model := model.id
+    stopReason := .stop
+    timestamp := timestamp
+  }
+
+/-- Scripted multi-turn streamFn driven by call index (shipped StreamFn type). -/
+def scriptedStreamFn
+    (callIndex : IO.Ref Nat)
+    (script : Nat → LeanAgent.Models.ModelInfo → IO LeanAgent.AI.AssistantMessage)
+    (onCall : Option (Nat → LeanAgent.AI.Context → IO Unit) := none) :
+    LeanAgent.Agent.StreamFn :=
+  fun model context _options => do
+    let n ← callIndex.modifyGet fun c => (c, c + 1)
+    match onCall with
+    | some hook => hook n context
+    | none => pure ()
+    let message ← script n model
+    pure
+      { events := #[.done message.stopReason message]
+        finalResult := message
+      }
+
+def silentAgentEventSink : LeanAgent.Agent.AgentEventSink := fun _ => pure ()
+
+/-- Pi: tool calls and results end-to-end offline through shipped runAgentLoop. -/
+def testAgentLoopToolCallThenFinalTurn : IO Unit := do
+  let executed ← IO.mkRef (#[ ] : Array String)
+  let tool := makeEchoTool executed
+  let callIndex ← IO.mkRef (0 : Nat)
+  let streamFn :=
+    scriptedStreamFn callIndex fun n model => do
+      let ts ← IO.monoMsNow
+      if n == 0 then
+        pure
+          (assistantToolUseMessage
+            #[{ id := "tool-1", name := "echo", arguments := LeanAgent.Json.obj [("value", LeanAgent.Json.str "hello")] }]
+            model ts)
+      else
+        pure (assistantStopMessage "done" model ts)
+  let context : LeanAgent.Agent.AgentContext :=
+    { systemPrompt := ""
+      messages := #[]
+      tools := #[tool]
+    }
+  let config : LeanAgent.Agent.AgentLoopConfig :=
+    { model := fakeAgentModelInfo
+      convertToLlm := LeanAgent.Agent.defaultConvertToLlm
+      toolExecution := .sequential
+    }
+  let events ← IO.mkRef (#[ ] : Array String)
+  let emit : LeanAgent.Agent.AgentEventSink := fun event => do
+    let label :=
+      match event with
+      | .toolExecutionStart _ name _ => s!"tool_start:{name}"
+      | .toolExecutionEnd _ name _ isError => s!"tool_end:{name}:{isError}"
+      | .messageEnd msg =>
+          match msg with
+          | .ofMessage (.toolResult tr) => s!"tool_result:{tr.toolCallId}"
+          | .ofMessage (.assistant _) => "assistant_end"
+          | .ofMessage (.user _) => "user_end"
+          | _ => "message_end"
+      | _ => ""
+    if !label.isEmpty then
+      events.modify (fun xs => xs.push label)
+  let messages ←
+    LeanAgent.Agent.runAgentLoop
+      #[agentUserMessage "echo something" 1]
+      context
+      config
+      emit
+      none
+      streamFn
+  let exec ← executed.get
+  assertTrue (exec == #["hello"]) "echo tool should run with hello"
+  let calls ← callIndex.get
+  assertTrue (calls == 2) s!"expected tool turn + final turn, got {calls} llm calls"
+  let roles := messages.map fun m => m.role
+  assertTrue (roles == #["user", "assistant", "toolResult", "assistant"])
+    s!"unexpected roles: {roles}"
+  let labels ← events.get
+  assertTrue (labels.any (· == "tool_start:echo")) "expected tool_execution_start"
+  assertTrue (labels.any (· == "tool_end:echo:false")) "expected successful tool_execution_end"
+  assertTrue (labels.any (· == "tool_result:tool-1")) "expected tool result message events"
+  assertTrue (agentMessagePlainText (messages[messages.size - 1]!) == some "done")
+    "final assistant text is done"
+
+/-- Pi: inject steering only after the full tool batch finishes. -/
+def testAgentLoopSteeringAfterToolBatch : IO Unit := do
+  let executed ← IO.mkRef (#[ ] : Array String)
+  let tool := makeEchoTool executed
+  let callIndex ← IO.mkRef (0 : Nat)
+  let queuedDelivered ← IO.mkRef false
+  let sawInterrupt ← IO.mkRef false
+  let streamFn :=
+    scriptedStreamFn callIndex
+      (fun n model => do
+        let ts ← IO.monoMsNow
+        if n == 0 then
+          pure
+            (assistantToolUseMessage
+              #[ { id := "tool-1", name := "echo"
+                   , arguments := LeanAgent.Json.obj [("value", LeanAgent.Json.str "first")] }
+               , { id := "tool-2", name := "echo"
+                   , arguments := LeanAgent.Json.obj [("value", LeanAgent.Json.str "second")] }
+               ]
+              model ts)
+        else
+          pure (assistantStopMessage "done" model ts))
+      (some fun n ctx => do
+        if n == 1 then
+          let hit :=
+            ctx.messages.any fun m =>
+              match m with
+              | .user u => LeanAgent.AI.contentPlainText u.content == "interrupt"
+              | _ => false
+          sawInterrupt.set hit)
+  let config : LeanAgent.Agent.AgentLoopConfig :=
+    { model := fakeAgentModelInfo
+      convertToLlm := LeanAgent.Agent.defaultConvertToLlm
+      toolExecution := .sequential
+      getSteeringMessages :=
+        some (do
+          let exec ← executed.get
+          let delivered ← queuedDelivered.get
+          if exec.size >= 1 && !delivered then
+            queuedDelivered.set true
+            pure #[agentUserMessage "interrupt" 99]
+          else
+            pure #[])
+    }
+  let context : LeanAgent.Agent.AgentContext :=
+    { systemPrompt := ""
+      messages := #[]
+      tools := #[tool]
+    }
+  let _ ←
+    LeanAgent.Agent.runAgentLoop
+      #[agentUserMessage "start" 1]
+      context
+      config
+      silentAgentEventSink
+      none
+      streamFn
+  let exec ← executed.get
+  assertTrue (exec == #["first", "second"]) "both tools run before steering is consumed on next turn"
+  assertTrue (← sawInterrupt.get) "interrupt steering must be in LLM context on second call"
+
+/-- Pi: idle follow-up injects only after the loop would otherwise stop. -/
+def testAgentLoopFollowUpWhenIdle : IO Unit := do
+  let callIndex ← IO.mkRef (0 : Nat)
+  let followUpPolls ← IO.mkRef (0 : Nat)
+  let streamFn :=
+    scriptedStreamFn callIndex fun n model => do
+      let ts ← IO.monoMsNow
+      pure (assistantStopMessage s!"reply-{n}" model ts)
+  let delivered ← IO.mkRef false
+  let config : LeanAgent.Agent.AgentLoopConfig :=
+    { model := fakeAgentModelInfo
+      convertToLlm := LeanAgent.Agent.defaultConvertToLlm
+      getFollowUpMessages :=
+        some (do
+          followUpPolls.modify (· + 1)
+          let already ← delivered.get
+          if already then
+            pure #[]
+          else
+            delivered.set true
+            pure #[agentUserMessage "follow-up-idle" 5])
+    }
+  let messages ←
+    LeanAgent.Agent.runAgentLoop
+      #[agentUserMessage "start" 1]
+      { systemPrompt := "", messages := #[], tools := #[] }
+      config
+      silentAgentEventSink
+      none
+      streamFn
+  let calls ← callIndex.get
+  assertTrue (calls == 2) s!"follow-up should trigger a second LLM call, got {calls}"
+  assertTrue (messages.any fun m => agentMessagePlainText m == some "follow-up-idle")
+    "follow-up user message in transcript"
+  assertTrue ((← followUpPolls.get) ≥ 1) "follow-up poller invoked"
+
+/-- Pi: prepareNextTurn snapshot applies before the next LLM call. -/
+def testAgentLoopPrepareNextTurn : IO Unit := do
+  let executed ← IO.mkRef (#[ ] : Array String)
+  let tool := makeEchoTool executed
+  let callIndex ← IO.mkRef (0 : Nat)
+  let secondSystem ← IO.mkRef ("" : String)
+  let prepared ← IO.mkRef false
+  let streamFn :=
+    scriptedStreamFn callIndex
+      (fun n model => do
+        let ts ← IO.monoMsNow
+        if n == 0 then
+          pure
+            (assistantToolUseMessage
+              #[{ id := "tool-1", name := "echo"
+                  , arguments := LeanAgent.Json.obj [("value", LeanAgent.Json.str "hello")] }]
+              model ts)
+        else
+          pure (assistantStopMessage "done" model ts))
+      (some fun n ctx => do
+        if n == 1 then
+          secondSystem.set (ctx.systemPrompt.getD ""))
+  let config : LeanAgent.Agent.AgentLoopConfig :=
+    { model := fakeAgentModelInfo
+      convertToLlm := LeanAgent.Agent.defaultConvertToLlm
+      prepareNextTurn :=
+        some fun prep => do
+          let already ← prepared.get
+          if already then
+            pure none
+          else
+            prepared.set true
+            pure
+              (some
+                { context :=
+                    some
+                      { systemPrompt := "second prompt"
+                        messages := prep.context.messages
+                        tools := prep.context.tools
+                      }
+                })
+    }
+  let _ ←
+    LeanAgent.Agent.runAgentLoop
+      #[agentUserMessage "echo something" 1]
+      { systemPrompt := "first prompt", messages := #[], tools := #[tool] }
+      config
+      silentAgentEventSink
+      none
+      streamFn
+  assertTrue ((← callIndex.get) == 2) "two LLM calls"
+  assertTrue ((← secondSystem.get) == "second prompt") "prepareNextTurn system prompt on second call"
+
+/-- Pi: shouldStopAfterTurn true stops without draining follow-ups / extra LLM calls. -/
+def testAgentLoopShouldStopAfterTurn : IO Unit := do
+  let executed ← IO.mkRef (#[ ] : Array String)
+  let tool := makeEchoTool executed
+  let callIndex ← IO.mkRef (0 : Nat)
+  let steeringPolls ← IO.mkRef (0 : Nat)
+  let followUpPolls ← IO.mkRef (0 : Nat)
+  let streamFn :=
+    scriptedStreamFn callIndex fun n model => do
+      let ts ← IO.monoMsNow
+      if n == 0 then
+        pure
+          (assistantToolUseMessage
+            #[{ id := "tool-1", name := "echo"
+                , arguments := LeanAgent.Json.obj [("value", LeanAgent.Json.str "hello")] }]
+            model ts)
+      else
+        pure (assistantStopMessage "should not run" model ts)
+  let config : LeanAgent.Agent.AgentLoopConfig :=
+    { model := fakeAgentModelInfo
+      convertToLlm := LeanAgent.Agent.defaultConvertToLlm
+      getSteeringMessages :=
+        some (do
+          steeringPolls.modify (· + 1)
+          pure #[])
+      getFollowUpMessages :=
+        some (do
+          followUpPolls.modify (· + 1)
+          pure #[agentUserMessage "follow up should stay queued" 9])
+      shouldStopAfterTurn := some fun _ => pure true
+    }
+  let messages ←
+    LeanAgent.Agent.runAgentLoop
+      #[agentUserMessage "echo something" 1]
+      { systemPrompt := "", messages := #[], tools := #[tool] }
+      config
+      silentAgentEventSink
+      none
+      streamFn
+  assertTrue ((← callIndex.get) == 1) "only one LLM call when shouldStopAfterTurn"
+  assertTrue ((← executed.get) == #["hello"]) "tool still executes"
+  assertTrue ((← followUpPolls.get) == 0) "follow-ups not polled after forced stop"
+  assertTrue ((← steeringPolls.get) == 1) "initial steering poll only"
+  let roles := messages.map (·.role)
+  assertTrue (roles == #["user", "assistant", "toolResult"]) s!"roles after stop: {roles}"
+
+/-- Pi: batch terminates only when every tool result sets terminate=true. -/
+def testAgentLoopTerminateAllToolsStops : IO Unit := do
+  let executed ← IO.mkRef (#[ ] : Array String)
+  let tool := makeEchoTool executed (terminateValue? := some "hello")
+  let callIndex ← IO.mkRef (0 : Nat)
+  let streamFn :=
+    scriptedStreamFn callIndex fun _ model => do
+      let ts ← IO.monoMsNow
+      pure
+        (assistantToolUseMessage
+          #[{ id := "tool-1", name := "echo"
+              , arguments := LeanAgent.Json.obj [("value", LeanAgent.Json.str "hello")] }]
+          model ts)
+  let messages ←
+    LeanAgent.Agent.runAgentLoop
+      #[agentUserMessage "echo" 1]
+      { systemPrompt := "", messages := #[], tools := #[tool] }
+      { model := fakeAgentModelInfo
+        convertToLlm := LeanAgent.Agent.defaultConvertToLlm
+      }
+      silentAgentEventSink
+      none
+      streamFn
+  assertTrue ((← callIndex.get) == 1) "no second LLM call when terminate=true"
+  assertTrue ((messages.map (·.role)) == #["user", "assistant", "toolResult"])
+    "transcript ends at toolResult"
+
+/-- Partial terminate in a parallel batch does not stop the loop. -/
+def testAgentLoopPartialTerminateContinues : IO Unit := do
+  let executed ← IO.mkRef (#[ ] : Array String)
+  let tool := makeEchoTool executed (terminateValue? := some "first")
+  let callIndex ← IO.mkRef (0 : Nat)
+  let streamFn :=
+    scriptedStreamFn callIndex fun n model => do
+      let ts ← IO.monoMsNow
+      if n == 0 then
+        pure
+          (assistantToolUseMessage
+            #[ { id := "tool-1", name := "echo"
+                 , arguments := LeanAgent.Json.obj [("value", LeanAgent.Json.str "first")] }
+             , { id := "tool-2", name := "echo"
+                 , arguments := LeanAgent.Json.obj [("value", LeanAgent.Json.str "second")] }
+             ]
+            model ts)
+      else
+        pure (assistantStopMessage "done" model ts)
+  let messages ←
+    LeanAgent.Agent.runAgentLoop
+      #[agentUserMessage "echo both" 1]
+      { systemPrompt := "", messages := #[], tools := #[tool] }
+      { model := fakeAgentModelInfo
+        convertToLlm := LeanAgent.Agent.defaultConvertToLlm
+        toolExecution := .parallel
+      }
+      silentAgentEventSink
+      none
+      streamFn
+  assertTrue ((← callIndex.get) == 2) "partial terminate still continues for next turn"
+  assertTrue ((← executed.get).size == 2) "both tools executed"
+  assertTrue (agentMessagePlainText (messages[messages.size - 1]!) == some "done")
+    "final assistant reply after partial terminate"
+
+/-- Multi-message prompt through shipped Agent.promptMessages. -/
+def testAgentPromptMessagesMulti : IO Unit := do
+  let agent := LeanAgent.Agent.Agent.create
+    { initialState := { systemPrompt := "", model := fakeAgentModelInfo }
+      streamFn := mockStopStreamFn "ok"
+    }
+  let agent ←
+    agent.promptMessages
+      #[ agentUserMessage "first" 1
+       , agentUserMessage "second" 2
+       ]
+  assertTrue (agent.state.messages.size >= 3) "two user prompts plus assistant"
+  assertTrue (agent.state.messages.any fun m => agentMessagePlainText m == some "first")
+    "first user message present"
+  assertTrue (agent.state.messages.any fun m => agentMessagePlainText m == some "second")
+    "second user message present"
+  assertTrue (agentMessagePlainText (agent.state.messages[agent.state.messages.size - 1]!) == some "ok")
+    "assistant reply"
+
+/-- Listener unsubscribe stops further callbacks (Pi subscribe disposer). -/
+def testAgentListenerUnsubscribe : IO Unit := do
+  let counts ← IO.mkRef (0 : Nat)
+  let agent := LeanAgent.Agent.Agent.create
+    { initialState := { systemPrompt := "", model := fakeAgentModelInfo }
+      streamFn := mockStopStreamFn "hi"
+    }
+  let (agent, handle) :=
+    agent.subscribe fun _ _ => do
+      counts.modify (· + 1)
+  let agent ← agent.prompt "one"
+  let afterFirst ← counts.get
+  assertTrue (afterFirst > 0) "subscribed listener should receive events"
+  let agent := agent.unsubscribe handle
+  let agent ← agent.prompt "two"
+  let afterSecond ← counts.get
+  assertTrue (afterSecond == afterFirst)
+    s!"unsubscribed listener must stay silent: {afterFirst} vs {afterSecond}"
+
+/-- sessionId is forwarded into streamFn SimpleStreamOptions. -/
+def testAgentForwardsSessionIdToStreamFn : IO Unit := do
+  let seen ← IO.mkRef (none : Option String)
+  let streamFn : LeanAgent.Agent.StreamFn := fun model _ options => do
+    seen.set options.sessionId
+    let timestamp ← IO.monoMsNow
+    let message := assistantStopMessage "ok" model timestamp
+    pure { events := #[.done .stop message], finalResult := message }
+  let agent := LeanAgent.Agent.Agent.create
+    { initialState := { systemPrompt := "", model := fakeAgentModelInfo }
+      streamFn := streamFn
+      sessionId := some "session-abc"
+    }
+  let _ ← agent.prompt "hello"
+  assertTrue ((← seen.get) == some "session-abc") "sessionId forwarded to stream options"
+
+/-- Nested prompt/continue while busy rejects (Pi active-run guard). -/
+def testAgentBusyRejectsNestedPromptAndContinue : IO Unit := do
+  let abortRef ← IO.mkRef false
+  let busy : LeanAgent.Agent.Agent :=
+    { LeanAgent.Agent.Agent.create
+        { initialState :=
+            { systemPrompt := ""
+              model := fakeAgentModelInfo
+              isStreaming := true
+              messages := #[agentUserMessage "prior" 1]
+            }
+          streamFn := mockStopStreamFn "x"
+        }
+      with activeRun := some { abortRef := abortRef }
+    }
+  let promptFailed ←
+    try
+      let _ ← busy.prompt "nested"
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains "already processing")
+        "prompt busy error should mention already processing"
+      pure true
+  assertTrue promptFailed "prompt while busy must throw"
+  let continueFailed ←
+    try
+      let _ ← busy.continue
+      pure false
+    catch err =>
+      assertTrue (err.toString.contains "already processing")
+        "continue busy error should mention already processing"
+      pure true
+  assertTrue continueFailed "continue while busy must throw"
+
 def testJsonEventShape : IO Unit := do
   let json ← LeanAgent.Session.jsonEvent .turnStart
   match LeanAgent.Json.optVal? json "type", LeanAgent.Json.optVal? json "timestamp" with
@@ -15924,6 +16578,23 @@ def main : IO UInt32 := do
     testAgentLoopUsesAssistantEventStreamBridge
     testAgentSessionCreateAndContinue
     testAgentSessionRejectsAssistantContinue
+    testAgentPendingMessageQueueDrainModes
+    testAgentSteerAndFollowUpQueueOnly
+    testAgentLoopConfigDrainUpdatesAgentRef
+    testAgentLoopConfigSkipInitialSteeringPoll
+    testAgentContinueOneAtATimeSteeringFromAssistantTail
+    testAgentContinueFollowUpFromAssistantTail
+    testAgentLoopToolCallThenFinalTurn
+    testAgentLoopSteeringAfterToolBatch
+    testAgentLoopFollowUpWhenIdle
+    testAgentLoopPrepareNextTurn
+    testAgentLoopShouldStopAfterTurn
+    testAgentLoopTerminateAllToolsStops
+    testAgentLoopPartialTerminateContinues
+    testAgentPromptMessagesMulti
+    testAgentListenerUnsubscribe
+    testAgentForwardsSessionIdToStreamFn
+    testAgentBusyRejectsNestedPromptAndContinue
     testJsonEventShape
     testHttpEnvelopeParsing
     testHttpClientLocalPost

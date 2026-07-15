@@ -321,8 +321,46 @@ def createToolResultMessage (executed : ExecutedToolCall) (timestamp : Nat) : Ag
     })
 
 /--
+Pi `shouldTerminateToolBatch`: a tool batch terminates further tool-driven turns
+only when every finalized result sets `terminate = true` (and the batch is non-empty).
+-/
+def shouldTerminateExecutedBatch (executed : Array ExecutedToolCall) : Bool :=
+  !executed.isEmpty && executed.all fun e => e.result.terminate
+
+/-- Emit message_start/message_end for a tool result (Pi emitToolResultMessage). -/
+def emitToolResultMessage (message : AgentMessage) (emit : AgentEventSink) : IO Unit := do
+  emit (.messageStart message)
+  emit (.messageEnd message)
+
+/-- Extract tool calls from an assistant AgentMessage. -/
+def assistantToolCalls (assistantMessage : AgentMessage) : Array LeanAgent.AI.ToolCall :=
+  match assistantMessage with
+  | .ofMessage (.assistant msg) =>
+      msg.content.filterMap fun block =>
+        match block with
+        | .toolCall call => some call
+        | _ => none
+  | _ => #[]
+
+/--
+True when config is sequential or any matching tool declares `executionMode = sequential`
+(Pi agent-loop force-sequential rule).
+-/
+def shouldRunToolsSequentially
+    (context : AgentContext)
+    (toolCalls : Array LeanAgent.AI.ToolCall)
+    (config : AgentLoopConfig) : Bool :=
+  match config.toolExecution with
+  | .sequential => true
+  | .parallel =>
+      toolCalls.any fun call =>
+        match findToolByName context.tools call.name with
+        | some tool => tool.executionMode == some .sequential
+        | none => false
+
+/--
 Execute all tool calls from an assistant message. Returns the tool result
-messages and a `terminate` flag.
+messages and a `terminate` flag (true only when every tool result terminates).
 -/
 def executeToolCalls
     (context : AgentContext)
@@ -331,131 +369,174 @@ def executeToolCalls
     (signal : Option AbortSignal)
     (emit : AgentEventSink) :
     IO (Array AgentMessage × Bool) := do
-  -- Extract tool calls from the assistant message
-  let toolCalls ←
-    match assistantMessage with
-    | .ofMessage (.assistant msg) =>
-        pure (msg.content.filterMap fun block =>
-          match block with
-          | .toolCall call => some call
-          | _ => none
-        )
-    | _ => pure #[]
+  let toolCalls := assistantToolCalls assistantMessage
   if toolCalls.isEmpty then
     pure (#[], false)
   else
     let timestamp ← IO.monoMsNow
-    match config.toolExecution with
-    | .sequential =>
-        let mut results := #[]
-        let mut terminate := false
-        for call in toolCalls do
-          if terminate then
-            pure ()
-          else if ← isAborted signal then
-            let abortResult : AgentToolResult :=
-              { content := #[.text { text := requestAbortedMessage }]
-                details := none
-                terminate := true
-              }
-            let abortMsg := createToolResultMessage
-              { toolCallId := call.id, toolName := call.name, args := call.arguments, result := abortResult, isError := true }
-              timestamp
-            results := results.push abortMsg
-            terminate := true
-          else
-            let prepared ← prepareToolCall context assistantMessage call config signal
-            let executed ← executePreparedToolCall prepared signal emit
-            let finalized ← finalizeExecutedToolCall executed assistantMessage call context config
-            let toolMsg := createToolResultMessage finalized timestamp
-            results := results.push toolMsg
-            if finalized.result.terminate then
+    let sequential := shouldRunToolsSequentially context toolCalls config
+    if sequential then
+      let mut results : Array AgentMessage := #[]
+      let mut executedBatch : Array ExecutedToolCall := #[]
+      for call in toolCalls do
+        if ← isAborted signal then
+          let abortResult : AgentToolResult :=
+            { content := #[.text { text := requestAbortedMessage }]
+              details := none
               terminate := true
-        pure (results, terminate)
-    | .parallel =>
-        -- Prepare all tool calls sequentially (hooks may have side effects)
-        let mut preparedList := #[]
-        let mut aborted := false
-        for call in toolCalls do
-          if aborted then
-            pure ()
-          else if ← isAborted signal then
-            aborted := true
-          else
-            let prepared ← prepareToolCall context assistantMessage call config signal
-            preparedList := preparedList.push (call, prepared)
-        if aborted then
-          -- All calls aborted
-          let mut abortMsgs := #[]
-          for call in toolCalls do
-            let abortResult : AgentToolResult :=
-              { content := #[.text { text := requestAbortedMessage }]
-                details := none
-                terminate := true
-              }
-            let abortMsg := createToolResultMessage
-              { toolCallId := call.id, toolName := call.name, args := call.arguments, result := abortResult, isError := true }
-              timestamp
-            abortMsgs := abortMsgs.push abortMsg
-          pure (abortMsgs, true)
+            }
+          let abortExecuted : ExecutedToolCall :=
+            { toolCallId := call.id
+              toolName := call.name
+              args := call.arguments
+              result := abortResult
+              isError := true
+            }
+          let abortMsg := createToolResultMessage abortExecuted timestamp
+          emit (.toolExecutionStart call.id call.name call.arguments)
+          emit (.toolExecutionEnd call.id call.name abortResult true)
+          emitToolResultMessage abortMsg emit
+          results := results.push abortMsg
+          executedBatch := executedBatch.push abortExecuted
+          -- Pi stops scheduling further tools once aborted.
+          break
         else
-          -- Execute ready calls concurrently via IO.asTasks
-          let mut taskRefs := #[]
-          for (call, prepared) in preparedList do
-            match prepared with
-            | .immediate _ _ _ _ => pure ()
-            | .ready _ _ _ _ =>
-                let task ← IO.asTask (executePreparedToolCall prepared signal emit)
-                taskRefs := taskRefs.push task
-          -- Wait for all concurrent tasks
-          let mut concurrentResults := #[]
-          for task in taskRefs do
-            match ← IO.wait task with
-            | .ok result => concurrentResults := concurrentResults.push result
-            | .error err =>
-                let errorResult : ExecutedToolCall :=
-                  { toolCallId := "unknown"
-                    toolName := "unknown"
-                    args := Lean.Json.null
-                    result := { content := #[.text { text := err.toString }], details := none, terminate := false }
-                    isError := true
-                  }
-                concurrentResults := concurrentResults.push errorResult
-          -- Merge immediate and concurrent results in source order
-          let mut allResults := #[]
-          let mut terminate := false
-          let mut concurrentIdx := 0
-          for (call, prepared) in preparedList do
-            if terminate then
-              pure ()
-            else
-              match prepared with
-              | .immediate _ _ _ _ =>
-                  let executed ← executePreparedToolCall prepared signal emit
-                  let finalized ← finalizeExecutedToolCall executed assistantMessage call context config
-                  let toolMsg := createToolResultMessage finalized timestamp
-                  allResults := allResults.push toolMsg
-                  if finalized.result.terminate then
-                    terminate := true
-              | .ready _ _ _ _ =>
-                  if concurrentIdx < concurrentResults.size then
-                    let executed := concurrentResults[concurrentIdx]!
-                    concurrentIdx := concurrentIdx + 1
-                    let finalized ← finalizeExecutedToolCall executed assistantMessage call context config
-                    let toolMsg := createToolResultMessage finalized timestamp
-                    allResults := allResults.push toolMsg
-                    if finalized.result.terminate then
-                      terminate := true
-          pure (allResults, terminate)
+          let prepared ← prepareToolCall context assistantMessage call config signal
+          let executed ← executePreparedToolCall prepared signal emit
+          let finalized ← finalizeExecutedToolCall executed assistantMessage call context config
+          let toolMsg := createToolResultMessage finalized timestamp
+          emitToolResultMessage toolMsg emit
+          results := results.push toolMsg
+          executedBatch := executedBatch.push finalized
+      pure (results, shouldTerminateExecutedBatch executedBatch)
+    else
+      -- Prepare all tool calls sequentially (hooks may have side effects)
+      let mut preparedList : Array (LeanAgent.AI.ToolCall × PreparedToolCall) := #[]
+      let mut aborted := false
+      for call in toolCalls do
+        if aborted then
+          pure ()
+        else if ← isAborted signal then
+          aborted := true
+        else
+          let prepared ← prepareToolCall context assistantMessage call config signal
+          preparedList := preparedList.push (call, prepared)
+      if aborted then
+        let mut abortMsgs := #[]
+        let mut abortExecuted : Array ExecutedToolCall := #[]
+        for call in toolCalls do
+          let abortResult : AgentToolResult :=
+            { content := #[.text { text := requestAbortedMessage }]
+              details := none
+              terminate := true
+            }
+          let abortEx : ExecutedToolCall :=
+            { toolCallId := call.id
+              toolName := call.name
+              args := call.arguments
+              result := abortResult
+              isError := true
+            }
+          let abortMsg := createToolResultMessage abortEx timestamp
+          emit (.toolExecutionStart call.id call.name call.arguments)
+          emit (.toolExecutionEnd call.id call.name abortResult true)
+          emitToolResultMessage abortMsg emit
+          abortMsgs := abortMsgs.push abortMsg
+          abortExecuted := abortExecuted.push abortEx
+        pure (abortMsgs, shouldTerminateExecutedBatch abortExecuted)
+      else
+        -- Execute ready calls concurrently via IO.asTasks
+        let mut taskRefs := #[]
+        for (_, prepared) in preparedList do
+          match prepared with
+          | .immediate _ _ _ _ => pure ()
+          | .ready _ _ _ _ =>
+              let task ← IO.asTask (executePreparedToolCall prepared signal emit)
+              taskRefs := taskRefs.push task
+        let mut concurrentResults := #[]
+        for task in taskRefs do
+          match ← IO.wait task with
+          | .ok result => concurrentResults := concurrentResults.push result
+          | .error err =>
+              concurrentResults := concurrentResults.push
+                { toolCallId := "unknown"
+                  toolName := "unknown"
+                  args := Lean.Json.null
+                  result :=
+                    { content := #[.text { text := err.toString }]
+                      details := none
+                      terminate := false
+                    }
+                  isError := true
+                }
+        -- Merge immediate and concurrent results in source order
+        let mut allResults : Array AgentMessage := #[]
+        let mut executedBatch : Array ExecutedToolCall := #[]
+        let mut concurrentIdx := 0
+        for (call, prepared) in preparedList do
+          match prepared with
+          | .immediate _ _ _ _ =>
+              let executed ← executePreparedToolCall prepared signal emit
+              let finalized ← finalizeExecutedToolCall executed assistantMessage call context config
+              let toolMsg := createToolResultMessage finalized timestamp
+              emitToolResultMessage toolMsg emit
+              allResults := allResults.push toolMsg
+              executedBatch := executedBatch.push finalized
+          | .ready _ _ _ _ =>
+              if concurrentIdx < concurrentResults.size then
+                let executed := concurrentResults[concurrentIdx]!
+                concurrentIdx := concurrentIdx + 1
+                let finalized ← finalizeExecutedToolCall executed assistantMessage call context config
+                let toolMsg := createToolResultMessage finalized timestamp
+                emitToolResultMessage toolMsg emit
+                allResults := allResults.push toolMsg
+                executedBatch := executedBatch.push finalized
+        pure (allResults, shouldTerminateExecutedBatch executedBatch)
 
 ----------------------------------------------------------------------------
 -- runLoop (shared inner loop)
 ----------------------------------------------------------------------------
 
+/-- Poll steering messages from the loop config, if configured. -/
+def pollSteeringMessages (config : AgentLoopConfig) : IO (Array AgentMessage) :=
+  match config.getSteeringMessages with
+  | some getMsgs => getMsgs
+  | none => pure #[]
+
+/-- Poll follow-up messages from the loop config, if configured. -/
+def pollFollowUpMessages (config : AgentLoopConfig) : IO (Array AgentMessage) :=
+  match config.getFollowUpMessages with
+  | some getMsgs => getMsgs
+  | none => pure #[]
+
+/-- Apply an optional prepareNextTurn update to context/config. -/
+def applyTurnUpdate
+    (ctx : AgentContext)
+    (cfg : AgentLoopConfig)
+    (update : Option AgentLoopTurnUpdate) : AgentContext × AgentLoopConfig :=
+  match update with
+  | none => (ctx, cfg)
+  | some turnUpdate =>
+      let nextCtx := turnUpdate.context.getD ctx
+      let nextCfg :=
+        match turnUpdate.model, turnUpdate.thinkingLevel with
+        | some m, some (.level tl) => { cfg with model := m, reasoning := some tl }
+        | some m, some .off => { cfg with model := m, reasoning := none }
+        | some m, none => { cfg with model := m }
+        | none, some (.level tl) => { cfg with reasoning := some tl }
+        | none, some .off => { cfg with reasoning := none }
+        | none, none => cfg
+      (nextCtx, nextCfg)
+
 /--
-Shared inner loop: processes tool calls, steering messages, and follow-up
-messages. Continues until the model produces a response without tool calls
-and no follow-up messages are queued. Returns the final AgentContext.
+Shared loop: processes tool calls, steering messages, and follow-up messages.
+
+Aligned with Pi `packages/agent/src/agent-loop.ts` `runLoop`:
+1. Initial steering poll (may be skipped once via Agent.createLoopConfig)
+2. Inject pending messages, stream, execute tools, emit turn_end
+3. prepareNextTurn, then optional shouldStopAfterTurn early exit
+4. Post-turn steering poll; continue while tools remain or steering is pending
+5. When idle, poll follow-ups; if any, inject and continue; else stop
 -/
 partial def runLoop
     (initialContext : AgentContext)
@@ -465,90 +546,68 @@ partial def runLoop
     (emit : AgentEventSink)
     (streamFn : StreamFn) :
     IO AgentContext := do
-  let mut context := initialContext
-  let mut config := initialConfig
-  -- Append new messages to context
-  context := { context with messages := context.messages ++ newMessages }
-  -- Outer loop: continues when follow-up messages arrive after agent would stop
-  let rec outerLoop (ctx : AgentContext) (cfg : AgentLoopConfig) : IO AgentContext := do
+  let context := { initialContext with messages := initialContext.messages ++ newMessages }
+  -- Pi: first steering poll before the first turn (user may have typed while waiting).
+  let initialPending ← pollSteeringMessages initialConfig
+  let rec loop
+      (ctx : AgentContext)
+      (cfg : AgentLoopConfig)
+      (pending : Array AgentMessage) : IO AgentContext := do
     if ← isAborted signal then
       pure ctx
     else
-      -- Inner loop: processes tool calls and steering messages
-      let rec innerLoop (innerCtx : AgentContext) (innerCfg : AgentLoopConfig) : IO AgentContext := do
-        if ← isAborted signal then
-          pure innerCtx
+      -- Inject pending steering/follow-up messages before the next assistant response.
+      let ctx :=
+        if pending.isEmpty then
+          ctx
         else
-          -- Poll steering messages
-          let steeringMessages ←
-            match innerCfg.getSteeringMessages with
-            | some getMsgs => getMsgs
-            | none => pure #[]
-          let innerCtx :=
-            if steeringMessages.isEmpty then
-              innerCtx
-            else
-              { innerCtx with messages := innerCtx.messages ++ steeringMessages }
-          -- Stream assistant response
-          emit .turnStart
-          let assistantMsg ← streamAssistantResponse innerCtx innerCfg signal emit streamFn
-          let innerCtx := { innerCtx with messages := innerCtx.messages.push assistantMsg }
-          -- Execute tool calls
-          let (toolResults, terminate) ← executeToolCalls innerCtx assistantMsg innerCfg signal emit
-          let innerCtx := { innerCtx with messages := innerCtx.messages ++ toolResults }
-          -- Emit turnEnd
-          emit (.turnEnd assistantMsg toolResults)
-          -- Check shouldStopAfterTurn hook
-          let shouldStop ←
-            match innerCfg.shouldStopAfterTurn with
-            | some hook =>
-                let stopCtx : ShouldStopAfterTurnContext :=
-                  { message := assistantMsg
-                    toolResults := toolResults
-                    context := innerCtx
-                    newMessages := newMessages
-                  }
-                hook stopCtx
-            | none => pure (toolResults.isEmpty && !terminate)
-          if shouldStop then
-            -- Check prepareNextTurn hook
-            match innerCfg.prepareNextTurn with
-            | some hook =>
-                let prepCtx : PrepareNextTurnContext :=
-                  { message := assistantMsg
-                    toolResults := toolResults
-                    context := innerCtx
-                    newMessages := newMessages
-                  }
-                let update ← hook prepCtx
-                match update with
-                | some turnUpdate =>
-                    let nextCtx := turnUpdate.context.getD innerCtx
-                    let nextCfg :=
-                      match turnUpdate.model, turnUpdate.thinkingLevel with
-                      | some m, some (.level tl) => { innerCfg with model := m, reasoning := some tl }
-                      | some m, some .off => { innerCfg with model := m, reasoning := none }
-                      | some m, none => { innerCfg with model := m }
-                      | none, some (.level tl) => { innerCfg with reasoning := some tl }
-                      | none, some .off => { innerCfg with reasoning := none }
-                      | none, none => innerCfg
-                    -- Poll follow-up messages
-                    let followUpMessages ←
-                      match nextCfg.getFollowUpMessages with
-                      | some getMsgs => getMsgs
-                      | none => pure #[]
-                    if followUpMessages.isEmpty then
-                      pure innerCtx
-                    else
-                      let nextCtx := { nextCtx with messages := nextCtx.messages ++ followUpMessages }
-                      outerLoop nextCtx nextCfg
-                | none => pure innerCtx
-            | none => pure innerCtx
+          { ctx with messages := ctx.messages ++ pending }
+      emit .turnStart
+      let assistantMsg ← streamAssistantResponse ctx cfg signal emit streamFn
+      let ctx := { ctx with messages := ctx.messages.push assistantMsg }
+      let (toolResults, terminate) ← executeToolCalls ctx assistantMsg cfg signal emit
+      let ctx := { ctx with messages := ctx.messages ++ toolResults }
+      emit (.turnEnd assistantMsg toolResults)
+      -- prepareNextTurn (Pi applies this before shouldStop / next steering poll)
+      let (ctx, cfg) ←
+        match cfg.prepareNextTurn with
+        | some hook => do
+            let prepCtx : PrepareNextTurnContext :=
+              { message := assistantMsg
+                toolResults := toolResults
+                context := ctx
+                newMessages := newMessages
+              }
+            let update ← hook prepCtx
+            pure (applyTurnUpdate ctx cfg update)
+        | none => pure (ctx, cfg)
+      -- Explicit shouldStopAfterTurn early-exits without draining remaining queues.
+      let forceStop ←
+        match cfg.shouldStopAfterTurn with
+        | some hook =>
+            hook
+              { message := assistantMsg
+                toolResults := toolResults
+                context := ctx
+                newMessages := newMessages
+              }
+        | none => pure false
+      if forceStop then
+        pure ctx
+      else
+        let hasMoreToolCalls := !toolResults.isEmpty && !terminate
+        -- Pi always re-polls steering after each completed turn.
+        let nextPending ← pollSteeringMessages cfg
+        if hasMoreToolCalls || !nextPending.isEmpty then
+          loop ctx cfg nextPending
+        else
+          let followUps ← pollFollowUpMessages cfg
+          if followUps.isEmpty then
+            pure ctx
           else
-            -- Continue inner loop with tool results
-            innerLoop innerCtx innerCfg
-      innerLoop ctx cfg
-  outerLoop context config
+            -- Follow-ups become pending so the next iteration injects them before streaming.
+            loop ctx cfg followUps
+  loop context initialConfig initialPending
 
 ----------------------------------------------------------------------------
 -- runAgentLoop
