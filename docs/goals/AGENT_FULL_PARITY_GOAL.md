@@ -1,5 +1,9 @@
 # Goal: Full LeanAgent parity with Pi `packages/agent`
 
+> **Superseded for whole-project rewrite.**  
+> Use [`FULL_PI_PORT_GOAL.md`](FULL_PI_PORT_GOAL.md) + [`FULL_PI_PORT_PROMPT.md`](FULL_PI_PORT_PROMPT.md).  
+> Completing *only* this agent Goal does **not** finish LeanAgent.
+
 Use this document as a **long-running Goal** for an implementer agent.  
 Pair with the system/agent instructions in [`AGENT_FULL_PARITY_PROMPT.md`](AGENT_FULL_PARITY_PROMPT.md).
 

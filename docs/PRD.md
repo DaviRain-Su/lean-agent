@@ -15,6 +15,12 @@ AI-module parity is tracked in [`docs/AI_PARITY.md`](AI_PARITY.md). That ledger
 must be updated before marking any Pi `packages/ai` area complete. Agent-runtime
 parity is tracked in [`docs/AGENT_PARITY.md`](AGENT_PARITY.md).
 
+**Full-project rewrite (Pi → Lean):** standing implementer prompt and Goal are
+[`docs/goals/FULL_PI_PORT_PROMPT.md`](goals/FULL_PI_PORT_PROMPT.md) and
+[`docs/goals/FULL_PI_PORT_GOAL.md`](goals/FULL_PI_PORT_GOAL.md). Dashboard:
+[`docs/PORT_STATUS.md`](PORT_STATUS.md). The product is a port of Pi, not a
+demo; do not treat package skeletons as complete.
+
 ## Product Goal
 
 Build a self-contained Lean coding agent that can:

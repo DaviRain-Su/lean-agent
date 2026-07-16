@@ -68,8 +68,10 @@ Reference and planning docs:
 - [Architecture notes](docs/ARCHITECTURE.md)
 - [AI parity ledger](docs/AI_PARITY.md)
 - [Agent parity ledger](docs/AGENT_PARITY.md)
-- [Full Agent port goal (long-running)](docs/goals/AGENT_FULL_PARITY_GOAL.md)
-- [Full Agent port implementer prompt](docs/goals/AGENT_FULL_PARITY_PROMPT.md)
+- [Port status dashboard](docs/PORT_STATUS.md)
+- [**Full Pi → Lean rewrite prompt**](docs/goals/FULL_PI_PORT_PROMPT.md) (standing)
+- [**Full Pi → Lean rewrite goal**](docs/goals/FULL_PI_PORT_GOAL.md) (standing)
+- [Agent-only port notes (superseded for product-complete)](docs/goals/AGENT_FULL_PARITY_GOAL.md)
 
 ## Quick Start
 

@@ -20,71 +20,67 @@ consumes `LeanAgent.AI.*` types and stream boundaries rather than legacy
 | `missing` | No Lean equivalent exists yet. |
 | `deferred` | Intentionally not implemented in the current milestone, with a reason. |
 
-## Agent complete vs Pi (summary)
+## Honest summary (not “complete”)
 
-Core **Agent / Loop / Types** offline contracts used by coding-agent are
-**implemented** with tests on shipped APIs. A **Harness** layer covers session
-tree storage (memory + jsonl v2), compaction/branch summary (offline mock
-summary text), system-prompt skills formatting coordinated with Project OMP
-skills, prompt templates, truncate utils, and an AgentHarness façade.
+Agent domain is **IN PROGRESS** under the full-project port charter
+[`goals/FULL_PI_PORT_PROMPT.md`](goals/FULL_PI_PORT_PROMPT.md).
 
-Still **deferred** (not product-blocking for CLI coding-agent today):
+- **Core loop / Agent API:** strong **partial** — many offline behaviors and tests exist; not every Pi `agent.test.ts` / `agent-loop.test.ts` case is ported; live-stream abort still open (AI transport).
+- **Harness:** **partial / thin** — Storage/Compaction/AgentHarness are real code but far smaller than Pi harness (session tree, compaction, agent-harness.ts). Do **not** treat as full Pi harness parity.
+- **Proxy / Node durable harness:** `missing` (or Exclusion deferred only for true Node-only bits) — not “product done.”
 
-- Full Pi durable harness / extension hooks / observability stack
-- `proxy.ts` (no RPC/orchestrator consumer yet)
-- Live mid-stream abort / true concurrent waitForIdle races (buffered transport + sequential Lean runs)
-- Exhaustive port of every Pi harness e2e/network test
+Earlier Goal runs that marked this package effectively complete were **wrong**. Prefer `partial` until offline Pi test matrices and harness file inventory close.
 
 ## Current Lean Coverage
 
 | Pi area | Lean modules | Status | Notes |
 | --- | --- | --- | --- |
-| Agent types | `LeanAgent.Agent.Types` | implemented | AgentMessage, tools, events, hooks, queues, listeners. TypeBox-only typing deferred. |
-| Agent loop | `LeanAgent.Agent.Loop` | implemented | Tools, steering after batches, idle follow-up, prepareNextTurn, shouldStopAfterTurn, all-must-terminate, sequential force, tool-result message events, afterToolCall terminate. Live stream abort deferred (AI transport). |
-| Stateful Agent | `LeanAgent.Agent.Agent` | implemented | prompt / promptWithImages / promptMessages / continue / queues / subscribe+unsubscribe / busy reject / sessionId / waitForIdle (post-return settle) / failure lifecycle events. `runWithLifecycle` shares `IO.Ref Agent` so streamFn throws keep already-committed user messages (`testAgentFailureLifecycleEvents`). |
-| Session JSONL v1 | `LeanAgent.Session` | implemented | Append-only v1 CLI sessions; still load/resume with harness present. |
-| Harness session tree | `Agent.Harness.Storage` | implemented | Memory repo + jsonl v2 with parentId; branch walk. |
-| Compaction / branch | `Agent.Harness.Compaction` | implemented | prepare/compact/shouldCompact + branch summary offline. |
-| System prompt / skills | `Agent.Harness.SystemPrompt`, `Skills` | implemented | Pi skills XML block; Project skill mapping. |
-| Templates / truncate | `Agent.Harness.Templates`, `Truncate` | implemented | `$ARGUMENTS` / `$n` expand; shell truncate. |
-| AgentHarness façade | `Agent.Harness.AgentHarness` | implemented | prompt/steer/followUp/nextTurn/abort/queue updates. |
-| Proxy | — | deferred | No CLI/RPC consumer; add when orchestrator lands. |
-| Node env / full durable harness | — | deferred | Node-specific env and durable multi-process harness not applicable to Lean binary. |
+| Agent types | `LeanAgent.Agent.Types` | partial | Core shapes exist; TypeBox-level typing and full custom-message matrix incomplete. |
+| Agent loop | `LeanAgent.Agent.Loop` | partial | Major offline paths exist (tools, queues, hooks, terminate). Remaining Pi loop tests and live abort open. |
+| Stateful Agent | `LeanAgent.Agent.Agent` | partial | prompt/images/queues/subscribe/failure path improved (`IO.Ref` lifecycle). Concurrent waitForIdle / full agent.test matrix open. |
+| Session JSONL v1 | `LeanAgent.Session` | partial | CLI v1 append-only works; not full Pi session tree model. |
+| Harness session tree | `Agent.Harness.Storage` | partial | Memory + jsonl parentId sketch; not full Pi jsonl-repo/session APIs. |
+| Compaction / branch | `Agent.Harness.Compaction` | partial | Offline prepare/compact/summary helpers; not full Pi compaction entry integration. |
+| System prompt / skills | `Agent.Harness.SystemPrompt`, `Skills` | partial | Skills XML + Project map; not full harness skill runtime. |
+| Templates / truncate | `Agent.Harness.Templates`, `Truncate` | partial | Basic expand/truncate. |
+| AgentHarness façade | `Agent.Harness.AgentHarness` | partial | Thin prompt/steer/followUp/nextTurn; << Pi agent-harness.ts. |
+| Proxy | — | missing | Implement when coding-agent/orchestrator RPC needs it. |
+| Node env / durable harness | — | deferred | Exclusion: Node multi-process env not applicable; durable features that are portable must still be ported under harness rows as partial/missing. |
 
 ## Source Inventory
 
 | Group | Pi files | Lean target | Current status |
 | --- | ---: | --- | --- |
-| Core runtime | `src/agent.ts`, `src/agent-loop.ts`, `src/types.ts` | `LeanAgent.Agent.*` | implemented |
-| Entry barrel | `src/index.ts` | `LeanAgent.Agent` + Harness import | implemented |
-| Harness | `src/harness/**` | `LeanAgent.Agent.Harness.*` | implemented (subset) |
-| Proxy | `src/proxy.ts` | — | deferred |
-| Tests | `test/agent*.ts`, `test/harness/*` | `Tests.lean` agent/harness section | implemented (offline subset) |
+| Core runtime | `src/agent.ts`, `src/agent-loop.ts`, `src/types.ts` | `LeanAgent.Agent.*` | partial |
+| Entry barrel | `src/index.ts` | `LeanAgent.Agent` + Harness import | partial |
+| Harness | `src/harness/**` | `LeanAgent.Agent.Harness.*` | partial |
+| Proxy | `src/proxy.ts` | — | missing |
+| Tests | `test/agent*.ts`, `test/harness/*` | `Tests.lean` agent/harness section | partial |
 
 ## Core Runtime
 
 | Pi source | Lean target | Status | Notes |
 | --- | --- | --- | --- |
-| `types.ts` | `Agent.Types` | implemented | Offline contracts covered. |
-| `agent-loop.ts` | `Agent.Loop` | implemented | See tests `testAgentLoop*`. |
-| `agent.ts` prompt images | `promptWithImages` | implemented | `testAgentPromptWithImages` |
-| `agent.ts` waitForIdle | `waitForIdle` / `isIdle` | implemented | Settles after prompt returns; busy throws (`testAgentWaitForIdle`). Concurrent barrier wait deferred (no async interleaving). |
-| `agent.ts` failure lifecycle | `handleRunFailure` | implemented | `testAgentFailureLifecycleEvents` |
-| Queues / continue | Agent | implemented | Existing continue/steer tests. |
-| Nested busy | `throwIfBusy` | implemented | |
+| `types.ts` | `Agent.Types` | partial | Core contracts present; not full Pi types surface. |
+| `agent-loop.ts` | `Agent.Loop` | partial | Major paths + some tests; full Pi agent-loop.test.ts matrix open. |
+| `agent.ts` prompt images | `promptWithImages` | partial | Works offline; part of larger agent.ts surface. |
+| `agent.ts` waitForIdle | `waitForIdle` / `isIdle` | partial | Post-return settle only; not full async barrier semantics. |
+| `agent.ts` failure lifecycle | `handleRunFailure` | partial | Transcript retention fixed; full agent.test matrix open. |
+| Queues / continue | Agent | partial | Core paths tested; more Pi cases remain. |
+| Nested busy | `throwIfBusy` | partial | Covered offline; concurrent streaming open. |
 
 ## Harness
 
 | Pi source | Lean target | Status | Notes |
 | --- | --- | --- | --- |
-| `session/uuid.ts` | `Harness.Uuid` | implemented | `testHarnessUuidv7` |
-| memory/jsonl storage | `Harness.Storage` | implemented | `testHarnessMemoryRepoBranch`, `testHarnessJsonlTreeRoundTrip` |
-| compaction | `Harness.Compaction` | implemented | Offline summary injection |
-| branch-summarization | `Harness.Compaction` | implemented | `testHarnessBranchSummary` |
-| system-prompt / skills | `SystemPrompt`, `Skills` | implemented | Coordinated with `LeanAgent.Project` |
-| prompt-templates | `Templates` | implemented | |
-| truncate / shell-output | `Truncate` | implemented | |
-| agent-harness.ts | `AgentHarness` | implemented | `testAgentHarnessPromptAndQueues` |
+| `session/uuid.ts` | `Harness.Uuid` | partial | Basic uuidv7 helper; not a claim of full session stack. |
+| memory/jsonl storage | `Harness.Storage` | partial | Thin tree sketch vs Pi repos/storage/session. |
+| compaction | `Harness.Compaction` | partial | Offline helpers only. |
+| branch-summarization | `Harness.Compaction` | partial | Offline summary only. |
+| system-prompt / skills | `SystemPrompt`, `Skills` | partial | Formatting + Project map; not full runtime. |
+| prompt-templates | `Templates` | partial | Basic placeholders. |
+| truncate / shell-output | `Truncate` | partial | Basic helpers. |
+| agent-harness.ts | `AgentHarness` | partial | Thin façade vs ~1k LOC Pi harness. |
 | proxy.ts | — | deferred | No consumer yet |
 | env/nodejs.ts | — | deferred | Node-only |
 

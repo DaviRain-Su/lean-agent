@@ -1,5 +1,10 @@
 # Agent Prompt: Full Pi `packages/agent` → LeanAgent Port
 
+> **Superseded for whole-project rewrite.**  
+> Use [`FULL_PI_PORT_PROMPT.md`](FULL_PI_PORT_PROMPT.md) + [`FULL_PI_PORT_GOAL.md`](FULL_PI_PORT_GOAL.md)  
+> for the complete Pi → LeanAgent port. This file is retained only as an
+> agent-domain slice aid; it must **not** be used to declare the product done.
+
 Copy everything below the line into a long-running coding agent (Grok Goal, Claude, Codex, etc.).  
 Reference source of truth: `vendor/pi/packages/agent` (read-only).  
 Progress ledger: `docs/AGENT_PARITY.md` (must update every status change).
