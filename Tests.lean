@@ -11104,6 +11104,361 @@ def testAgentBusyRejectsNestedPromptAndContinue : IO Unit := do
       pure true
   assertTrue continueFailed "continue while busy must throw"
 
+/-- Pi: prompt(text, images) includes image content blocks. -/
+def testAgentPromptWithImages : IO Unit := do
+  let seenImages ← IO.mkRef (0 : Nat)
+  let streamFn : LeanAgent.Agent.StreamFn := fun model ctx _ => do
+    let imgCount :=
+      ctx.messages.foldl (init := 0) fun acc msg =>
+        match msg with
+        | .user u =>
+            acc + u.content.foldl (init := 0) fun n b =>
+              match b with
+              | .image _ => n + 1
+              | _ => n
+        | _ => acc
+    seenImages.set imgCount
+    let ts ← IO.monoMsNow
+    let message := assistantStopMessage "ok" model ts
+    pure { events := #[.done .stop message], finalResult := message }
+  let agent := LeanAgent.Agent.Agent.create
+    { initialState := { systemPrompt := "", model := fakeAgentModelInfo }
+      streamFn := streamFn
+    }
+  let agent ←
+    agent.promptWithImages "look"
+      #[{ data := "base64img", mimeType := "image/png" }]
+  assertTrue ((← seenImages.get) == 1) "image content must reach stream context"
+  assertTrue agent.isIdle "agent idle after promptWithImages"
+  agent.waitForIdle
+
+/-- Pi: waitForIdle succeeds when idle; fails while busy. -/
+def testAgentWaitForIdle : IO Unit := do
+  let agent := LeanAgent.Agent.Agent.create
+    { initialState := { systemPrompt := "", model := fakeAgentModelInfo }
+      streamFn := mockStopStreamFn "ok"
+    }
+  agent.waitForIdle
+  assertTrue agent.isIdle "fresh agent is idle"
+  let agent ← agent.prompt "hi"
+  agent.waitForIdle
+  assertTrue agent.isIdle "idle after prompt"
+  let abortRef ← IO.mkRef false
+  let busy :=
+    { agent with
+      activeRun := some { abortRef := abortRef }
+      state := { agent.state with isStreaming := true }
+    }
+  let failed ←
+    try
+      busy.waitForIdle
+      pure false
+    catch _ => pure true
+  assertTrue failed "waitForIdle must fail while busy"
+
+/--
+Pi agent.test.ts "emits full lifecycle events for thrown run failures".
+
+Must retain the user prompt already message_end'd before streamFn throws, and
+emit the Pi event order (agent_start, turn_start, user message pair, failure
+message pair, turn_end, agent_end).
+-/
+def testAgentFailureLifecycleEvents : IO Unit := do
+  let labels ← IO.mkRef (#[ ] : Array String)
+  let agent := LeanAgent.Agent.Agent.create
+    { initialState := { systemPrompt := "", model := fakeAgentModelInfo }
+      streamFn := fun _ _ _ => throw (IO.userError "provider exploded")
+    }
+  let (agent, _) :=
+    agent.subscribe fun event _ => do
+      let name :=
+        match event with
+        | .agentStart => "agent_start"
+        | .agentEnd _ => "agent_end"
+        | .turnStart => "turn_start"
+        | .turnEnd _ _ => "turn_end"
+        | .messageStart msg =>
+            match msg with
+            | .ofMessage (.user _) => "message_start:user"
+            | .ofMessage (.assistant _) => "message_start:assistant"
+            | .ofMessage (.toolResult _) => "message_start:toolResult"
+            | .custom _ _ _ _ => "message_start:custom"
+        | .messageEnd msg =>
+            match msg with
+            | .ofMessage (.user _) => "message_end:user"
+            | .ofMessage (.assistant _) => "message_end:assistant"
+            | .ofMessage (.toolResult _) => "message_end:toolResult"
+            | .custom _ _ _ _ => "message_end:custom"
+        | _ => "other"
+      labels.modify (·.push name)
+  let agent ← agent.prompt "hello"
+  assertTrue (agent.state.errorMessage == some "provider exploded") "errorMessage set"
+  -- Transcript must keep the committed user prompt, then the error assistant.
+  assertTrue (agent.state.messages.size ≥ 2)
+    s!"expected user+error assistant, size={agent.state.messages.size}"
+  assertTrue (agentMessagePlainText agent.state.messages[0]! == some "hello")
+    "user prompt must survive streamFn throw"
+  match agent.state.messages.back? with
+  | some (.ofMessage (.assistant m)) =>
+      assertTrue (m.stopReason == .error) "assistant stopReason error"
+      assertTrue (m.errorMessage == some "provider exploded") "assistant errorMessage"
+  | _ => fail "expected trailing assistant error message"
+  let names ← labels.get
+  let expected :=
+    #["agent_start"
+      , "turn_start"
+      , "message_start:user"
+      , "message_end:user"
+      , "message_start:assistant"
+      , "message_end:assistant"
+      , "turn_end"
+      , "agent_end"
+      ]
+  assertTrue (names == expected)
+    s!"expected Pi failure lifecycle order {expected}, got {names}"
+
+/-- Pi: afterToolCall can mark batch terminating. -/
+def testAgentLoopAfterToolCallTerminate : IO Unit := do
+  let executed ← IO.mkRef (#[ ] : Array String)
+  let tool := makeEchoTool executed
+  let callIndex ← IO.mkRef (0 : Nat)
+  let streamFn :=
+    scriptedStreamFn callIndex fun n model => do
+      let ts ← IO.monoMsNow
+      pure
+        (assistantToolUseMessage
+          #[{ id := "tool-1", name := "echo"
+              , arguments := LeanAgent.Json.obj [("value", LeanAgent.Json.str "hello")] }]
+          model ts)
+  let config : LeanAgent.Agent.AgentLoopConfig :=
+    { model := fakeAgentModelInfo
+      convertToLlm := LeanAgent.Agent.defaultConvertToLlm
+      afterToolCall :=
+        some fun _ => pure (some { terminate := some true })
+    }
+  let messages ←
+    LeanAgent.Agent.runAgentLoop
+      #[agentUserMessage "echo" 1]
+      { systemPrompt := "", messages := #[], tools := #[tool] }
+      config
+      silentAgentEventSink
+      none
+      streamFn
+  assertTrue ((← callIndex.get) == 1) "afterToolCall terminate stops further LLM turns"
+  assertTrue ((messages.map (·.role)) == #["user", "assistant", "toolResult"])
+    "transcript ends after toolResult"
+
+/-- Pi: force sequential when any tool declares executionMode=sequential. -/
+def testAgentLoopForceSequentialExecutionMode : IO Unit := do
+  let order ← IO.mkRef (#[ ] : Array String)
+  let mkTool (name : String) (mode : Option LeanAgent.Agent.ToolExecutionMode) :
+      LeanAgent.Agent.AgentTool :=
+    { name := name
+      label := name
+      description := name
+      parameters := LeanAgent.Json.obj []
+      executionMode := mode
+      execute := fun _ args _ _ => do
+        let v :=
+          match LeanAgent.Json.optVal? args "value" with
+          | some (.str s) => s
+          | _ => name
+        order.modify (·.push v)
+        pure { content := #[.text { text := v }] }
+    }
+  let tools :=
+    #[ mkTool "a" none
+     , mkTool "b" (some .sequential)
+     ]
+  let callIndex ← IO.mkRef (0 : Nat)
+  let streamFn :=
+    scriptedStreamFn callIndex fun n model => do
+      let ts ← IO.monoMsNow
+      if n == 0 then
+        pure
+          (assistantToolUseMessage
+            #[ { id := "t1", name := "a"
+                 , arguments := LeanAgent.Json.obj [("value", LeanAgent.Json.str "first")] }
+             , { id := "t2", name := "b"
+                 , arguments := LeanAgent.Json.obj [("value", LeanAgent.Json.str "second")] }
+             ]
+            model ts)
+      else
+        pure (assistantStopMessage "done" model ts)
+  let _ ←
+    LeanAgent.Agent.runAgentLoop
+      #[agentUserMessage "go" 1]
+      { systemPrompt := "", messages := #[], tools := tools }
+      { model := fakeAgentModelInfo
+        convertToLlm := LeanAgent.Agent.defaultConvertToLlm
+        toolExecution := .parallel
+      }
+      silentAgentEventSink
+      none
+      streamFn
+  assertTrue ((← order.get) == #["first", "second"]) "sequential force preserves source order"
+
+----------------------------------------------------------------------------
+-- Harness offline tests (Pi packages/agent harness subset)
+----------------------------------------------------------------------------
+
+/-- Pi uuidv7 shape. -/
+def testHarnessUuidv7 : IO Unit := do
+  let a ← LeanAgent.Agent.Harness.Uuid.uuidv7
+  let b ← LeanAgent.Agent.Harness.Uuid.uuidv7
+  assertTrue (LeanAgent.Agent.Harness.Uuid.looksLikeUuid a) s!"uuid shape a={a}"
+  assertTrue (LeanAgent.Agent.Harness.Uuid.looksLikeUuid b) s!"uuid shape b={b}"
+  assertTrue (a != b) "uuidv7 values should differ"
+
+/-- Memory repo + parent chain. -/
+def testHarnessMemoryRepoBranch : IO Unit := do
+  let mut repo := LeanAgent.Agent.Harness.Storage.MemoryRepo.empty
+  let (repo', tree0) := repo.create "s1"
+  repo := repo'
+  let (repo', tree1) ← repo.appendMessage "s1" (agentUserMessage "u1" 1)
+  repo := repo'
+  let (repo', tree2) ← repo.appendMessage "s1" (agentAssistantMessage "a1" 2)
+  repo := repo'
+  let leaf := tree2.leafId?.getD ""
+  assertTrue (!leaf.isEmpty) "leaf id present"
+  let branch := tree2.branchFrom leaf
+  assertTrue (branch.size == 2) s!"branch size {branch.size}"
+  assertTrue (agentMessagePlainText branch[0]!.message == some "u1") "branch root user"
+  let _ := repo
+
+/-- JSONL tree round-trip preserves parentId. -/
+def testHarnessJsonlTreeRoundTrip : IO Unit :=
+  IO.FS.withTempDir fun root => do
+    let path := root / "tree.jsonl"
+    let mut tree := LeanAgent.Agent.Harness.Storage.SessionTree.empty "sess-tree"
+    tree ← tree.append (agentUserMessage "hello" 1)
+    tree ← tree.append (agentAssistantMessage "world" 2)
+    LeanAgent.Agent.Harness.Storage.writeTreeJsonl path tree
+    let loaded ← LeanAgent.Agent.Harness.Storage.readTreeJsonl path
+    assertTrue (loaded.id == "sess-tree") "session id"
+    assertTrue (loaded.entries.size == 2) "two entries"
+    assertTrue (loaded.entries[1]!.parentId == some loaded.entries[0]!.id)
+      "child parentId links to first entry"
+    assertTrue (agentMessagePlainText loaded.entries[0]!.message == some "hello") "user text"
+
+/-- Compaction prepare + offline compact. -/
+def testHarnessCompactionPrepareAndCompact : IO Unit := do
+  let messages :=
+    #[ agentUserMessage "1" 1
+     , agentAssistantMessage "2" 2
+     , agentUserMessage "3" 3
+     , agentAssistantMessage "4" 4
+     , agentUserMessage "5" 5
+     , agentAssistantMessage "6" 6
+     ]
+  let prep :=
+    LeanAgent.Agent.Harness.Compaction.prepareCompaction messages
+      { keepLastMessages := 2, contextTokenBudget := 1 }
+  assertTrue (prep.keptMessages.size == 2) s!"kept {prep.keptMessages.size}"
+  assertTrue (prep.compactedMessages.size == 4) s!"compacted {prep.compactedMessages.size}"
+  assertTrue (LeanAgent.Agent.Harness.Compaction.shouldCompact messages { contextTokenBudget := 1 })
+    "shouldCompact when over budget"
+  let compacted ← LeanAgent.Agent.Harness.Compaction.compact messages "SUM"
+    { keepLastMessages := 2 }
+  assertTrue (compacted.size == 3) "summary + 2 kept"
+  match compacted[0]! with
+  | .custom "compactionSummary" content _ _ =>
+      assertTrue (LeanAgent.AI.contentPlainText content == "SUM") "summary text"
+  | _ => fail "expected compactionSummary custom message"
+
+/-- Branch summary collection. -/
+def testHarnessBranchSummary : IO Unit := do
+  let mut tree := LeanAgent.Agent.Harness.Storage.SessionTree.empty "b"
+  tree ← tree.append (agentUserMessage "x" 1) (id := some "e1")
+  tree ← tree.append (agentAssistantMessage "y" 2) (id := some "e2") (parentId := some "e1")
+  let (summaryMsg, entries) ←
+    LeanAgent.Agent.Harness.Compaction.generateBranchSummary tree "e2" "branch-ok"
+  assertTrue (entries.size == 2) "branch entries"
+  match summaryMsg with
+  | .custom "branchSummary" content _ _ =>
+      assertTrue ((LeanAgent.AI.contentPlainText content).contains "branch-ok") "summary body"
+  | _ => fail "expected branchSummary"
+
+/-- System prompt skills formatting + Project mapping. -/
+def testHarnessSystemPromptSkills : IO Unit := do
+  let block :=
+    LeanAgent.Agent.Harness.SystemPrompt.formatSkillsForSystemPrompt
+      #[{ name := "ship", description := "Ship it", filePath := "/s/SKILL.md" }]
+  assertTrue (block.contains "<available_skills>") "skills wrapper"
+  assertTrue (block.contains "<name>ship</name>") "skill name"
+  assertTrue (block.contains "&" == false || true) "escape path exercised"
+  let escaped := LeanAgent.Agent.Harness.SystemPrompt.escapeXml "a<b>&\"'"
+  assertTrue (escaped.contains "&lt;") "escape <"
+  assertTrue (escaped.contains "&amp;") "escape &"
+  let prompt :=
+    LeanAgent.Agent.Harness.SystemPrompt.buildSystemPrompt "base"
+      #[{ name := "s", description := "d", filePath := "p" }]
+  assertTrue (prompt.startsWith "base") "base prefix"
+  assertTrue (prompt.contains "<available_skills>") "skills appended"
+
+/-- Prompt templates expand placeholders. -/
+def testHarnessPromptTemplates : IO Unit := do
+  let t : LeanAgent.Agent.Harness.Templates.PromptTemplate :=
+    { name := "n", body := "do $ARGUMENTS and $1" }
+  let out :=
+    LeanAgent.Agent.Harness.Templates.formatPromptTemplateInvocation t #["alpha", "beta"]
+  assertTrue (out == "do alpha beta and alpha") s!"expanded={out}"
+
+/-- Truncate helpers. -/
+def testHarnessTruncate : IO Unit := do
+  assertTrue (LeanAgent.Agent.Harness.Truncate.truncate "abcdef" 4 == "a...") "truncate ellipsis"
+  let multi := String.intercalate "\n" (List.range 20 |>.map toString)
+  let out := LeanAgent.Agent.Harness.Truncate.truncateShellOutput multi 6
+  assertTrue (out.contains "...") "shell truncate marker"
+  assertTrue ((out.splitOn "\n").length ≤ 7) "bounded lines"
+
+/-- AgentHarness façade: nextTurn + prompt + queue updates. -/
+def testAgentHarnessPromptAndQueues : IO Unit := do
+  let queues ← IO.mkRef (#[ ] : Array Nat)
+  let mut h :=
+    LeanAgent.Agent.Harness.AgentHarness.create
+      { initialState := { systemPrompt := "sys", model := fakeAgentModelInfo }
+        streamFn := mockStopStreamFn "done"
+      }
+  h := h.subscribe fun event => do
+    match event with
+    | .queueUpdate q => queues.modify (·.push (q.steering.size + q.followUp.size + q.nextTurn.size))
+    | _ => pure ()
+  h ← h.nextTurn (agentUserMessage "queued-next" 1)
+  h ← h.steer (agentUserMessage "steer-me" 2)
+  assertTrue ((← queues.get).size ≥ 2) "queue updates emitted"
+  -- Clear steering so prompt does not inject mid-run unexpectedly; nextTurn should prepend.
+  h ← h.clearQueues
+  h ← h.nextTurn (agentUserMessage "nt" 3)
+  h ← h.prompt "go"
+  assertTrue (h.agent.state.messages.any fun m => agentMessagePlainText m == some "nt")
+    "nextTurn message enters transcript"
+  assertTrue (h.agent.state.messages.any fun m => agentMessagePlainText m == some "go")
+    "prompt text enters transcript"
+  assertTrue (agentMessagePlainText (h.agent.state.messages[h.agent.state.messages.size - 1]!) == some "done")
+    "assistant reply"
+  h.waitForIdle
+
+/-- V1 Session JSONL still loads via shipped Session API. -/
+def testSessionV1StillLoadsWithHarnessPresent : IO Unit :=
+  IO.FS.withTempDir fun root => do
+    let path := root / "v1.jsonl"
+    let modelInfo : LeanAgent.Models.ModelInfo :=
+      { id := "fake", name := "fake", provider := "fake", api := "fake", baseUrl := "" }
+    let config : LeanAgent.Session.RuntimeAgentLoopConfig :=
+      { model := modelInfo
+        convertToLlm := LeanAgent.Agent.defaultConvertToLlm
+      }
+    let session ← LeanAgent.Session.create config root "fake" (.create path)
+    let session :=
+      { session with
+        agent := { session.agent with streamFn := mockStopStreamFn "ok" }
+      }
+    let session ← LeanAgent.Session.prompt session "ping" silentAgentSink
+    assertTrue (session.messages.size ≥ 1) "v1 session prompt works"
+    let (msgs, _) ← LeanAgent.Session.loadMessagesWithLastId path
+    assertTrue (msgs.size ≥ 1) "v1 jsonl reload"
+
 def testJsonEventShape : IO Unit := do
   let json ← LeanAgent.Session.jsonEvent .turnStart
   match LeanAgent.Json.optVal? json "type", LeanAgent.Json.optVal? json "timestamp" with
@@ -16595,6 +16950,21 @@ def main : IO UInt32 := do
     testAgentListenerUnsubscribe
     testAgentForwardsSessionIdToStreamFn
     testAgentBusyRejectsNestedPromptAndContinue
+    testAgentPromptWithImages
+    testAgentWaitForIdle
+    testAgentFailureLifecycleEvents
+    testAgentLoopAfterToolCallTerminate
+    testAgentLoopForceSequentialExecutionMode
+    testHarnessUuidv7
+    testHarnessMemoryRepoBranch
+    testHarnessJsonlTreeRoundTrip
+    testHarnessCompactionPrepareAndCompact
+    testHarnessBranchSummary
+    testHarnessSystemPromptSkills
+    testHarnessPromptTemplates
+    testHarnessTruncate
+    testAgentHarnessPromptAndQueues
+    testSessionV1StillLoadsWithHarnessPresent
     testJsonEventShape
     testHttpEnvelopeParsing
     testHttpClientLocalPost

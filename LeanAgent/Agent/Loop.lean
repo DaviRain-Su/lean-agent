@@ -549,10 +549,12 @@ partial def runLoop
   let context := { initialContext with messages := initialContext.messages ++ newMessages }
   -- Pi: first steering poll before the first turn (user may have typed while waiting).
   let initialPending ← pollSteeringMessages initialConfig
+  -- Pi `firstTurn`: runAgentLoop already emitted turn_start before entering runLoop.
   let rec loop
       (ctx : AgentContext)
       (cfg : AgentLoopConfig)
-      (pending : Array AgentMessage) : IO AgentContext := do
+      (pending : Array AgentMessage)
+      (firstTurn : Bool) : IO AgentContext := do
     if ← isAborted signal then
       pure ctx
     else
@@ -562,7 +564,8 @@ partial def runLoop
           ctx
         else
           { ctx with messages := ctx.messages ++ pending }
-      emit .turnStart
+      if !firstTurn then
+        emit .turnStart
       let assistantMsg ← streamAssistantResponse ctx cfg signal emit streamFn
       let ctx := { ctx with messages := ctx.messages.push assistantMsg }
       let (toolResults, terminate) ← executeToolCalls ctx assistantMsg cfg signal emit
@@ -599,15 +602,15 @@ partial def runLoop
         -- Pi always re-polls steering after each completed turn.
         let nextPending ← pollSteeringMessages cfg
         if hasMoreToolCalls || !nextPending.isEmpty then
-          loop ctx cfg nextPending
+          loop ctx cfg nextPending false
         else
           let followUps ← pollFollowUpMessages cfg
           if followUps.isEmpty then
             pure ctx
           else
             -- Follow-ups become pending so the next iteration injects them before streaming.
-            loop ctx cfg followUps
-  loop context initialConfig initialPending
+            loop ctx cfg followUps false
+  loop context initialConfig initialPending true
 
 ----------------------------------------------------------------------------
 -- runAgentLoop

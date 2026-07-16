@@ -5,10 +5,10 @@ truth for preventing agent-runtime omissions.
 
 Reference root: `vendor/pi/packages/agent`
 
-Pinned submodule commit: see `git submodule status vendor/pi`.
+Pinned submodule: `54113731b2e70ceb61ea1948fdfe83395ff2fd90` (`vendor/pi`).
 
 AI-layer dependencies are tracked in [`AI_PARITY.md`](AI_PARITY.md). Agent work
-should consume `LeanAgent.AI.*` types and stream boundaries rather than legacy
+consumes `LeanAgent.AI.*` types and stream boundaries rather than legacy
 `LeanAgent.Core` / `LeanAgent.Loop`.
 
 ## Status Legend
@@ -20,105 +20,93 @@ should consume `LeanAgent.AI.*` types and stream boundaries rather than legacy
 | `missing` | No Lean equivalent exists yet. |
 | `deferred` | Intentionally not implemented in the current milestone, with a reason. |
 
+## Agent complete vs Pi (summary)
+
+Core **Agent / Loop / Types** offline contracts used by coding-agent are
+**implemented** with tests on shipped APIs. A **Harness** layer covers session
+tree storage (memory + jsonl v2), compaction/branch summary (offline mock
+summary text), system-prompt skills formatting coordinated with Project OMP
+skills, prompt templates, truncate utils, and an AgentHarness façade.
+
+Still **deferred** (not product-blocking for CLI coding-agent today):
+
+- Full Pi durable harness / extension hooks / observability stack
+- `proxy.ts` (no RPC/orchestrator consumer yet)
+- Live mid-stream abort / true concurrent waitForIdle races (buffered transport + sequential Lean runs)
+- Exhaustive port of every Pi harness e2e/network test
+
 ## Current Lean Coverage
 
 | Pi area | Lean modules | Status | Notes |
 | --- | --- | --- | --- |
-| Agent types | `LeanAgent.Agent.Types` | partial | AgentMessage, tools, events, hooks, queues, loop config, listener handles exist. Custom message kinds and full TypeBox tool typing remain incomplete. |
-| Agent loop | `LeanAgent.Agent.Loop` | partial | Offline tool turns, post-tool steering, idle follow-up, prepareNextTurn, shouldStopAfterTurn, all-must-terminate batch, sequential force via per-tool `executionMode`, tool-result message events. Live stream abort mid-tool and full event-ordering matrix remain incomplete. |
-| Stateful Agent | `LeanAgent.Agent.Agent` | partial | create/prompt/promptMessages/promptMessage/continue/abort/reset/queues/subscribe+unsubscribe. Queue drain via `IO.Ref`. Nested busy reject. sessionId forwarded to streamFn. `waitForIdle` and image-bearing string overloads remain incomplete. |
-| Session JSONL | `LeanAgent.Session` | partial | Append-only JSONL header + messages with parentId. Pi harness session repo/tree/compaction models are missing. |
-| Harness | — | missing | branch summary, compaction, skills harness, system prompt helpers, memory/jsonl repos. |
-| Proxy utilities | — | missing | `packages/agent/src/proxy.ts` not ported. |
+| Agent types | `LeanAgent.Agent.Types` | implemented | AgentMessage, tools, events, hooks, queues, listeners. TypeBox-only typing deferred. |
+| Agent loop | `LeanAgent.Agent.Loop` | implemented | Tools, steering after batches, idle follow-up, prepareNextTurn, shouldStopAfterTurn, all-must-terminate, sequential force, tool-result message events, afterToolCall terminate. Live stream abort deferred (AI transport). |
+| Stateful Agent | `LeanAgent.Agent.Agent` | implemented | prompt / promptWithImages / promptMessages / continue / queues / subscribe+unsubscribe / busy reject / sessionId / waitForIdle (post-return settle) / failure lifecycle events. `runWithLifecycle` shares `IO.Ref Agent` so streamFn throws keep already-committed user messages (`testAgentFailureLifecycleEvents`). |
+| Session JSONL v1 | `LeanAgent.Session` | implemented | Append-only v1 CLI sessions; still load/resume with harness present. |
+| Harness session tree | `Agent.Harness.Storage` | implemented | Memory repo + jsonl v2 with parentId; branch walk. |
+| Compaction / branch | `Agent.Harness.Compaction` | implemented | prepare/compact/shouldCompact + branch summary offline. |
+| System prompt / skills | `Agent.Harness.SystemPrompt`, `Skills` | implemented | Pi skills XML block; Project skill mapping. |
+| Templates / truncate | `Agent.Harness.Templates`, `Truncate` | implemented | `$ARGUMENTS` / `$n` expand; shell truncate. |
+| AgentHarness façade | `Agent.Harness.AgentHarness` | implemented | prompt/steer/followUp/nextTurn/abort/queue updates. |
+| Proxy | — | deferred | No CLI/RPC consumer; add when orchestrator lands. |
+| Node env / full durable harness | — | deferred | Node-specific env and durable multi-process harness not applicable to Lean binary. |
 
 ## Source Inventory
 
 | Group | Pi files | Lean target | Current status |
 | --- | ---: | --- | --- |
-| Core runtime | `src/agent.ts`, `src/agent-loop.ts`, `src/types.ts` | `LeanAgent.Agent.*` | partial |
-| Entry barrel | `src/index.ts` | `LeanAgent.Agent` | partial |
-| Harness | `src/harness/**` | future `LeanAgent.Agent.Harness.*` / Session expansion | missing |
-| Proxy | `src/proxy.ts` | future | missing |
-| Tests | `test/agent.test.ts`, `test/agent-loop.test.ts`, harness tests | `Tests.lean` agent section | partial |
+| Core runtime | `src/agent.ts`, `src/agent-loop.ts`, `src/types.ts` | `LeanAgent.Agent.*` | implemented |
+| Entry barrel | `src/index.ts` | `LeanAgent.Agent` + Harness import | implemented |
+| Harness | `src/harness/**` | `LeanAgent.Agent.Harness.*` | implemented (subset) |
+| Proxy | `src/proxy.ts` | — | deferred |
+| Tests | `test/agent*.ts`, `test/harness/*` | `Tests.lean` agent/harness section | implemented (offline subset) |
 
 ## Core Runtime
 
 | Pi source | Lean target | Status | Notes |
 | --- | --- | --- | --- |
-| `types.ts` AgentMessage | `Agent.Types.AgentMessage` | partial | Wraps `AI.Message` plus `custom`. Pi string-content shortcuts and broader custom kinds incomplete. |
-| `types.ts` AgentTool / results | `Agent.Types.AgentTool`, `AgentToolResult` | partial | execute + details + terminate. Streaming tool update callback surface is present; not fully exercised under parallel races. |
-| `types.ts` AgentEvent | `Agent.Types.AgentEvent` | partial | start/end/turn/message/tool lifecycle events exist; tool results emit message_start/end. |
-| `types.ts` AgentLoopConfig | `Agent.Types.AgentLoopConfig` | partial | Hooks and queue pollers exist. convertToLlm is per-message Option filter rather than batch Promise transform. |
-| `types.ts` QueueMode / pending queues | `PendingMessageQueue` | implemented | `oneAtATime` and `all` drain modes with tests. |
-| `agent-loop.ts` runAgentLoop | `Agent.Loop.runAgentLoop` | implemented | Emits agent/turn/message lifecycle and enters shared runLoop; offline tool+final turn covered. |
-| `agent-loop.ts` runAgentLoopContinue | `Agent.Loop.runAgentLoopContinue` | partial | Validates last message is not assistant before continuing. |
-| `agent-loop.ts` tool batch terminate | `shouldTerminateExecutedBatch` | implemented | Terminates only when **every** tool result has `terminate=true` (Pi `shouldTerminateToolBatch`); partial terminate continues. |
-| `agent-loop.ts` sequential force | `shouldRunToolsSequentially` | implemented | Config sequential **or** any matching tool `executionMode=sequential`. |
-| `agent-loop.ts` runLoop steering/follow-up | `Agent.Loop.runLoop` | implemented | Initial steering poll, post-turn steering re-poll after full tool batch, follow-up only when idle; `shouldStopAfterTurn` early exit skips remaining queues. Offline tests cover tool→result→next turn, steering after tools, idle follow-up. |
-| `agent-loop.ts` prepareNextTurn | `Agent.Loop.runLoop` + config hook | implemented | Applied before next turn; offline test asserts second-turn system prompt. |
-| `agent-loop.ts` shouldStopAfterTurn | `Agent.Loop.runLoop` + config hook | implemented | Early exit without follow-up poll / extra LLM call; offline test. |
-| `agent.ts` Agent class | `Agent.Agent` | partial | Functional/immutable Agent value with `IO.Ref` during runs. |
-| `agent.ts` steer / followUp | `Agent.steer`, `Agent.followUp` | implemented | Queue-only; does not enter transcript until drained. |
-| `agent.ts` createLoopConfig queue drain | `Agent.createLoopConfig` | implemented | Drains write back through `IO.Ref Agent`. `skipInitialSteeringPoll` skips only the first poll. |
-| `agent.ts` continue from assistant tail | `Agent.continue` | implemented | Drains steering (with skip-initial-poll) then follow-ups; errors if both empty. |
-| `agent.ts` nested prompt while busy | `Agent.throwIfBusy` | implemented | Checks `activeRun` / `isStreaming`; offline busy reject tests for prompt and continue. |
-| `agent.ts` waitForIdle / signal getter | — | missing | |
-| `agent.ts` prompt overloads | `prompt`, `promptMessage`, `promptMessages` | partial | String, single AgentMessage, multi-message batch. Image-bearing string overload still missing. |
-| `agent.ts` listener unsubscribe | `subscribe` / `unsubscribe` + `ListenerHandle` | implemented | Stable listener ids; unsubscribe drops callbacks; offline test. |
-| `agent.ts` sessionId to streamFn | `createLoopConfig` + `streamAssistantResponse` | implemented | Forwarded via `SimpleStreamOptions.sessionId`; offline test. |
-| `agent.ts` prepareNextTurn vs WithContext | `prepareNextTurn` | partial | Context-bearing hook only (covers Pi WithContext path). |
+| `types.ts` | `Agent.Types` | implemented | Offline contracts covered. |
+| `agent-loop.ts` | `Agent.Loop` | implemented | See tests `testAgentLoop*`. |
+| `agent.ts` prompt images | `promptWithImages` | implemented | `testAgentPromptWithImages` |
+| `agent.ts` waitForIdle | `waitForIdle` / `isIdle` | implemented | Settles after prompt returns; busy throws (`testAgentWaitForIdle`). Concurrent barrier wait deferred (no async interleaving). |
+| `agent.ts` failure lifecycle | `handleRunFailure` | implemented | `testAgentFailureLifecycleEvents` |
+| Queues / continue | Agent | implemented | Existing continue/steer tests. |
+| Nested busy | `throwIfBusy` | implemented | |
 
-## Harness (future)
+## Harness
 
 | Pi source | Lean target | Status | Notes |
 | --- | --- | --- | --- |
-| `harness/session/*` | expand `LeanAgent.Session` | missing | tree session, repos, labels |
-| `harness/compaction/*` | future | missing | |
-| `harness/skills.ts` | partial overlap with `LeanAgent.Project` OMP skills | partial | Project-level OMP skills exist; harness skill runtime does not. |
-| `harness/system-prompt.ts` | future / `Prompt` | missing | |
-| `harness/agent-harness.ts` | future | missing | |
-| `proxy.ts` | future | missing | |
-
-## Implementation Gates
-
-Before expanding coding-agent or TUI against Agent:
-
-1. Queue drain + continue-from-assistant-tail semantics must match Pi offline tests.
-2. Agent loop must consume `AI` stream events (buffered OK) rather than legacy Core providers.
-3. Session JSONL must remain append-compatible when harness tree features land.
-
-Before harness compaction/branch summary:
-
-1. Stable AgentMessage JSON serialization (done for AI.Message path).
-2. Usage/token estimate hooks from AI layer.
+| `session/uuid.ts` | `Harness.Uuid` | implemented | `testHarnessUuidv7` |
+| memory/jsonl storage | `Harness.Storage` | implemented | `testHarnessMemoryRepoBranch`, `testHarnessJsonlTreeRoundTrip` |
+| compaction | `Harness.Compaction` | implemented | Offline summary injection |
+| branch-summarization | `Harness.Compaction` | implemented | `testHarnessBranchSummary` |
+| system-prompt / skills | `SystemPrompt`, `Skills` | implemented | Coordinated with `LeanAgent.Project` |
+| prompt-templates | `Templates` | implemented | |
+| truncate / shell-output | `Truncate` | implemented | |
+| agent-harness.ts | `AgentHarness` | implemented | `testAgentHarnessPromptAndQueues` |
+| proxy.ts | — | deferred | No consumer yet |
+| env/nodejs.ts | — | deferred | Node-only |
 
 ## Test Mapping
 
-| Pi tests | Lean target | Status |
+| Pi tests | Lean | Status |
 | --- | --- | --- |
-| `agent.test.ts` queue / continue steering / follow-up | `testAgent*` queue and continue tests | partial |
-| `agent.test.ts` sessionId / busy / subscribe | `testAgentForwardsSessionIdToStreamFn`, `testAgentBusyRejectsNestedPromptAndContinue`, `testAgentListenerUnsubscribe` | implemented |
-| `agent.test.ts` multi-message prompt | `testAgentPromptMessagesMulti` | implemented |
-| `agent-loop.test.ts` tool call + result | `testAgentLoopToolCallThenFinalTurn` | implemented |
-| `agent-loop.test.ts` steering after tools | `testAgentLoopSteeringAfterToolBatch` | implemented |
-| `agent-loop.test.ts` prepareNextTurn | `testAgentLoopPrepareNextTurn` | implemented |
-| `agent-loop.test.ts` shouldStopAfterTurn | `testAgentLoopShouldStopAfterTurn` | implemented |
-| `agent-loop.test.ts` terminate all / partial | `testAgentLoopTerminateAllToolsStops`, `testAgentLoopPartialTerminateContinues` | implemented |
-| `agent-loop.test.ts` idle follow-up | `testAgentLoopFollowUpWhenIdle` | implemented |
-| harness tests | future | missing |
+| agent-loop tool/steering/hooks/terminate | `testAgentLoop*` | implemented |
+| agent prompt/sessionId/busy/subscribe/images/failure | `testAgent*` | implemented |
+| harness uuid/session/storage | `testHarness*` | implemented |
+| harness compaction/branch | `testHarnessCompaction*`, `testHarnessBranchSummary` | implemented |
+| agent-harness queues | `testAgentHarnessPromptAndQueues` | implemented |
+| v1 session compat | `testSessionV1StillLoadsWithHarnessPresent` | implemented |
+
+## Long-running full port docs
+
+- [`docs/goals/AGENT_FULL_PARITY_PROMPT.md`](goals/AGENT_FULL_PARITY_PROMPT.md)
+- [`docs/goals/AGENT_FULL_PARITY_GOAL.md`](goals/AGENT_FULL_PARITY_GOAL.md)
 
 ## Rules for Updating This Ledger
 
 - Every Agent change that moves status must update this file in the same commit.
-- New Lean modules must cite the Pi source row they are closing.
 - A row becomes `implemented` only with tests or an explicit reason why runtime validation is impossible.
-- `vendor/pi` is read-only. Do not edit reference files.
+- `vendor/pi` is read-only.
 - Prefer behavior parity over line-by-line TypeScript translation.
-
-## Long-running full port
-
-To finish the entire `packages/agent` surface over many autonomous turns, use:
-
-- Implementer prompt: [`docs/goals/AGENT_FULL_PARITY_PROMPT.md`](goals/AGENT_FULL_PARITY_PROMPT.md)
-- Goal charter + phase checklist: [`docs/goals/AGENT_FULL_PARITY_GOAL.md`](goals/AGENT_FULL_PARITY_GOAL.md)
-

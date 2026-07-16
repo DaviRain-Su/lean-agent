@@ -12,11 +12,18 @@ ledger whenever `packages/ai` coverage changes. Agent-runtime parity with
 | Pi domain | LeanAgent modules |
 | --- | --- |
 | `packages/ai` | `LeanAgent.Http`, `LeanAgent.AI.*` (Types, Api, Auth, OAuth, Compat, Providers, Images, Util), `LeanAgent.Models` |
-| `packages/agent` | `LeanAgent.Agent.*` (Types, Loop, Agent), `LeanAgent.Session` |
+| `packages/agent` | `LeanAgent.Agent.*` (Types, Loop, Agent), `LeanAgent.Agent.Harness.*` (Uuid, Storage, Compaction, SystemPrompt, Skills, Templates, Truncate, AgentHarness), `LeanAgent.Session` (v1 CLI JSONL) |
 | `packages/coding-agent` | `LeanAgent.CodingTools`, `LeanAgent.Project`, `Main` |
 | `packages/tui` | future `LeanAgent.Tui` |
 | `packages/orchestrator` | future `LeanAgent.Orchestrator` |
 | root distribution | `lakefile.lean`, README, docs, release/install scripts |
+
+Agent harness owns tree session storage, compaction helpers, and the high-level
+`AgentHarness` façade. CLI modes continue to use `LeanAgent.Session` (v1
+append-only JSONL). Project OMP skills remain discovered by `LeanAgent.Project`
+and can be mapped into harness `SkillInfo` for system-prompt formatting.
+See [`docs/AGENT_PARITY.md`](AGENT_PARITY.md).
+
 
 ## Dependency Direction
 

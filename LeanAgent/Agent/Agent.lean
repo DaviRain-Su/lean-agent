@@ -308,12 +308,27 @@ def Agent.processEvents (agent : Agent) (event : AgentEvent) : IO Agent := do
     listener.callback event signal
   pure agent
 
-/-- Handle a run failure: set error message and clean up. -/
+/-- Finish a run: clear activeRun and streaming flags. -/
+def Agent.finishRun (agent : Agent) : Agent :=
+  { agent with
+    activeRun := none
+    state :=
+      { agent.state with
+        isStreaming := false
+        streamingMessage := none
+        pendingToolCalls := #[]
+      }
+  }
+
+/--
+Handle a run failure: emit Pi-style lifecycle events for the error assistant
+message, then clear activeRun (Pi agent.ts handleRunFailure).
+-/
 def Agent.handleRunFailure (agent : Agent) (errorMessage : String) (aborted : Bool) : IO Agent := do
   let stopReason : StopReason := if aborted then .aborted else .error
   let timestamp ← IO.monoMsNow
   let errorMsg : LeanAgent.AI.AssistantMessage :=
-    { content := #[.text { text := errorMessage }]
+    { content := #[.text { text := "" }]
       api := agent.state.model.api
       provider := agent.state.model.provider
       model := agent.state.model.id
@@ -322,37 +337,66 @@ def Agent.handleRunFailure (agent : Agent) (errorMessage : String) (aborted : Bo
       timestamp := timestamp
     }
   let agentMsg := AgentMessage.ofMessage (.assistant errorMsg)
-  let agent := { agent with
-    state := { agent.state with
-      messages := agent.state.messages.push agentMsg
-      isStreaming := false
-      streamingMessage := none
-      errorMessage := some errorMessage
-    }
-    activeRun := none
-  }
-  pure agent
+  let mut agent := agent
+  agent := { agent with state := { agent.state with errorMessage := some errorMessage } }
+  agent ← agent.processEvents (.messageStart agentMsg)
+  agent ← agent.processEvents (.messageEnd agentMsg)
+  agent ← agent.processEvents (.turnEnd agentMsg #[])
+  agent ← agent.processEvents (.agentEnd #[agentMsg])
+  pure (agent.finishRun)
 
-/-- Finish a run: clear activeRun. -/
-def Agent.finishRun (agent : Agent) : Agent :=
-  { agent with activeRun := none }
+/-- True when no run is active (Lean sequential equivalent of Pi idle). -/
+def Agent.isIdle (agent : Agent) : Bool :=
+  !agent.isBusy
 
-/-- Run with lifecycle management: create abort ref, set activeRun, execute, clean up. -/
+/--
+Pi `waitForIdle`: after `prompt`/`continue` return, listeners have already been
+awaited (processEvents is sequential). If the agent is still busy, fail rather
+than spin — callers must await the prompt/continue that owns the run.
+-/
+def Agent.waitForIdle (agent : Agent) : IO Unit := do
+  if agent.isBusy then
+    throw (IO.userError
+      "Agent is still processing. Await prompt/continue; waitForIdle only settles after the run returns.")
+  pure ()
+
+/-- Active abort signal for the current run, if any (Pi `signal` getter). -/
+def Agent.signal? (agent : Agent) : Option AbortSignal :=
+  match agent.activeRun with
+  | some run =>
+      some { isAborted := run.abortRef.get, message := run.abortMessage }
+  | none => none
+
+/--
+Run with lifecycle management: create abort ref, set activeRun, execute, clean up.
+
+The executor receives a shared `IO.Ref Agent` so event processing and failure
+recovery use the same live state (Pi mutates one agent object). On throw,
+`handleRunFailure` runs against the latest ref contents so already-committed
+user/tool messages are not discarded.
+-/
 def Agent.runWithLifecycle
     (agent : Agent)
-    (executor : Agent → Option AbortSignal → IO Agent) : IO Agent := do
+    (executor : IO.Ref Agent → Option AbortSignal → IO Unit) : IO Agent := do
   let abortRef ← IO.mkRef false
   let signal : AbortSignal :=
     { isAborted := abortRef.get
       message := "Run was aborted"
     }
-  let runningAgent := { agent with activeRun := some { abortRef := abortRef } }
+  let runningAgent :=
+    { agent with
+      activeRun := some { abortRef := abortRef }
+      state := { agent.state with isStreaming := true, errorMessage := none, streamingMessage := none }
+    }
+  let agentRef ← IO.mkRef runningAgent
   try
-    let agent ← executor runningAgent (some signal)
+    executor agentRef (some signal)
+    let agent ← agentRef.get
     pure (agent.finishRun)
   catch err =>
     let isAborted ← abortRef.get
-    runningAgent.handleRunFailure err.toString isAborted
+    let current ← agentRef.get
+    current.handleRunFailure err.toString isAborted
 
 ----------------------------------------------------------------------------
 -- Agent.promptMessages (defined before prompt to avoid forward reference)
@@ -360,7 +404,7 @@ def Agent.runWithLifecycle
 
 /--
 Run the agent loop with the given prompt messages, bound to a live agent ref
-so steering/follow-up drains persist.
+so steering/follow-up drains and failure recovery keep committed transcript.
 -/
 def Agent.runPromptMessages
     (agent : Agent)
@@ -368,8 +412,8 @@ def Agent.runPromptMessages
     (skipInitialSteeringPoll : Bool := false) : IO Agent := do
   agent.throwIfBusy
     "Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion."
-  agent.runWithLifecycle fun runningAgent signal => do
-    let agentRef ← IO.mkRef runningAgent
+  agent.runWithLifecycle fun agentRef signal => do
+    let runningAgent ← agentRef.get
     let context := runningAgent.createContextSnapshot
     let config ← Agent.createLoopConfig agentRef skipInitialSteeringPoll
     let streamFn := runningAgent.streamFn
@@ -379,7 +423,7 @@ def Agent.runPromptMessages
       agentRef.set updated
     let finalMessages ← runAgentLoop messages context config emit signal streamFn
     let current ← agentRef.get
-    pure { current with state := { current.state with messages := finalMessages } }
+    agentRef.set { current with state := { current.state with messages := finalMessages } }
 
 /--
 Send an array of AgentMessages as prompts to the agent.
@@ -388,16 +432,34 @@ def Agent.promptMessages (agent : Agent) (messages : Array AgentMessage) : IO Ag
   Agent.runPromptMessages agent messages false
 
 /--
+Normalize a text prompt plus optional images into a user AgentMessage
+(Pi `normalizePromptInput` for string + images).
+-/
+def Agent.normalizeTextPrompt
+    (input : String)
+    (images : Array LeanAgent.AI.ImageContent := #[]) : IO AgentMessage := do
+  let timestamp ← IO.monoMsNow
+  let mut content : Array LeanAgent.AI.ContentBlock := #[.text { text := input }]
+  for image in images do
+    content := content.push (.image image)
+  pure (AgentMessage.ofMessage (.user { content := content, timestamp := timestamp }))
+
+/--
 Send a text prompt to the agent. Normalizes the input to an AgentMessage
 and delegates to `promptMessages`.
 -/
 def Agent.prompt (agent : Agent) (input : String) : IO Agent := do
-  let timestamp ← IO.monoMsNow
-  let userMsg : LeanAgent.AI.UserMessage :=
-    { content := #[.text { text := input }]
-      timestamp := timestamp
-    }
-  let agentMsg := AgentMessage.ofMessage (.user userMsg)
+  let agentMsg ← Agent.normalizeTextPrompt input #[]
+  Agent.promptMessages agent #[agentMsg]
+
+/--
+Send a text prompt with image content blocks (Pi `prompt(input, images)`).
+-/
+def Agent.promptWithImages
+    (agent : Agent)
+    (input : String)
+    (images : Array LeanAgent.AI.ImageContent) : IO Agent := do
+  let agentMsg ← Agent.normalizeTextPrompt input images
   Agent.promptMessages agent #[agentMsg]
 
 /--
@@ -436,8 +498,8 @@ def Agent.continue (agent : Agent) : IO Agent := do
           let agent ← agentRef.get
           Agent.runPromptMessages agent followUps false
   | some _ =>
-      agent.runWithLifecycle fun runningAgent signal => do
-        let agentRef ← IO.mkRef runningAgent
+      agent.runWithLifecycle fun agentRef signal => do
+        let runningAgent ← agentRef.get
         let context := runningAgent.createContextSnapshot
         let config ← Agent.createLoopConfig agentRef false
         let streamFn := runningAgent.streamFn
@@ -447,6 +509,6 @@ def Agent.continue (agent : Agent) : IO Agent := do
           agentRef.set updated
         let finalMessages ← runAgentLoopContinue context config emit signal streamFn
         let current ← agentRef.get
-        pure { current with state := { current.state with messages := finalMessages } }
+        agentRef.set { current with state := { current.state with messages := finalMessages } }
 
 end LeanAgent.Agent

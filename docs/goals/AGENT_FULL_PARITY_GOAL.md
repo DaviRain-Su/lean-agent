@@ -53,58 +53,58 @@ Work **in order**. Mark `- [x]` only after code + tests + ledger for that phase 
 
 ### Phase 0 — Bootstrap
 
-- [ ] Confirm `vendor/pi` checked out; record pin in ledger notes if missing
-- [ ] Snapshot current `AGENT_PARITY.md` open rows into a short “remaining work” section if helpful
-- [ ] Ensure `lake test` is green on baseline before large edits
+- [x] Confirm `vendor/pi` checked out; record pin in ledger notes if missing
+- [x] Snapshot current `AGENT_PARITY.md` open rows into a short “remaining work” section if helpful
+- [x] Ensure `lake test` is green on baseline before large edits
 
 ### Phase A — Finish core Agent / Loop / Types
 
-- [ ] Image-capable prompt path + tests
-- [ ] waitForIdle / run settlement semantics (or documented Lean equivalent) + tests
-- [ ] Remaining offline `agent.test.ts` cases (failure lifecycle, listener await order if applicable, tool update settle)
-- [ ] Remaining offline `agent-loop.test.ts` cases (beforeToolCall args, parallel event order, sequential force, afterToolCall terminate)
-- [ ] convertToLlm / transformContext edge parity needed by above tests
-- [ ] Core ledger rows updated; `lake test` green
+- [x] Image-capable prompt path + tests
+- [x] waitForIdle / run settlement semantics (or documented Lean equivalent) + tests
+- [x] Remaining offline `agent.test.ts` cases (failure lifecycle, listener await order if applicable, tool update settle)
+- [x] Remaining offline `agent-loop.test.ts` cases (beforeToolCall args, parallel event order, sequential force, afterToolCall terminate)
+- [x] convertToLlm / transformContext edge parity needed by above tests
+- [x] Core ledger rows updated; `lake test` green
 
 ### Phase B — Session harness
 
-- [ ] UUID helper + tests
-- [ ] Memory storage/repo + tests
-- [ ] JSONL storage/repo (tree-capable) + tests
-- [ ] Integrate with or evolve `LeanAgent.Session` without breaking v1 resume
-- [ ] Ledger harness/session rows updated; `lake test` green
+- [x] UUID helper + tests
+- [x] Memory storage/repo + tests
+- [x] JSONL storage/repo (tree-capable) + tests
+- [x] Integrate with or evolve `LeanAgent.Session` without breaking v1 resume
+- [x] Ledger harness/session rows updated; `lake test` green
 
 ### Phase C — Compaction & branch summary
 
-- [ ] Compaction core (cut points, prepare, estimate hooks) + offline tests
-- [ ] Branch summarization + offline tests (mock streamFn for summaries)
-- [ ] Ledger rows updated; `lake test` green
+- [x] Compaction core (cut points, prepare, estimate hooks) + offline tests
+- [x] Branch summarization + offline tests (mock streamFn for summaries)
+- [x] Ledger rows updated; `lake test` green
 
 ### Phase D — Skills, system prompt, templates, utils
 
-- [ ] System prompt builder + tests
-- [ ] Prompt templates + tests
-- [ ] Skills harness coordinated with `LeanAgent.Project` + tests
-- [ ] truncate/shell-output as required by harness + tests
-- [ ] Ledger rows updated; `lake test` green
+- [x] System prompt builder + tests
+- [x] Prompt templates + tests
+- [x] Skills harness coordinated with `LeanAgent.Project` + tests
+- [x] truncate/shell-output as required by harness + tests
+- [x] Ledger rows updated; `lake test` green
 
 ### Phase E — AgentHarness façade
 
-- [ ] Harness API (prompt/steer/followUp/nextTurn, queue events, abort policy) + tests
-- [ ] Optional Main/Session wiring behind stable API (no behavior regression)
-- [ ] Ledger rows updated; `lake test` green
+- [x] Harness API (prompt/steer/followUp/nextTurn, queue events, abort policy) + tests
+- [x] Optional Main/Session wiring behind stable API (no behavior regression)
+- [x] Ledger rows updated; `lake test` green
 
 ### Phase F — Proxy (optional)
 
-- [ ] Implement proxy **or** mark deferred with reason
-- [ ] If implemented: tests + ledger; `lake test` green
+- [x] Implement proxy **or** mark deferred with reason
+- [x] If implemented: tests + ledger; `lake test` green
 
 ### Phase G — Close-out
 
-- [ ] Full ledger audit: every Pi `src/**` file has a row with terminal status
-- [ ] ARCHITECTURE + README links accurate
-- [ ] `lake test` green; CLI help smoke; capture logs to scratch if Goal harness provides `{SCRATCH}`
-- [ ] Write short “Agent complete vs Pi” summary in `docs/AGENT_PARITY.md` (Current Coverage table all terminal)
+- [x] Full ledger audit: every Pi `src/**` file has a row with terminal status
+- [x] ARCHITECTURE + README links accurate
+- [x] `lake test` green; CLI help smoke; capture logs to scratch if Goal harness provides `{SCRATCH}`
+- [x] Write short “Agent complete vs Pi” summary in `docs/AGENT_PARITY.md` (Current Coverage table all terminal)
 
 ## Per-slice mini acceptance (every autonomous turn)
 
