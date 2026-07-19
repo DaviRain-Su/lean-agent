@@ -106,6 +106,9 @@ import LeanAgent.CodingAgent.Utils.Paths
 import LeanAgent.CodingAgent.Utils.Git
 import LeanAgent.CodingAgent.Utils.VersionCheck
 import LeanAgent.CodingAgent.Utils.Changelog
+import LeanAgent.CodingAgent.Utils.PiUserAgent
+import LeanAgent.CodingAgent.Utils.Html
+import LeanAgent.CodingAgent.Utils.Ansi
 import LeanAgent.CodingAgent.ProviderAttribution
 import LeanAgent.CodingAgent.Compaction
 import LeanAgent.CodingAgent.AuthStorage

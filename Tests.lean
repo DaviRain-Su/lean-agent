@@ -18,8 +18,11 @@ import LeanAgent.CodingAgent.Utils.Paths
 import LeanAgent.CodingAgent.Utils.Git
 import LeanAgent.CodingAgent.Utils.VersionCheck
 import LeanAgent.CodingAgent.Utils.Changelog
+import LeanAgent.CodingAgent.Utils.PiUserAgent
+import LeanAgent.CodingAgent.Utils.Html
+import LeanAgent.CodingAgent.Utils.Ansi
 
-set_option maxRecDepth 2048
+set_option maxRecDepth 4096
 
 open LeanAgent
 
@@ -17867,6 +17870,156 @@ def testCompareAndGetNewEntries : IO Unit := do
 end TestChangelog
 
 -- ============================================================================
+-- Pi User-Agent (Pi `packages/coding-agent/test/pi-user-agent.test.ts`)
+-- ============================================================================
+
+namespace TestPiUserAgent
+
+open LeanAgent.CodingAgent.Utils.PiUserAgent
+
+def testGetPiUserAgentFormat : IO Unit := do
+  let ua := getPiUserAgent "1.2.3"
+  assertTrue (ua.startsWith "pi/1.2.3 (") "prefix"
+  assertTrue (ua.endsWith ")") "suffix"
+  -- Two `; ` separators => three semicolon-separated segments.
+  let chars := ua.toList.toArray
+  let mut sepCount := 0
+  let mut k := 0
+  while k + 1 < chars.size do
+    if chars[k]! == ';' && chars[k + 1]! == ' ' then sepCount := sepCount + 1
+    k := k + 1
+  assertTrue (sepCount == 2) s!"three segments via two '; ' separators (got {sepCount})"
+
+def testInjectableSegments : IO Unit := do
+  let ua := getPiUserAgent "0.1.0" "darwin" "node/v20.0.0" "arm64"
+  assertTrue (ua == "pi/0.1.0 (darwin; node/v20.0.0; arm64)") s!"exact format (got {ua})"
+
+def testVersionWithPreRelease : IO Unit := do
+  let ua := getPiUserAgent "5.0.0-beta.20"
+  assertTrue (ua.startsWith "pi/5.0.0-beta.20 (") "pre-release version in prefix"
+
+end TestPiUserAgent
+
+-- ============================================================================
+-- HTML entities (Pi `packages/coding-agent/src/utils/html.ts`)
+-- ============================================================================
+
+namespace TestHtml
+
+open LeanAgent.CodingAgent.Utils.Html
+
+def testDecodeNamedEntities : IO Unit := do
+  assertTrue (decodeHtmlEntity "amp" == some "&") "amp"
+  assertTrue (decodeHtmlEntity "lt" == some "<") "lt"
+  assertTrue (decodeHtmlEntity "gt" == some ">") "gt"
+  assertTrue (decodeHtmlEntity "quot" == some "\"") "quot"
+  assertTrue (decodeHtmlEntity "apos" == some "'") "apos"
+
+def testDecodeNumericEntities : IO Unit := do
+  assertTrue (decodeHtmlEntity "#65" == some "A") "#65 → A"
+  assertTrue (decodeHtmlEntity "#0" == some (String.singleton (Char.ofNat 0))) "#0 → NUL"
+  assertTrue (decodeHtmlEntity "#x41" == some "A") "#x41 → A"
+  assertTrue (decodeHtmlEntity "#X41" == some "A") "#X41 → A (uppercase)"
+  assertTrue (decodeHtmlEntity "#x263A" == some "☺") "#x263A → smiley"
+
+def testDecodeRejectsInvalid : IO Unit := do
+  assertTrue (decodeHtmlEntity "unknown" |>.isNone) "unknown named entity"
+  assertTrue (decodeHtmlEntity "" |>.isNone) "empty"
+  assertTrue (decodeHtmlEntity "#xZZ" |>.isNone) "#xZZ (non-hex)"
+  assertTrue (decodeHtmlEntity "#" |>.isNone) "bare #"
+  assertTrue (decodeHtmlEntity "#1114112" |>.isNone) "#1114112 (out of range, > 0x10FFFF)"
+
+def testDecodeHtmlEntityAt : IO Unit := do
+  match decodeHtmlEntityAt "a&amp;b" 1 with
+  | some d =>
+    assertTrue (d.text == "&") "&amp; decoded text"
+    assertTrue (d.length == 5) "&amp; consumed length (5)"
+  | none => fail "&amp; not decoded"
+  match decodeHtmlEntityAt "&#65;" 0 with
+  | some d => assertTrue (d.text == "A" && d.length == 5) "&#65; decoded (length 5)"
+  | none => fail "&#65; not decoded"
+  -- No semicolon in range → none.
+  assertTrue (decodeHtmlEntityAt "a &b c" 2 |>.isNone) "no semicolon → none"
+  -- Out of 16-char range → none.
+  let long := "&" ++ String.mk ((List.range 20).map (fun _ => 'x')) ++ ";"
+  assertTrue (decodeHtmlEntityAt long 0 |>.isNone) "entity longer than 16 chars → none"
+  -- Unknown entity → none.
+  assertTrue (decodeHtmlEntityAt "&foo;" 0 |>.isNone) "unknown entity → none"
+
+end TestHtml
+
+-- ============================================================================
+-- ANSI strip (Pi `packages/coding-agent/test/ansi-utils.test.ts`)
+-- ============================================================================
+
+namespace TestAnsi
+
+open LeanAgent.CodingAgent.Utils.Ansi
+
+/-- The reference regex behavior, re-encoded for direct comparison. -/
+def esc : Char := Char.ofNat 0x1B
+/-- 0x9C (C1 ST). -/
+def c1St : Char := Char.ofNat 0x9C
+/-- 0x9B (C1 CSI). -/
+def c1Csi : Char := Char.ofNat 0x9B
+
+def testStripsSimpleSgr : IO Unit := do
+  let s := String.ofList ['a', esc, '[', '3', '1', 'm', 'r', 'e', 'd', esc, '[', '0', 'm', 'z']
+  assertTrue (stripAnsi s == "aredz") "strips SGR red/reset"
+
+def testStripsHyperlinkOsc : IO Unit := do
+  -- a \x1b]8;;https://example.com\x07link\x1b]8;;\x07z → "alinkz"
+  let s := String.mk
+    [ 'a', esc, ']', '8', ';', ';', 'h', 't', 't', 'p', 's', ':', '/', '/', 'e', 'x', 'a', 'm', 'p', 'l', 'e', '.', 'c', 'o', 'm'
+    , Char.ofNat 0x07, 'l', 'i', 'n', 'k', esc, ']', '8', ';', ';', Char.ofNat 0x07, 'z' ]
+  assertTrue (stripAnsi s == "alinkz") "strips OSC hyperlink (BEL terminator)"
+
+def testStripsRis : IO Unit := do
+  let s := String.ofList [esc, 'c', 'd', 'o', 'n', 'e']
+  -- \x1b c is the RIS reset; Pi strips `\x1bc` (final byte `c`).
+  assertTrue (stripAnsi s == "done") "strips ESC c (RIS)"
+
+def testStripsSingleByteEscapes : IO Unit := do
+  -- codes 'g'(0x67)..'m'(0x6d) and 'r'(0x72)..'t'(0x74) are valid final bytes.
+  for code in #[(0x67 : Nat), 0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d, 0x72, 0x73, 0x74] do
+    let s := String.ofList [esc, Char.ofNat code, 'o', 'k']
+    assertTrue (stripAnsi s == "ok") s!"strips ESC + final byte (code {code})"
+
+def testPlainStringUnchanged : IO Unit := do
+  assertTrue (stripAnsi "plain text, no escapes" == "plain text, no escapes") "plain unchanged"
+  assertTrue (stripAnsi "" == "") "empty unchanged"
+
+def testUnmatchedEscKeptAsLiteral : IO Unit := do
+  -- `\x1b+c`: `+` is not an intermediate, param, or final byte → ESC kept as literal.
+  let s := String.ofList ['a', esc, '+', 'c']
+  -- Reference strip-ansi keeps the ESC when no CSI matches; `+c` is plain text.
+  -- (ESC is a control char; both Pi and Lean keep it here since no match consumes it.)
+  let result := stripAnsi s
+  assertTrue (result.contains '+') "+c kept as plain text"
+  assertTrue (result.contains 'c') "c kept"
+
+def testC1CsiByte : IO Unit := do
+  -- 0x9B 31 m (8-bit CSI form) → stripped.
+  let s := String.ofList ['a', c1Csi, '3', '1', 'm', 'r', 'e', 'd']
+  assertTrue (stripAnsi s == "ared") "strips 8-bit CSI (0x9B)"
+
+def testStripsMixedToolOutput : IO Unit := do
+  -- a\x1b[31mred\x1b[0m\x1b]8;;https://example.com\x07link\x1b]8;;\x07z → aredlinkz
+  let s := String.mk
+    [ 'a', esc, '[', '3', '1', 'm', 'r', 'e', 'd', esc, '[', '0', 'm'
+    , esc, ']', '8', ';', ';', 'h', 't', 't', 'p', 's', ':', '/', '/', 'e', 'x', 'a', 'm', 'p', 'l', 'e', '.', 'c', 'o', 'm'
+    , Char.ofNat 0x07, 'l', 'i', 'n', 'k', esc, ']', '8', ';', ';', Char.ofNat 0x07, 'z' ]
+  assertTrue (stripAnsi s == "aredlinkz") "strips mixed SGR + OSC hyperlink"
+
+def testDigitAsFinalByte : IO Unit := do
+  -- \x1b(0x: `(` intermediate, `0` is a digit that serves as the final byte
+  -- (backtrack from params). Reference strip-ansi yields "ax".
+  let s := String.ofList ['a', esc, '(', '0', 'x']
+  assertTrue (stripAnsi s == "ax") "digit backtracks to final byte (ESC(0x → ax)"
+
+end TestAnsi
+
+-- ============================================================================
 -- Slash commands (Pi `packages/coding-agent/test/slash-commands.test.ts`)
 -- ============================================================================
 
@@ -18532,6 +18685,22 @@ def main : IO UInt32 := do
     TestChangelog.testImageLinksRewritten
     TestChangelog.testParseChangelogContent
     TestChangelog.testCompareAndGetNewEntries
+    TestPiUserAgent.testGetPiUserAgentFormat
+    TestPiUserAgent.testInjectableSegments
+    TestPiUserAgent.testVersionWithPreRelease
+    TestHtml.testDecodeNamedEntities
+    TestHtml.testDecodeNumericEntities
+    TestHtml.testDecodeRejectsInvalid
+    TestHtml.testDecodeHtmlEntityAt
+    TestAnsi.testStripsSimpleSgr
+    TestAnsi.testStripsHyperlinkOsc
+    TestAnsi.testStripsRis
+    TestAnsi.testStripsSingleByteEscapes
+    TestAnsi.testPlainStringUnchanged
+    TestAnsi.testUnmatchedEscKeptAsLiteral
+    TestAnsi.testC1CsiByte
+    TestAnsi.testStripsMixedToolOutput
+    TestAnsi.testDigitAsFinalByte
     IO.println "lean-agent tests passed"
     pure 0
   catch err =>

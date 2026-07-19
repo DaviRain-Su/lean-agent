@@ -153,7 +153,7 @@ Full interactive TUI modes, RPC, extensions runtime still missing.
 | `src/modes/rpc/rpc-types.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/package-manager-cli.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/rpc-entry.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
-| `src/utils/ansi.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
+| `src/utils/ansi.ts` | `LeanAgent.CodingAgent.Utils.Ansi` | implemented | `stripAnsi` (hand-written CSI/OSC scanner matching Pi's bundled `ansi-regex`: greedy intermediates + param backtracking so a trailing digit serves as the final byte, OSC `ST` terminator handling, 8-bit C1 CSI, fast-path skip) (`TestAnsi.testStripsSimpleSgr`/`testStripsHyperlinkOsc`/`testStripsRis`/`testStripsSingleByteEscapes`/`testPlainStringUnchanged`/`testUnmatchedEscKeptAsLiteral`/`testC1CsiByte`/`testStripsMixedToolOutput`/`testDigitAsFinalByte`). |
 | `src/utils/changelog.ts` | `LeanAgent.CodingAgent.Utils.Changelog` | implemented | `normalizeChangelogLinks` (inline-markdown-link scanner + `normalizeChangelogLinkTarget`: legacy `pi-mono` repo canonicalization, floating `main`/`master` blob/tree re-pin, package-relative path resolution to tag-pinned GitHub URLs, in-tree POSIX normalize + `encodeURI`) + `parseChangelog`/`parseChangelogContent` (`## [x.y.z]` header scan) + `compareVersions`/`getNewEntries` (`TestChangelog.testRewritesPackageRelativeLinks`/`testCanonicalizesLegacyRepoUrls`/`testNonLinkTextUnchanged`/`testImageLinksRewritten`/`testParseChangelogContent`/`testCompareAndGetNewEntries`). Full Pi `changelog.test.ts` matrix ported. |
 | `src/utils/child-process.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/utils/clipboard-image.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
@@ -165,7 +165,7 @@ Full interactive TUI modes, RPC, extensions runtime still missing.
 | `src/utils/fs-watch.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/utils/git.ts` | `LeanAgent.CodingAgent.Utils.Git` | implemented | `parseGitUrl` (protocol gate: `https?`/`ssh`/`git://` without prefix, all shorthand with `git:` prefix) + `splitRef` (scp-like/protocol/shorthand `@ref`) + `parseGenericGitUrl` + `buildGitSource` + `hasUnsafeGitInstallPart` (NUL/backslash/absolute/`..`/malformed `%`) + minimal `parseUrl`/`decodeURIComponent?` (`TestGit.testProtocolUrls`/`testShorthandWithGitPrefix`/`testUnsafeInputsRejected`/`testRejectShorthandWithoutGitPrefix`/`testStripsDotGitSuffix`/`testPinnedFlag`). `hosted-git-info` npm dep not ported (generic parser covers the matrix). |
 | `src/utils/highlight-js-lib-index.d.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
-| `src/utils/html.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
+| `src/utils/html.ts` | `LeanAgent.CodingAgent.Utils.Html` | implemented | `decodeHtmlEntity` (named `amp`/`lt`/`gt`/`quot`/`apos` + numeric `#<dec>` + hex `#x<hex>`/`#X<hex>` with code-point range check) + `decodeHtmlEntityAt` (scan `&`..`;` within 16 chars, return text + consumed length) (`TestHtml.testDecodeNamedEntities`/`testDecodeNumericEntities`/`testDecodeRejectsInvalid`/`testDecodeHtmlEntityAt`). |
 | `src/utils/image-convert.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/utils/image-process.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/utils/image-resize-core.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
@@ -176,7 +176,7 @@ Full interactive TUI modes, RPC, extensions runtime still missing.
 | `src/utils/open-browser.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/utils/paths.ts` | `LeanAgent.CodingAgent.Utils.Paths` | partial | isLocalPath/normalizePath/canonicalizePath offline subset. |
 | `src/utils/photon.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
-| `src/utils/pi-user-agent.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
+| `src/utils/pi-user-agent.ts` | `LeanAgent.CodingAgent.Utils.PiUserAgent` | implemented | `getPiUserAgent` (`pi/<version> (<platform>; <runtime>; <arch>)`) with injectable segments; runtime reports Lean toolchain instead of node/bun (`TestPiUserAgent.testGetPiUserAgentFormat`/`testInjectableSegments`/`testVersionWithPreRelease`). |
 | `src/utils/shell.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/utils/sleep.ts` | `LeanAgent.CodingAgent.Utils.Sleep` | implemented | abort-aware sleep (`testCodingAgentUtilsDiagnosticsPaths`). |
 | `src/utils/syntax-highlight.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
