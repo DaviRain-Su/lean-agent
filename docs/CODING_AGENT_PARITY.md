@@ -154,7 +154,7 @@ Full interactive TUI modes, RPC, extensions runtime still missing.
 | `src/package-manager-cli.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/rpc-entry.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/utils/ansi.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
-| `src/utils/changelog.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
+| `src/utils/changelog.ts` | `LeanAgent.CodingAgent.Utils.Changelog` | implemented | `normalizeChangelogLinks` (inline-markdown-link scanner + `normalizeChangelogLinkTarget`: legacy `pi-mono` repo canonicalization, floating `main`/`master` blob/tree re-pin, package-relative path resolution to tag-pinned GitHub URLs, in-tree POSIX normalize + `encodeURI`) + `parseChangelog`/`parseChangelogContent` (`## [x.y.z]` header scan) + `compareVersions`/`getNewEntries` (`TestChangelog.testRewritesPackageRelativeLinks`/`testCanonicalizesLegacyRepoUrls`/`testNonLinkTextUnchanged`/`testImageLinksRewritten`/`testParseChangelogContent`/`testCompareAndGetNewEntries`). Full Pi `changelog.test.ts` matrix ported. |
 | `src/utils/child-process.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/utils/clipboard-image.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/utils/clipboard-native.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |

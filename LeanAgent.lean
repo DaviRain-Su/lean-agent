@@ -105,6 +105,7 @@ import LeanAgent.CodingAgent.Utils.JsonComments
 import LeanAgent.CodingAgent.Utils.Paths
 import LeanAgent.CodingAgent.Utils.Git
 import LeanAgent.CodingAgent.Utils.VersionCheck
+import LeanAgent.CodingAgent.Utils.Changelog
 import LeanAgent.CodingAgent.ProviderAttribution
 import LeanAgent.CodingAgent.Compaction
 import LeanAgent.CodingAgent.AuthStorage

@@ -17,6 +17,7 @@ import LeanAgent.CodingAgent.Utils.Mime
 import LeanAgent.CodingAgent.Utils.Paths
 import LeanAgent.CodingAgent.Utils.Git
 import LeanAgent.CodingAgent.Utils.VersionCheck
+import LeanAgent.CodingAgent.Utils.Changelog
 
 set_option maxRecDepth 2048
 
@@ -17776,6 +17777,96 @@ def testCheckForNewPiVersionOnlyReturnsNewer : IO Unit := do
 end TestVersionCheck
 
 -- ============================================================================
+-- Changelog (Pi `packages/coding-agent/test/changelog.test.ts`)
+-- ============================================================================
+
+namespace TestChangelog
+
+open LeanAgent.CodingAgent.Utils.Changelog
+
+def testRewritesPackageRelativeLinks : IO Unit := do
+  let markdown := String.intercalate "\n"
+    [ "[Project Trust](README.md#project-trust)"
+    , "[Extensions](docs/extensions.md#project_trust)"
+    , "[Examples](examples/extensions/)"
+    , "[Root README](../../README.md#supply-chain-hardening)"
+    ]
+  let out := normalizeChangelogLinks markdown (normalizeTag "0.79.0")
+  let expected := String.intercalate "\n"
+    [ "[Project Trust](https://github.com/earendil-works/pi/blob/v0.79.0/packages/coding-agent/README.md#project-trust)"
+    , "[Extensions](https://github.com/earendil-works/pi/blob/v0.79.0/packages/coding-agent/docs/extensions.md#project_trust)"
+    , "[Examples](https://github.com/earendil-works/pi/tree/v0.79.0/packages/coding-agent/examples/extensions/)"
+    , "[Root README](https://github.com/earendil-works/pi/blob/v0.79.0/README.md#supply-chain-hardening)"
+    ]
+  assertTrue (out == expected) s!"package-relative links: got {out}"
+
+def testCanonicalizesLegacyRepoUrls : IO Unit := do
+  let markdown := String.intercalate "\n"
+    [ "[#5167](https://github.com/earendil-works/pi-mono/pull/5167)"
+    , "[#4163](https://github.com/badlogic/pi-mono/issues/4163)"
+    , "[Agent README](https://github.com/badlogic/pi-mono/blob/main/packages/agent/README.md)"
+    , "[External](https://example.com/docs)"
+    , "[Local anchor](#settings)"
+    ]
+  let out := normalizeChangelogLinks markdown (normalizeTag "0.79.0")
+  let expected := String.intercalate "\n"
+    [ "[#5167](https://github.com/earendil-works/pi/pull/5167)"
+    , "[#4163](https://github.com/earendil-works/pi/issues/4163)"
+    , "[Agent README](https://github.com/earendil-works/pi/blob/v0.79.0/packages/agent/README.md)"
+    , "[External](https://example.com/docs)"
+    , "[Local anchor](#settings)"
+    ]
+  assertTrue (out == expected) s!"legacy repo canonicalization: got {out}"
+
+def testNonLinkTextUnchanged : IO Unit := do
+  let out := normalizeChangelogLinks "plain text, no links here" "v1.0.0"
+  assertTrue (out == "plain text, no links here") "non-link text unchanged"
+
+def testImageLinksRewritten : IO Unit := do
+  let out := normalizeChangelogLinks "![diagram](docs/img.png)" "v1.2.3"
+  assertTrue (out == "![diagram](https://github.com/earendil-works/pi/blob/v1.2.3/packages/coding-agent/docs/img.png)")
+    s!"image link rewritten: got {out}"
+
+def testParseChangelogContent : IO Unit := do
+  let body := String.intercalate "\n"
+    [ "# Changelog"
+    , ""
+    , "## [0.80.0] - 2025-01-01"
+    , "- New feature"
+    , ""
+    , "## [0.79.1]"
+    , "- Bugfix"
+    , ""
+    , "## Unreleased"
+    , "- WIP"
+    ]
+  let entries := parseChangelogContent body
+  assertTrue (entries.size == 2) s!"two versioned entries (got {entries.size})"
+  match entries[0]? with
+  | some e =>
+    assertTrue (e.major == 0 && e.minor == 80 && e.patch == 0) "first entry 0.80.0"
+    assertTrue (e.content.contains "New feature") "first entry content"
+  | none => fail "no first entry"
+  match entries[1]? with
+  | some e =>
+    assertTrue (e.major == 0 && e.minor == 79 && e.patch == 1) "second entry 0.79.1"
+    assertTrue (e.content.contains "Bugfix") "second entry content"
+  | none => fail "no second entry"
+
+def testCompareAndGetNewEntries : IO Unit := do
+  let a : ChangelogEntry := { major := 0, minor := 80, patch := 0 }
+  let b : ChangelogEntry := { major := 0, minor := 79, patch := 5 }
+  assertTrue (compareVersions a b > 0) "0.80.0 > 0.79.5"
+  assertTrue (compareVersions b a < 0) "0.79.5 < 0.80.0"
+  let entries := #[ { major := 0, minor := 80, patch := 0 }, { major := 0, minor := 79, patch := 5 }, { major := 0, minor := 79, patch := 0 } ]
+  let newOnes := getNewEntries entries "0.79.0"
+  assertTrue (newOnes.size == 2) s!"getNewEntries(>0.79.0) = 2 (got {newOnes.size})"
+  let none2 := getNewEntries entries "0.80.0"
+  assertTrue (none2.size == 0) "getNewEntries(>=0.80.0) = 0"
+
+end TestChangelog
+
+-- ============================================================================
 -- Slash commands (Pi `packages/coding-agent/test/slash-commands.test.ts`)
 -- ============================================================================
 
@@ -18435,6 +18526,12 @@ def main : IO UInt32 := do
     TestVersionCheck.testGetLatestPiReleaseParsesJson
     TestVersionCheck.testGetLatestPiReleaseRejectsMissingVersion
     TestVersionCheck.testCheckForNewPiVersionOnlyReturnsNewer
+    TestChangelog.testRewritesPackageRelativeLinks
+    TestChangelog.testCanonicalizesLegacyRepoUrls
+    TestChangelog.testNonLinkTextUnchanged
+    TestChangelog.testImageLinksRewritten
+    TestChangelog.testParseChangelogContent
+    TestChangelog.testCompareAndGetNewEntries
     IO.println "lean-agent tests passed"
     pure 0
   catch err =>
