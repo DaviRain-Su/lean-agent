@@ -38,6 +38,19 @@ def extractFrontmatter (content : String) : ParsedFrontmatter :=
 def stripFrontmatter (content : String) : String :=
   (extractFrontmatter content).body
 
+/-- Strip surrounding single or double quotes from a value. -/
+def stripQuotes (s : String) : String :=
+  let s := s.trimAscii.toString
+  if s.length >= 2 then
+    let first := s.get ⟨0⟩
+    let last := s.get ⟨s.length - 1⟩
+    if (first == '"' && last == '"') || (first == '\'' && last == '\'') then
+      (s.drop 1 |>.dropEnd 1).toString
+    else
+      s
+  else
+    s
+
 /-- Simple key: value frontmatter lines (no nested YAML). -/
 def parseSimpleFrontmatter (content : String) : List (String × String) × String :=
   let extracted := extractFrontmatter content
@@ -52,7 +65,9 @@ def parseSimpleFrontmatter (content : String) : List (String × String) × Strin
           else
             match t.splitOn ":" with
             | k :: rest =>
-                some (k.trimAscii.toString, String.intercalate ":" rest |>.trimAscii.toString)
+                let key := k.trimAscii.toString
+                let val := stripQuotes (String.intercalate ":" rest)
+                some (key, val)
             | [] => none
       (pairs, extracted.body)
 

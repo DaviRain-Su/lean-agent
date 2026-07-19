@@ -12,6 +12,7 @@ import LeanAgent.CodingAgent.TrustManager
 import LeanAgent.CodingAgent.ProjectTrust
 import LeanAgent.CodingAgent.Utils.Frontmatter
 import LeanAgent.CodingAgent.Utils.Mime
+import LeanAgent.CodingAgent.Utils.Paths
 
 set_option maxRecDepth 2048
 
@@ -17533,6 +17534,34 @@ def testCodingAgentMimeWebp : IO Unit := do
   assertTrue (result == some "image/webp") "webp: detected"
 
 end TestMime
+
+namespace TestPaths
+
+open LeanAgent.CodingAgent.Utils.Paths
+
+def testIsLocalPath : IO Unit := do
+  assertTrue (isLocalPath "./file.txt") "local: relative"
+  assertTrue (isLocalPath "/abs/path") "local: absolute"
+  assertTrue (!(isLocalPath "npm:package")) "non-local: npm:"
+  assertTrue (!(isLocalPath "git://repo")) "non-local: git:"
+  assertTrue (!(isLocalPath "https://url")) "non-local: https:"
+
+def testNormalizePathTrim : IO Unit := do
+  let result ← normalizePath "  ~/test  " {trim := true}
+  let home ← IO.getEnv "HOME"
+  match home with
+  | some h => assertTrue (result.startsWith h) "tilde expanded"
+  | none => assertTrue (result.startsWith "~/test") "no home, tilde kept"
+
+def testNormalizePathStripAt : IO Unit := do
+  let result ← normalizePath "@file.txt" {stripAtPrefix := true}
+  assertTrue (result == "file.txt") "stripped @"
+
+def testCanonicalizePathMissing : IO Unit := do
+  let result ← canonicalizePath "/nonexistent/path/file"
+  assertTrue (result == "/nonexistent/path/file") "missing: unchanged"
+
+end TestPaths
 
 def main : IO UInt32 := do
   try

@@ -11,7 +11,16 @@ Full-project charter: [`docs/goals/FULL_PI_PORT_PROMPT.md`](goals/FULL_PI_PORT_P
 
 | Lean | Status | Notes |
 | --- | --- | --- |
-| `LeanAgent.Tui.Render` | partial | formatAgentEvent / formatTranscript; not full TUI |
+| `LeanAgent.Tui.Component` | partial | Component/Container/Overlay types; TUI class missing |
+| `LeanAgent.Tui.Utils` | partial | visibleWidth, wrapText, padRight, applyBackground, truncateToWidth |
+| `LeanAgent.Tui.Render` | partial | formatAgentEvent / formatTranscript; legacy function-based components |
+| `LeanAgent.Tui.Spacer` | implemented | Empty line spacer |
+| `LeanAgent.Tui.Text` | implemented | Multi-line text with word wrapping |
+| `LeanAgent.Tui.Box` | implemented | Container with padding and background |
+| `LeanAgent.Tui.SelectList` | implemented | Scrollable selectable list |
+| `LeanAgent.Tui.Loader` | implemented | Spinner animation with message |
+| `LeanAgent.Tui.Input` | implemented | Single-line text input |
+| `LeanAgent.Tui.Markdown` | implemented | Markdown to terminal renderer |
 
 ## Status legend
 
