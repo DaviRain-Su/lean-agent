@@ -16,6 +16,7 @@ import LeanAgent.CodingAgent.Utils.Frontmatter
 import LeanAgent.CodingAgent.Utils.Mime
 import LeanAgent.CodingAgent.Utils.Paths
 import LeanAgent.CodingAgent.Utils.Git
+import LeanAgent.CodingAgent.Utils.VersionCheck
 
 set_option maxRecDepth 2048
 
@@ -26,6 +27,14 @@ def fail (message : String) : IO Unit :=
 
 def assertTrue (condition : Bool) (message : String) : IO Unit :=
   if condition then pure () else fail message
+
+/-- Set an environment variable (libuv FFI; Lean 4.31 has no `IO.setEnv`). -/
+@[extern "lean_uv_os_setenv"]
+opaque setEnvVar : @&String → @&String → IO Unit
+
+/-- Unset an environment variable. -/
+@[extern "lean_uv_os_unsetenv"]
+opaque unsetEnvVar : @&String → IO Unit
 
 def waitForSome
     (read : IO (Option α))
@@ -17646,6 +17655,127 @@ def testPinnedFlag : IO Unit := do
 end TestGit
 
 -- ============================================================================
+-- Version check (Pi `packages/coding-agent/test/version-check.test.ts`)
+-- ============================================================================
+
+namespace TestVersionCheck
+
+open LeanAgent.CodingAgent.Utils.VersionCheck
+
+/-- Parse a JSON string to `Option Lean.Json`. -/
+def parseJson? (s : String) : Option Lean.Json :=
+  match Lean.Json.parse s with
+  | .ok j => some j
+  | .error _ => none
+
+def testComparePackageVersions : IO Unit := do
+  -- Pi `compares package versions`.
+  match comparePackageVersions "0.70.6" "0.70.5" with
+  | some r => assertTrue (r > 0) "0.70.6 > 0.70.5"
+  | none => fail "0.70.6 vs 0.70.5: expected some"
+  match comparePackageVersions "0.70.5" "0.70.5" with
+  | some r => assertTrue (r == 0) "0.70.5 == 0.70.5"
+  | none => fail "equal versions: expected some"
+  match comparePackageVersions "0.70.4" "0.70.5" with
+  | some r => assertTrue (r < 0) "0.70.4 < 0.70.5"
+  | none => fail "0.70.4 vs 0.70.5: expected some"
+  -- Prerelease: numeric identifier compared numerically (beta.20 > beta.9).
+  match comparePackageVersions "5.0.0-beta.20" "5.0.0-beta.9" with
+  | some r => assertTrue (r > 0) "5.0.0-beta.20 > 5.0.0-beta.9"
+  | none => fail "prerelease compare: expected some"
+
+def testIsNewerPackageVersion : IO Unit := do
+  assertTrue (!isNewerPackageVersion "0.70.5" "0.70.5") "equal → not newer"
+  assertTrue (isNewerPackageVersion "0.70.6" "0.70.5") "higher patch → newer"
+  assertTrue (isNewerPackageVersion "1.0.0" "0.9.9") "major bump → newer"
+  -- Release > prerelease (same core).
+  assertTrue (isNewerPackageVersion "1.0.0" "1.0.0-rc.1") "release > prerelease"
+  assertTrue (!isNewerPackageVersion "1.0.0-rc.1" "1.0.0") "prerelease < release"
+
+def testParseSemverValidity : IO Unit := do
+  assertTrue ((parseSemver? "1.2.3").isSome) "valid plain"
+  assertTrue ((parseSemver? "v1.2.3").isSome) "valid v-prefix"
+  assertTrue ((parseSemver? "1.2.3-beta.1").isSome) "valid prerelease"
+  assertTrue ((parseSemver? "1.2.3+build.5").isSome) "valid build metadata"
+  assertTrue ((parseSemver? "1.2").isNone) "invalid: too few components"
+  assertTrue ((parseSemver? "1.2.3.4").isNone) "invalid: too many components"
+  assertTrue ((parseSemver? "a.b.c").isNone) "invalid: non-numeric"
+  assertTrue ((parseSemver? "1.2.3-").isNone) "invalid: empty prerelease"
+
+def testPrereleasePrecedence : IO Unit := do
+  -- Numeric identifiers compared numerically.
+  match comparePackageVersions "1.0.0-2" "1.0.0-10" with
+  | some r => assertTrue (r < 0) "1.0.0-2 < 1.0.0-10 (numeric)"
+  | none => fail "numeric prerelease: expected some"
+  -- Alphanumeric has higher precedence than numeric.
+  match comparePackageVersions "1.0.0-alpha" "1.0.0-1" with
+  | some r => assertTrue (r > 0) "1.0.0-alpha > 1.0.0-1 (alpha > numeric)"
+  | none => fail "alpha vs numeric: expected some"
+  -- Fewer identifiers = lower when preceding equal.
+  match comparePackageVersions "1.0.0-alpha" "1.0.0-alpha.1" with
+  | some r => assertTrue (r < 0) "1.0.0-alpha < 1.0.0-alpha.1 (fewer fields)"
+  | none => fail "fewer fields: expected some"
+
+def testVersionCheckDisabledGate : IO Unit := do
+  -- PI_SKIP_VERSION_CHECK=1 → transport never invoked.
+  LeanAgent.CodingAgent.Utils.VersionCheck.unsetVersionCheckEnv
+  setEnvVar "PI_SKIP_VERSION_CHECK" "1"
+  let transport : LatestVersionTransport :=
+    { fetch := fun _ => do
+        fail "transport should not be called when version check disabled"
+        pure none }
+  match ← getLatestPiRelease "1.2.3" transport with
+  | none => pure ()
+  | some _ => fail "expected none when disabled"
+  -- PI_OFFLINE=1 also disables.
+  LeanAgent.CodingAgent.Utils.VersionCheck.unsetVersionCheckEnv
+  setEnvVar "PI_OFFLINE" "1"
+  let transport2 : LatestVersionTransport :=
+    { fetch := fun _ => do
+        fail "transport should not be called when offline"
+        pure none }
+  match ← getLatestPiRelease "1.2.3" transport2 with
+  | none => pure ()
+  | some _ => fail "expected none when offline"
+  LeanAgent.CodingAgent.Utils.VersionCheck.unsetVersionCheckEnv
+
+def testGetLatestPiReleaseParsesJson : IO Unit := do
+  LeanAgent.CodingAgent.Utils.VersionCheck.unsetVersionCheckEnv
+  let transport : LatestVersionTransport :=
+    { fetch := fun _ => pure (parseJson? "{\"version\":\"1.2.4\",\"packageName\":\"@new-scope/pi\",\"note\":\"  **Read this**  \"}") }
+  match ← getLatestPiRelease "1.2.3" transport with
+  | some r =>
+    assertTrue (r.version == "1.2.4") "parsed version"
+    assertTrue (r.packageName == some "@new-scope/pi") "parsed packageName (trimmed)"
+    assertTrue (r.note == some "**Read this**") "parsed note (trimmed)"
+  | none => fail "expected some release"
+
+def testGetLatestPiReleaseRejectsMissingVersion : IO Unit := do
+  LeanAgent.CodingAgent.Utils.VersionCheck.unsetVersionCheckEnv
+  let transport : LatestVersionTransport :=
+    { fetch := fun _ => pure (parseJson? "{\"packageName\":\"x\"}") }
+  match ← getLatestPiRelease "1.2.3" transport with
+  | none => pure ()
+  | some _ => fail "expected none when version missing"
+
+def testCheckForNewPiVersionOnlyReturnsNewer : IO Unit := do
+  LeanAgent.CodingAgent.Utils.VersionCheck.unsetVersionCheckEnv
+  let transport : LatestVersionTransport :=
+    { fetch := fun _ => pure (parseJson? "{\"version\":\"1.2.3\"}") }
+  -- Same version → none.
+  match ← checkForNewPiVersion "1.2.3" transport with
+  | none => pure ()
+  | some _ => fail "same version should not be reported as newer"
+  -- Older current → returns the release.
+  let transport2 : LatestVersionTransport :=
+    { fetch := fun _ => pure (parseJson? "{\"version\":\"1.2.4\"}") }
+  match ← checkForNewPiVersion "1.2.2" transport2 with
+  | some r => assertTrue (r.version == "1.2.4") "newer version returned"
+  | none => fail "expected newer release"
+
+end TestVersionCheck
+
+-- ============================================================================
 -- Slash commands (Pi `packages/coding-agent/test/slash-commands.test.ts`)
 -- ============================================================================
 
@@ -18297,6 +18427,14 @@ def main : IO UInt32 := do
     TestGit.testRejectShorthandWithoutGitPrefix
     TestGit.testStripsDotGitSuffix
     TestGit.testPinnedFlag
+    TestVersionCheck.testComparePackageVersions
+    TestVersionCheck.testIsNewerPackageVersion
+    TestVersionCheck.testParseSemverValidity
+    TestVersionCheck.testPrereleasePrecedence
+    TestVersionCheck.testVersionCheckDisabledGate
+    TestVersionCheck.testGetLatestPiReleaseParsesJson
+    TestVersionCheck.testGetLatestPiReleaseRejectsMissingVersion
+    TestVersionCheck.testCheckForNewPiVersionOnlyReturnsNewer
     IO.println "lean-agent tests passed"
     pure 0
   catch err =>

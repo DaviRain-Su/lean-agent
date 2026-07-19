@@ -181,7 +181,7 @@ Full interactive TUI modes, RPC, extensions runtime still missing.
 | `src/utils/sleep.ts` | `LeanAgent.CodingAgent.Utils.Sleep` | implemented | abort-aware sleep (`testCodingAgentUtilsDiagnosticsPaths`). |
 | `src/utils/syntax-highlight.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/utils/tools-manager.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
-| `src/utils/version-check.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
+| `src/utils/version-check.ts` | `LeanAgent.CodingAgent.Utils.VersionCheck` | implemented | Self-contained semver `parseSemver?`/`compareSemver` (major.minor.patch + prerelease precedence: numeric<alphanumeric, numeric-by-value, fewer-fields-lower) + `comparePackageVersions`/`isNewerPackageVersion`; network entry points (`getLatestPiRelease`/`getLatestPiVersion`/`checkForNewPiVersion`) honor `PI_SKIP_VERSION_CHECK`/`PI_OFFLINE` env gates and take an injectable `LatestVersionTransport` (`TestVersionCheck.testComparePackageVersions`/`testIsNewerPackageVersion`/`testParseSemverValidity`/`testPrereleasePrecedence`/`testVersionCheckDisabledGate`/`testGetLatestPiReleaseParsesJson`/`testGetLatestPiReleaseRejectsMissingVersion`/`testCheckForNewPiVersionOnlyReturnsNewer`). npm `semver` dep replaced by the in-tree parser; runtime HTTP wiring deferred. |
 | `src/utils/windows-self-update.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 
 ## Rules
