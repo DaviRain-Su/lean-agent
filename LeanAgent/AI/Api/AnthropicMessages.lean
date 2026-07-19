@@ -5,6 +5,7 @@ import LeanAgent.AI.Types
 import LeanAgent.AI.Util.Diagnostics
 import LeanAgent.AI.Util.Headers
 import LeanAgent.AI.Util.JsonParse
+import LeanAgent.AI.Util.ProgressiveSse
 import LeanAgent.AI.Util.Retry
 import LeanAgent.AI.Util.SSE
 import LeanAgent.AI.Util.SanitizeUnicode
@@ -571,23 +572,46 @@ def requestHeaders
        ]))
     options.headers
 
+def httpJsonPostConfig
+    (config : AnthropicMessagesConfig)
+    (options : AnthropicMessagesOptions := {})
+    (tools : Array LeanAgent.AI.Tool := #[]) : LeanAgent.Http.JsonPostConfig :=
+  { url := messagesUrl config.baseUrl
+    apiKey := ""
+    signal := options.signal
+    headers := requestHeaders config options tools
+    timeoutSeconds := config.timeoutSeconds
+    connectTimeoutSeconds := config.connectTimeoutSeconds
+    maxResponseBytes := config.maxResponseBytes
+    noProxy := config.noProxy
+    userAgent := config.userAgent
+  }
+
 def runHttpJson
     (config : AnthropicMessagesConfig)
     (model : LeanAgent.AI.ModelRef)
     (payload : Lean.Json)
     (options : AnthropicMessagesOptions := {})
     (tools : Array LeanAgent.AI.Tool := #[]) : IO String := do
-  let response ← LeanAgent.Http.postJsonResponse
-    { url := messagesUrl config.baseUrl
-      apiKey := ""
-      headers := requestHeaders config options tools
-      timeoutSeconds := config.timeoutSeconds
-      connectTimeoutSeconds := config.connectTimeoutSeconds
-      maxResponseBytes := config.maxResponseBytes
-      noProxy := config.noProxy
-      userAgent := config.userAgent
-    }
-    payload.compress
+  let response ←
+    LeanAgent.Http.postJsonResponse (httpJsonPostConfig config options tools) payload.compress
+  callResponseHook options (modelRef config model) response
+  if response.status < 200 || response.status >= 300 then
+    throw (IO.userError (LeanAgent.AI.Util.Diagnostics.providerHttpErrorMessage response.status response.body))
+  pure response.body
+
+def runHttpJsonProgressive
+    (config : AnthropicMessagesConfig)
+    (model : LeanAgent.AI.ModelRef)
+    (payload : Lean.Json)
+    (options : AnthropicMessagesOptions := {})
+    (tools : Array LeanAgent.AI.Tool := #[])
+    (onChunk : String → IO Unit := fun _ => pure ()) : IO String := do
+  let response ←
+    LeanAgent.Http.postJsonResponseProgressive
+      (httpJsonPostConfig config options tools)
+      payload.compress
+      onChunk
   callResponseHook options (modelRef config model) response
   if response.status < 200 || response.status >= 300 then
     throw (IO.userError (LeanAgent.AI.Util.Diagnostics.providerHttpErrorMessage response.status response.body))
@@ -1073,6 +1097,22 @@ def finalizeOpenBlocks
             events := nextEvents
     pure (state, events)
 
+def buildStreamFromState
+    (api provider model : String)
+    (timestamp : Nat)
+    (state : StreamingState)
+    (parsedEvents : Array ParsedStreamEvent) :
+    Except String LeanAgent.AI.AssistantMessageEventStream := do
+  if state.sawMessageStart && !state.sawMessageStop then
+    throw "Anthropic stream ended before message_stop"
+  let (finalState, finalParsedEvents) := finalizeOpenBlocks state parsedEvents
+  let message := messageFromStreamingState api provider model timestamp finalState
+  let events :=
+    #[LeanAgent.AI.AssistantMessageEvent.start message]
+      ++ finalParsedEvents.map (parsedEventToAssistantEvent message)
+      ++ #[LeanAgent.AI.completionEvent message]
+  pure { events := events, finalResult := message }
+
 def parseStreamingEventStream
     (api provider model : String)
     (timestamp : Nat)
@@ -1084,15 +1124,50 @@ def parseStreamingEventStream
     let (nextState, nextEvents) ← applyStreamEvent state parsedEvents chunk
     state := nextState
     parsedEvents := nextEvents
-  if state.sawMessageStart && !state.sawMessageStop then
-    throw "Anthropic stream ended before message_stop"
-  let (finalState, finalParsedEvents) := finalizeOpenBlocks state parsedEvents
-  let message := messageFromStreamingState api provider model timestamp finalState
-  let events :=
-    #[LeanAgent.AI.AssistantMessageEvent.start message]
-      ++ finalParsedEvents.map (parsedEventToAssistantEvent message)
-      ++ #[LeanAgent.AI.completionEvent message]
-  pure { events := events, finalResult := message }
+  buildStreamFromState api provider model timestamp state parsedEvents
+
+def sseEventToAnthropicChunk? (event : LeanAgent.AI.Util.SSE.Event) : Except String (Option Lean.Json) := do
+  let data := event.data.trimAscii.toString
+  if data == "[DONE]" || data.isEmpty then
+    pure none
+  else
+    pure (some (← LeanAgent.AI.Util.JsonParse.parseJsonWithRepair event.data))
+
+def streamRawProgressive
+    (produceBody : (String → IO Unit) → IO String)
+    (api provider modelId : String)
+    (timestamp : Nat)
+    (sseEventsSeen : Option (IO.Ref Nat) := none) :
+    IO LeanAgent.AI.AssistantMessageEventStream := do
+  let stateRef ← IO.mkRef ({} : StreamingState)
+  let parsedRef ← IO.mkRef (#[] : Array ParsedStreamEvent)
+  let (raw, count, progressiveErr) ← LeanAgent.AI.Util.ProgressiveSse.feedWhile produceBody fun event => do
+    match sseEventToAnthropicChunk? event with
+    | .error err => pure (.error err)
+    | .ok none => pure (.ok ())
+    | .ok (some chunk) =>
+        match applyStreamEvent (← stateRef.get) (← parsedRef.get) chunk with
+        | .error err => pure (.error err)
+        | .ok (state, parsed) =>
+            stateRef.set state
+            parsedRef.set parsed
+            pure (.ok ())
+  match sseEventsSeen with
+  | some counter => counter.set count
+  | none => pure ()
+  match progressiveErr with
+  | some _ =>
+      match parseStreamingEventStream api provider modelId timestamp raw with
+      | .ok stream => pure stream
+      | .error err => throw (IO.userError s!"failed to parse Anthropic streaming response: {err}\n{raw}")
+  | none =>
+      match buildStreamFromState api provider modelId timestamp (← stateRef.get) (← parsedRef.get) with
+      | .ok stream => pure stream
+      | .error err =>
+          match parseStreamingEventStream api provider modelId timestamp raw with
+          | .ok stream => pure stream
+          | .error err2 =>
+              throw (IO.userError s!"failed to parse Anthropic streaming response: {err}\n{err2}\n{raw}")
 
 def parseResponse
     (api provider model : String)
@@ -1151,12 +1226,12 @@ def completeStreamWithOptions
   let payload ← applyPayloadHook options ref
     (requestToJsonWithOptions ref input modelMaxTokens reasoning context options true)
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
-  let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
-    (runHttpJson config ref payload options context.tools)
-    options.signal
   let timestamp ← IO.monoMsNow
-  match parseStreamingEventStream model.api model.provider model.id timestamp raw with
-  | .ok stream => pure stream
-  | .error err => throw (IO.userError s!"failed to parse Anthropic streaming response: {err}\n{raw}")
+  streamRawProgressive
+    (fun onChunk =>
+      LeanAgent.AI.Util.Retry.withRetries retryPolicy
+        (runHttpJsonProgressive config ref payload options context.tools onChunk)
+        options.signal)
+    model.api model.provider model.id timestamp
 
 end LeanAgent.AI.Api.AnthropicMessages

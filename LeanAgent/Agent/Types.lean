@@ -48,6 +48,16 @@ def toAI? : AgentMessage → Option LeanAgent.AI.Message
 
 def fromAI (message : LeanAgent.AI.Message) : AgentMessage :=
   .ofMessage message
+/-- Check if custom message is of a specific customType (Pi custom message matrix). -/
+def isCustomType (msg : AgentMessage) (t : String) : Bool :=
+  match msg with
+  | .custom ct _ _ _ => ct == t
+  | _ => false
+
+def isBashExecution (msg : AgentMessage) : Bool := isCustomType msg "bashExecution"
+def isBranchSummary (msg : AgentMessage) : Bool := isCustomType msg "branchSummary"
+def isCompactionSummary (msg : AgentMessage) : Bool := isCustomType msg "compactionSummary"
+
 
 end AgentMessage
 
@@ -279,5 +289,4 @@ def clear (queue : PendingMessageQueue) : PendingMessageQueue :=
   { queue with messages := #[] }
 
 end PendingMessageQueue
-
 end LeanAgent.Agent

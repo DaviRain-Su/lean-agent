@@ -1065,6 +1065,7 @@ def runHttpEventStreamJson
     { method := "POST"
       url := prepared.url
       body := some prepared.payload.compress
+      signal := options.signal
       timeoutSeconds := config.timeoutSeconds
       connectTimeoutSeconds := config.connectTimeoutSeconds
       maxResponseBytes := config.maxResponseBytes
@@ -1072,6 +1073,32 @@ def runHttpEventStreamJson
       userAgent := config.userAgent
       headers := prepared.headers
     }
+  callResponseHook options model response
+  if response.status < 200 || response.status >= 300 then
+    throw (IO.userError (LeanAgent.AI.Util.Diagnostics.providerHttpErrorMessage response.status response.body))
+  pure response.body
+
+/-- Progressive AWS event-stream: `onEventJson` receives each complete frame as a JSON object mid-transfer. -/
+def runHttpEventStreamJsonProgressive
+    (config : BedrockConverseStreamConfig)
+    (model : LeanAgent.AI.ModelRef)
+    (prepared : PreparedRequest)
+    (options : BedrockOptions := {})
+    (onEventJson : String → IO Unit := fun _ => pure ()) : IO String := do
+  LeanAgent.AI.Util.Abort.throwIfAborted options.signal
+  let response ← LeanAgent.Http.requestAwsEventStreamJsonResponseProgressive
+    { method := "POST"
+      url := prepared.url
+      body := some prepared.payload.compress
+      signal := options.signal
+      timeoutSeconds := config.timeoutSeconds
+      connectTimeoutSeconds := config.connectTimeoutSeconds
+      maxResponseBytes := config.maxResponseBytes
+      noProxy := config.noProxy
+      userAgent := config.userAgent
+      headers := prepared.headers
+    }
+    onEventJson
   callResponseHook options model response
   if response.status < 200 || response.status >= 300 then
     throw (IO.userError (LeanAgent.AI.Util.Diagnostics.providerHttpErrorMessage response.status response.body))
@@ -1476,6 +1503,19 @@ def parseStreamingItems (raw : String) : Except String (Array Lean.Json) := do
   let items ← parsed.getArr?
   pure items
 
+def buildStreamFromState
+    (api provider model : String)
+    (timestamp : Nat)
+    (state : StreamingState)
+    (parsedEvents : Array ParsedStreamEvent) :
+    Except String LeanAgent.AI.AssistantMessageEventStream := do
+  let message := messageFromStreamingState api provider model timestamp state
+  let events :=
+    #[LeanAgent.AI.AssistantMessageEvent.start message]
+      ++ parsedEvents.map (parsedEventToAssistantEvent message)
+      ++ #[LeanAgent.AI.completionEvent message]
+  pure { events := events, finalResult := message }
+
 def parseStreamingEventStream
     (api provider model : String)
     (timestamp : Nat)
@@ -1487,12 +1527,55 @@ def parseStreamingEventStream
     let (nextState, nextEvents) ← applyStreamItem state parsedEvents item
     state := nextState
     parsedEvents := nextEvents
-  let message := messageFromStreamingState api provider model timestamp state
-  let events :=
-    #[LeanAgent.AI.AssistantMessageEvent.start message]
-      ++ parsedEvents.map (parsedEventToAssistantEvent message)
-      ++ #[LeanAgent.AI.completionEvent message]
-  pure { events := events, finalResult := message }
+  buildStreamFromState api provider model timestamp state parsedEvents
+
+/--
+Progressive ConverseStream: apply AWS event-stream frames as JSON objects mid-transfer.
+Falls back to batch parse of the full normalized array on progressive errors.
+-/
+def streamRawProgressive
+    (config : BedrockConverseStreamConfig)
+    (model : LeanAgent.AI.ModelRef)
+    (prepared : PreparedRequest)
+    (options : BedrockOptions)
+    (api provider modelId : String)
+    (timestamp : Nat)
+    (eventsSeen : Option (IO.Ref Nat) := none) :
+    IO LeanAgent.AI.AssistantMessageEventStream := do
+  let stateRef ← IO.mkRef ({} : StreamingState)
+  let parsedRef ← IO.mkRef (#[] : Array ParsedStreamEvent)
+  let errRef ← IO.mkRef (none : Option String)
+  let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
+  let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
+    (runHttpEventStreamJsonProgressive config model prepared options fun eventJson => do
+      if (← errRef.get).isSome then
+        pure ()
+      else
+        match Lean.Json.parse eventJson with
+        | .error e => errRef.set (some e)
+        | .ok item =>
+            match applyStreamItem (← stateRef.get) (← parsedRef.get) item with
+            | .error e => errRef.set (some e)
+            | .ok (state, parsed) =>
+                stateRef.set state
+                parsedRef.set parsed
+                match eventsSeen with
+                | some counter => counter.modify (· + 1)
+                | none => pure ())
+    options.signal
+  match ← errRef.get with
+  | some _ =>
+      match parseStreamingEventStream api provider modelId timestamp raw with
+      | .ok stream => pure stream
+      | .error err => throw (IO.userError s!"failed to parse Bedrock streaming response: {err}\n{raw}")
+  | none =>
+      match buildStreamFromState api provider modelId timestamp (← stateRef.get) (← parsedRef.get) with
+      | .ok stream => pure stream
+      | .error err =>
+          match parseStreamingEventStream api provider modelId timestamp raw with
+          | .ok stream => pure stream
+          | .error err2 =>
+              throw (IO.userError s!"failed to parse Bedrock streaming response: {err}\n{err2}\n{raw}")
 
 def completeStreamWithOptions
     (config : BedrockConverseStreamConfig)
@@ -1514,13 +1597,8 @@ def completeStreamWithOptions
     reasoning
     context
     options
-  let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
-  let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
-    (runHttpEventStreamJson config requestModel prepared options)
-    options.signal
   let timestamp ← IO.monoMsNow
-  match parseStreamingEventStream model.api model.provider model.id timestamp raw with
-  | .ok stream => pure stream
-  | .error err => throw (IO.userError s!"failed to parse Bedrock streaming response: {err}\n{raw}")
+  streamRawProgressive config requestModel prepared options
+    model.api model.provider model.id timestamp
 
 end LeanAgent.AI.Api.BedrockConverseStream

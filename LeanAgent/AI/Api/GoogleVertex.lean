@@ -438,6 +438,7 @@ def runHttpJson
   let response ← LeanAgent.Http.postJsonResponse
     { url := url
       apiKey := ""
+      signal := options.signal
       headers := headers
       timeoutSeconds := config.timeoutSeconds
       connectTimeoutSeconds := config.connectTimeoutSeconds
@@ -446,6 +447,32 @@ def runHttpJson
       userAgent := config.userAgent
     }
     payload.compress
+  callResponseHook options (modelRef config model) response
+  if response.status < 200 || response.status >= 300 then
+    throw (IO.userError (LeanAgent.AI.Util.Diagnostics.providerHttpErrorMessage response.status response.body))
+  pure response.body
+
+def runHttpJsonProgressive
+    (config : GoogleVertexConfig)
+    (model : LeanAgent.AI.ModelRef)
+    (url : String)
+    (payload : Lean.Json)
+    (options : GoogleVertexOptions := {})
+    (onChunk : String → IO Unit := fun _ => pure ()) : IO String := do
+  let headers ← resolvedRequestHeaders config options
+  let response ← LeanAgent.Http.postJsonResponseProgressive
+    { url := url
+      apiKey := ""
+      signal := options.signal
+      headers := headers
+      timeoutSeconds := config.timeoutSeconds
+      connectTimeoutSeconds := config.connectTimeoutSeconds
+      maxResponseBytes := config.maxResponseBytes
+      noProxy := config.noProxy
+      userAgent := config.userAgent
+    }
+    payload.compress
+    onChunk
   callResponseHook options (modelRef config model) response
   if response.status < 200 || response.status >= 300 then
     throw (IO.userError (LeanAgent.AI.Util.Diagnostics.providerHttpErrorMessage response.status response.body))
@@ -487,12 +514,13 @@ def completeStreamWithOptions
   let project ← resolveProject options
   let location ← resolveLocation options
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
-  let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
-    (runHttpJson config ref (streamGenerateContentUrl config.baseUrl project location model.id) payload options)
-    options.signal
   let timestamp ← IO.monoMsNow
-  match LeanAgent.AI.Api.GoogleGenerativeAI.parseStreamingEventStream model.api model.provider model.id timestamp raw with
-  | .ok stream => pure stream
-  | .error err => throw (IO.userError s!"failed to parse Google Vertex stream: {err}\n{raw}")
+  let url := streamGenerateContentUrl config.baseUrl project location model.id
+  LeanAgent.AI.Api.GoogleGenerativeAI.streamRawProgressive
+    (fun onChunk =>
+      LeanAgent.AI.Util.Retry.withRetries retryPolicy
+        (runHttpJsonProgressive config ref url payload options onChunk)
+        options.signal)
+    model.api model.provider model.id timestamp
 
 end LeanAgent.AI.Api.GoogleVertex

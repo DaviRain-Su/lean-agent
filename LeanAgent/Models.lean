@@ -543,44 +543,311 @@ def openRouterKimiCompat : ModelCompat :=
     requiresReasoningContentOnAssistantMessages := true
   }
 
+def openRouterModels : Array ModelInfo :=
+  #[
+     catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "ai21/jamba-large-1.7" "AI21: Jamba Large 1.7" 2.0 8.0 0.0 0.0 256000 4096 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "amazon/nova-2-lite-v1" "Amazon: Nova 2 Lite" 0.3 2.5 0.0 0.0 1000000 65535 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "amazon/nova-lite-v1" "Amazon: Nova Lite 1.0" 0.06 0.24 0.0 0.0 300000 5120 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "amazon/nova-micro-v1" "Amazon: Nova Micro 1.0" 0.035 0.14 0.0 0.0 128000 5120 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "amazon/nova-premier-v1" "Amazon: Nova Premier 1.0" 2.5 12.5 0.625 0.0 1000000 32000 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "amazon/nova-pro-v1" "Amazon: Nova Pro 1.0" 0.8 3.2 0.0 0.0 300000 5120 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "anthropic/claude-3-haiku" "Anthropic: Claude 3 Haiku" 0.25 1.25 0.03 0.3 200000 4096 false { openRouterCompat with cacheControlFormat := some "anthropic" } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "anthropic/claude-fable-5" "Anthropic: Claude Fable 5" 10.0 50.0 1.0 12.5 1000000 128000 true { openRouterCompat with cacheControlFormat := some "anthropic" } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "anthropic/claude-haiku-4.5" "Anthropic: Claude Haiku 4.5" 1.0 5.0 0.1 1.25 200000 64000 true { openRouterCompat with cacheControlFormat := some "anthropic" } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "anthropic/claude-opus-4" "Anthropic: Claude Opus 4" 15.0 75.0 1.5 18.75 200000 32000 true { openRouterCompat with cacheControlFormat := some "anthropic" } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "anthropic/claude-opus-4.1" "Anthropic: Claude Opus 4.1" 15.0 75.0 1.5 18.75 200000 32000 true { openRouterCompat with cacheControlFormat := some "anthropic" } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "anthropic/claude-opus-4.5" "Anthropic: Claude Opus 4.5" 5.0 25.0 0.5 6.25 200000 64000 true { openRouterCompat with cacheControlFormat := some "anthropic" } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "anthropic/claude-opus-4.6" "Anthropic: Claude Opus 4.6" 5.0 25.0 0.5 6.25 1000000 128000 true { openRouterCompat with cacheControlFormat := some "anthropic" } #[ { level := .level .xhigh, mapped := some "max" } ] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "anthropic/claude-opus-4.6-fast" "Anthropic: Claude Opus 4.6 (Fast)" 30.0 150.0 3.0 37.5 1000000 128000 true { openRouterCompat with cacheControlFormat := some "anthropic" } #[ { level := .level .xhigh, mapped := some "max" } ] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "anthropic/claude-opus-4.7" "Anthropic: Claude Opus 4.7" 5.0 25.0 0.5 6.25 1000000 128000 true { openRouterCompat with cacheControlFormat := some "anthropic" } #[ { level := .level .xhigh, mapped := some "xhigh" } ] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "anthropic/claude-opus-4.7-fast" "Anthropic: Claude Opus 4.7 (Fast)" 30.0 150.0 3.0 37.5 1000000 128000 true { openRouterCompat with cacheControlFormat := some "anthropic" } #[ { level := .level .xhigh, mapped := some "xhigh" } ] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "anthropic/claude-opus-4.8" "Anthropic: Claude Opus 4.8" 5.0 25.0 0.5 6.25 1000000 128000 true { openRouterCompat with cacheControlFormat := some "anthropic" } #[ { level := .level .xhigh, mapped := some "xhigh" } ] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "anthropic/claude-opus-4.8-fast" "Anthropic: Claude Opus 4.8 (Fast)" 10.0 50.0 1.0 12.5 1000000 128000 true { openRouterCompat with cacheControlFormat := some "anthropic" } #[ { level := .level .xhigh, mapped := some "xhigh" } ] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "anthropic/claude-sonnet-4" "Anthropic: Claude Sonnet 4" 3.0 15.0 0.3 3.75 1000000 64000 true { openRouterCompat with cacheControlFormat := some "anthropic" } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "anthropic/claude-sonnet-4.5" "Anthropic: Claude Sonnet 4.5" 3.0 15.0 0.3 3.75 1000000 64000 true { openRouterCompat with cacheControlFormat := some "anthropic" } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "anthropic/claude-sonnet-4.6" "Anthropic: Claude Sonnet 4.6" 3.0 15.0 0.3 3.75 1000000 128000 true { openRouterCompat with cacheControlFormat := some "anthropic" } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "arcee-ai/trinity-large-thinking" "Arcee AI: Trinity Large Thinking" 0.25 0.8 0.06 0.0 262144 80000 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "arcee-ai/trinity-mini" "Arcee AI: Trinity Mini" 0.045 0.15 0.0 0.0 131072 131072 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "arcee-ai/virtuoso-large" "Arcee AI: Virtuoso Large" 0.75 1.2 0.0 0.0 131072 64000 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "auto" "Auto" 0.0 0.0 0.0 0.0 2000000 30000 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "bytedance-seed/seed-1.6" "ByteDance Seed: Seed 1.6" 0.25 2.0 0.0 0.0 262144 32768 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "bytedance-seed/seed-1.6-flash" "ByteDance Seed: Seed 1.6 Flash" 0.075 0.3 0.0 0.0 262144 32768 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "bytedance-seed/seed-2.0-lite" "ByteDance Seed: Seed-2.0-Lite" 0.25 2.0 0.0 0.0 262144 131072 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "bytedance-seed/seed-2.0-mini" "ByteDance Seed: Seed-2.0-Mini" 0.1 0.4 0.0 0.0 262144 131072 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "cohere/command-r-08-2024" "Cohere: Command R (08-2024)" 0.15 0.6 0.0 0.0 128000 4000 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "cohere/command-r-plus-08-2024" "Cohere: Command R+ (08-2024)" 2.5 10.0 0.0 0.0 128000 4000 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "cohere/north-mini-code:free" "Cohere: North Mini Code (free)" 0.0 0.0 0.0 0.0 256000 64000 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "deepseek/deepseek-chat" "DeepSeek: DeepSeek V3" 0.2002 0.8001 0.0 0.0 131072 16000 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "deepseek/deepseek-chat-v3-0324" "DeepSeek: DeepSeek V3 0324" 0.2 0.77 0.135 0.0 163840 16384 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "deepseek/deepseek-chat-v3.1" "DeepSeek: DeepSeek V3.1" 0.21 0.79 0.13 0.0 163840 32768 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "deepseek/deepseek-r1" "DeepSeek: R1" 0.7 2.5 0.0 0.0 163840 16000 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "deepseek/deepseek-r1-0528" "DeepSeek: R1 0528" 0.5 2.15 0.35 0.0 163840 32768 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "deepseek/deepseek-v3.1-terminus" "DeepSeek: DeepSeek V3.1 Terminus" 0.27 0.95 0.13 0.0 163840 32768 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "deepseek/deepseek-v3.2" "DeepSeek: DeepSeek V3.2" 0.2288 0.3432 0.0 0.0 131072 64000 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "deepseek/deepseek-v3.2-exp" "DeepSeek: DeepSeek V3.2 Exp" 0.27 0.41 0.0 0.0 163840 65536 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "deepseek/deepseek-v4-flash" "DeepSeek: DeepSeek V4 Flash" 0.09 0.18 0.02 0.0 1048576 65536 true { openRouterCompat with supportsDeveloperRole := false, requiresReasoningContentOnAssistantMessages := true } #[ { level := .level .minimal, mapped := none }, { level := .level .low, mapped := none }, { level := .level .medium, mapped := none }, { level := .level .high, mapped := some "high" }, { level := .level .xhigh, mapped := some "xhigh" } ] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "deepseek/deepseek-v4-pro" "DeepSeek: DeepSeek V4 Pro" 0.435 0.87 0.003625 0.0 1048576 384000 true { openRouterCompat with supportsDeveloperRole := false, requiresReasoningContentOnAssistantMessages := true } #[ { level := .level .minimal, mapped := none }, { level := .level .low, mapped := none }, { level := .level .medium, mapped := none }, { level := .level .high, mapped := some "high" }, { level := .level .xhigh, mapped := some "xhigh" } ] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "google/gemini-2.5-flash" "Google: Gemini 2.5 Flash" 0.3 2.5 0.03 0.083333 1048576 65535 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "google/gemini-2.5-flash-lite" "Google: Gemini 2.5 Flash Lite" 0.1 0.4 0.01 0.083333 1048576 65535 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "google/gemini-2.5-flash-lite-preview-09-2025" "Google: Gemini 2.5 Flash Lite Preview 09-2025" 0.1 0.4 0.01 0.083333 1048576 65535 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "google/gemini-2.5-pro" "Google: Gemini 2.5 Pro" 1.25 10.0 0.125 0.375 1048576 65536 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "google/gemini-2.5-pro-preview" "Google: Gemini 2.5 Pro Preview 06-05" 1.25 10.0 0.125 0.375 1048576 65536 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "google/gemini-2.5-pro-preview-05-06" "Google: Gemini 2.5 Pro Preview 05-06" 1.25 10.0 0.125 0.375 1048576 65535 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "google/gemini-3-flash-preview" "Google: Gemini 3 Flash Preview" 0.5 3.0 0.05 0.083333 1048576 65535 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "google/gemini-3-pro-image" "Google: Nano Banana Pro (Gemini 3 Pro Image)" 2.0 12.0 0.2 0.375 65536 32768 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "google/gemini-3.1-flash-lite" "Google: Gemini 3.1 Flash Lite" 0.25 1.5 0.025 0.083333 1048576 65536 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "google/gemini-3.1-flash-lite-preview" "Google: Gemini 3.1 Flash Lite Preview" 0.25 1.5 0.025 0.083333 1048576 65536 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "google/gemini-3.1-pro-preview" "Google: Gemini 3.1 Pro Preview" 2.0 12.0 0.2 0.375 1048576 65536 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "google/gemini-3.1-pro-preview-customtools" "Google: Gemini 3.1 Pro Preview Custom Tools" 2.0 12.0 0.2 0.375 1048756 65536 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "google/gemini-3.5-flash" "Google: Gemini 3.5 Flash" 1.5 9.0 0.15 0.083333 1048576 65536 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "google/gemma-3-12b-it" "Google: Gemma 3 12B" 0.05 0.15 0.0 0.0 131072 16384 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "google/gemma-3-27b-it" "Google: Gemma 3 27B" 0.08 0.16 0.0 0.0 131072 16384 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "google/gemma-4-26b-a4b-it" "Google: Gemma 4 26B A4B " 0.06 0.33 0.0 0.0 262144 4096 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "google/gemma-4-26b-a4b-it:free" "Google: Gemma 4 26B A4B  (free)" 0.0 0.0 0.0 0.0 262144 32768 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "google/gemma-4-31b-it" "Google: Gemma 4 31B" 0.12 0.35 0.09 0.0 262144 262144 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "google/gemma-4-31b-it:free" "Google: Gemma 4 31B (free)" 0.0 0.0 0.0 0.0 262144 8192 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "ibm-granite/granite-4.1-8b" "IBM: Granite 4.1 8B" 0.05 0.1 0.05 0.0 131072 131072 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "inception/mercury-2" "Inception: Mercury 2" 0.25 0.75 0.025 0.0 128000 50000 true { openRouterCompat with supportsDeveloperRole := false } #[ { level := .off, mapped := none } ] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "inclusionai/ling-2.6-1t" "inclusionAI: Ling-2.6-1T" 0.075 0.625 0.015 0.0 262144 32768 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "inclusionai/ling-2.6-flash" "inclusionAI: Ling-2.6-flash" 0.01 0.03 0.002 0.0 262144 32768 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "inclusionai/ring-2.6-1t" "inclusionAI: Ring-2.6-1T" 0.075 0.625 0.015 0.0 262144 65536 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "kwaipilot/kat-coder-pro-v2" "Kwaipilot: KAT-Coder-Pro V2" 0.3 1.2 0.06 0.0 256000 80000 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "liquid/lfm-2.5-1.2b-thinking:free" "LiquidAI: LFM2.5-1.2B-Thinking (free)" 0.0 0.0 0.0 0.0 32768 4096 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "meta-llama/llama-3.1-70b-instruct" "Meta: Llama 3.1 70B Instruct" 0.4 0.4 0.0 0.0 131072 16384 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "meta-llama/llama-3.1-8b-instruct" "Meta: Llama 3.1 8B Instruct" 0.02 0.03 0.0 0.0 131072 16384 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "meta-llama/llama-3.3-70b-instruct" "Meta: Llama 3.3 70B Instruct" 0.1 0.32 0.0 0.0 131072 16384 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "meta-llama/llama-3.3-70b-instruct:free" "Meta: Llama 3.3 70B Instruct (free)" 0.0 0.0 0.0 0.0 131072 4096 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "meta-llama/llama-4-maverick" "Meta: Llama 4 Maverick" 0.15 0.6 0.0 0.0 1048576 16384 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "meta-llama/llama-4-scout" "Meta: Llama 4 Scout" 0.1 0.3 0.0 0.0 10000000 16384 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "minimax/minimax-m1" "MiniMax: MiniMax M1" 0.4 2.2 0.0 0.0 1000000 40000 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "minimax/minimax-m2" "MiniMax: MiniMax M2" 0.255 1.0 0.03 0.0 204800 196608 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "minimax/minimax-m2.1" "MiniMax: MiniMax M2.1" 0.29 0.95 0.03 0.0 204800 196608 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "minimax/minimax-m2.5" "MiniMax: MiniMax M2.5" 0.15 0.9 0.05 0.0 204800 196608 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "minimax/minimax-m2.7" "MiniMax: MiniMax M2.7" 0.24 0.96 0.0 0.0 204800 196608 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "minimax/minimax-m3" "MiniMax: MiniMax M3" 0.3 1.2 0.06 0.0 1048576 512000 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "mistralai/codestral-2508" "Mistral: Codestral 2508" 0.3 0.9 0.03 0.0 256000 4096 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "mistralai/devstral-2512" "Mistral: Devstral 2 2512" 0.4 2.0 0.04 0.0 262144 4096 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "mistralai/ministral-14b-2512" "Mistral: Ministral 3 14B 2512" 0.2 0.2 0.02 0.0 262144 4096 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "mistralai/ministral-3b-2512" "Mistral: Ministral 3 3B 2512" 0.1 0.1 0.01 0.0 131072 4096 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "mistralai/ministral-8b-2512" "Mistral: Ministral 3 8B 2512" 0.15 0.15 0.015 0.0 262144 4096 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "mistralai/mistral-large" "Mistral Large" 2.0 6.0 0.2 0.0 128000 4096 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "mistralai/mistral-large-2407" "Mistral Large 2407" 2.0 6.0 0.2 0.0 131072 4096 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "mistralai/mistral-large-2512" "Mistral: Mistral Large 3 2512" 0.5 1.5 0.05 0.0 262144 4096 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "mistralai/mistral-medium-3" "Mistral: Mistral Medium 3" 0.4 2.0 0.04 0.0 131072 4096 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "mistralai/mistral-medium-3-5" "Mistral: Mistral Medium 3.5" 1.5 7.5 0.0 0.0 262144 4096 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "mistralai/mistral-medium-3.1" "Mistral: Mistral Medium 3.1" 0.4 2.0 0.04 0.0 131072 4096 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "mistralai/mistral-nemo" "Mistral: Mistral Nemo" 0.02 0.03 0.0 0.0 131072 4096 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "mistralai/mistral-saba" "Mistral: Saba" 0.2 0.6 0.02 0.0 32768 4096 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "mistralai/mistral-small-2603" "Mistral: Mistral Small 4" 0.15 0.6 0.015 0.0 262144 4096 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "mistralai/mistral-small-3.2-24b-instruct" "Mistral: Mistral Small 3.2 24B" 0.075 0.2 0.0 0.0 128000 16384 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "mistralai/mixtral-8x22b-instruct" "Mistral: Mixtral 8x22B Instruct" 2.0 6.0 0.2 0.0 65536 4096 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "mistralai/voxtral-small-24b-2507" "Mistral: Voxtral Small 24B 2507" 0.1 0.3 0.01 0.0 32000 4096 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "moonshotai/kimi-k2" "MoonshotAI: Kimi K2 0711" 0.57 2.3 0.0 0.0 131072 32768 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "moonshotai/kimi-k2-0905" "MoonshotAI: Kimi K2 0905" 0.6 2.5 0.0 0.0 262144 262144 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "moonshotai/kimi-k2-thinking" "MoonshotAI: Kimi K2 Thinking" 0.6 2.5 0.6 0.0 262144 262144 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "moonshotai/kimi-k2.5" "MoonshotAI: Kimi K2.5" 0.41 2.06 0.07 0.0 262144 4096 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "moonshotai/kimi-k2.6" "MoonshotAI: Kimi K2.6" 0.66 3.41 0.144 0.0 262144 262144 true { openRouterCompat with supportsDeveloperRole := false, requiresReasoningContentOnAssistantMessages := true } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "moonshotai/kimi-k2.7-code" "MoonshotAI: Kimi K2.7 Code" 0.74 3.5 0.15 0.0 262144 16384 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "nvidia/llama-3.3-nemotron-super-49b-v1.5" "NVIDIA: Llama 3.3 Nemotron Super 49B V1.5" 0.4 0.4 0.0 0.0 131072 16384 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "nvidia/nemotron-3-nano-30b-a3b" "NVIDIA: Nemotron 3 Nano 30B A3B" 0.05 0.2 0.0 0.0 262144 228000 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "nvidia/nemotron-3-nano-30b-a3b:free" "NVIDIA: Nemotron 3 Nano 30B A3B (free)" 0.0 0.0 0.0 0.0 256000 4096 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free" "NVIDIA: Nemotron 3 Nano Omni (free)" 0.0 0.0 0.0 0.0 256000 65536 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "nvidia/nemotron-3-super-120b-a12b" "NVIDIA: Nemotron 3 Super" 0.09 0.45 0.0 0.0 1000000 4096 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "nvidia/nemotron-3-super-120b-a12b:free" "NVIDIA: Nemotron 3 Super (free)" 0.0 0.0 0.0 0.0 1000000 262144 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "nvidia/nemotron-3-ultra-550b-a55b" "NVIDIA: Nemotron 3 Ultra" 0.5 2.2 0.1 0.0 1000000 16384 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "nvidia/nemotron-3-ultra-550b-a55b:free" "NVIDIA: Nemotron 3 Ultra (free)" 0.0 0.0 0.0 0.0 1000000 65536 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "nvidia/nemotron-nano-12b-v2-vl:free" "NVIDIA: Nemotron Nano 12B 2 VL (free)" 0.0 0.0 0.0 0.0 128000 128000 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "nvidia/nemotron-nano-9b-v2:free" "NVIDIA: Nemotron Nano 9B V2 (free)" 0.0 0.0 0.0 0.0 128000 4096 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-3.5-turbo" "OpenAI: GPT-3.5 Turbo" 0.5 1.5 0.0 0.0 16385 4096 false openRouterCompat #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-3.5-turbo-0613" "OpenAI: GPT-3.5 Turbo (older v0613)" 1.0 2.0 0.0 0.0 4095 4096 false openRouterCompat #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-3.5-turbo-16k" "OpenAI: GPT-3.5 Turbo 16k" 3.0 4.0 0.0 0.0 16385 4096 false openRouterCompat #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-4" "OpenAI: GPT-4" 30.0 60.0 0.0 0.0 8191 4096 false openRouterCompat #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-4-turbo" "OpenAI: GPT-4 Turbo" 10.0 30.0 0.0 0.0 128000 4096 false openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-4-turbo-preview" "OpenAI: GPT-4 Turbo Preview" 10.0 30.0 0.0 0.0 128000 4096 false openRouterCompat #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-4.1" "OpenAI: GPT-4.1" 2.0 8.0 0.5 0.0 1047576 4096 false openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-4.1-mini" "OpenAI: GPT-4.1 Mini" 0.4 1.6 0.1 0.0 1047576 32768 false openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-4.1-nano" "OpenAI: GPT-4.1 Nano" 0.1 0.4 0.025 0.0 1047576 32768 false openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-4o" "OpenAI: GPT-4o" 2.5 10.0 0.0 0.0 128000 16384 false openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-4o-2024-05-13" "OpenAI: GPT-4o (2024-05-13)" 5.0 15.0 0.0 0.0 128000 4096 false openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-4o-2024-08-06" "OpenAI: GPT-4o (2024-08-06)" 2.5 10.0 1.25 0.0 128000 16384 false openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-4o-2024-11-20" "OpenAI: GPT-4o (2024-11-20)" 2.5 10.0 1.25 0.0 128000 16384 false openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-4o-mini" "OpenAI: GPT-4o-mini" 0.15 0.6 0.075 0.0 128000 16384 false openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-4o-mini-2024-07-18" "OpenAI: GPT-4o-mini (2024-07-18)" 0.15 0.6 0.075 0.0 128000 16384 false openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-5" "OpenAI: GPT-5" 1.25 10.0 0.125 0.0 400000 128000 true openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-5-codex" "OpenAI: GPT-5 Codex" 1.25 10.0 0.125 0.0 400000 128000 true openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-5-mini" "OpenAI: GPT-5 Mini" 0.25 2.0 0.025 0.0 400000 128000 true openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-5-nano" "OpenAI: GPT-5 Nano" 0.05 0.4 0.01 0.0 400000 4096 true openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-5-pro" "OpenAI: GPT-5 Pro" 15.0 120.0 0.0 0.0 400000 128000 true openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-5.1" "OpenAI: GPT-5.1" 1.25 10.0 0.13 0.0 400000 128000 true openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-5.1-chat" "OpenAI: GPT-5.1 Chat" 1.25 10.0 0.13 0.0 128000 32000 false openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-5.1-codex" "OpenAI: GPT-5.1-Codex" 1.25 10.0 0.13 0.0 400000 128000 true openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-5.1-codex-max" "OpenAI: GPT-5.1-Codex-Max" 1.25 10.0 0.125 0.0 400000 128000 true openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-5.1-codex-mini" "OpenAI: GPT-5.1-Codex-Mini" 0.25 2.0 0.025 0.0 400000 100000 true openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-5.2" "OpenAI: GPT-5.2" 1.75 14.0 0.175 0.0 400000 128000 true openRouterCompat #[ { level := .level .xhigh, mapped := some "xhigh" } ] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-5.2-chat" "OpenAI: GPT-5.2 Chat" 1.75 14.0 0.175 0.0 128000 16384 false openRouterCompat #[ { level := .level .xhigh, mapped := some "xhigh" } ] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-5.2-codex" "OpenAI: GPT-5.2-Codex" 1.75 14.0 0.175 0.0 400000 128000 true openRouterCompat #[ { level := .level .xhigh, mapped := some "xhigh" } ] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-5.2-pro" "OpenAI: GPT-5.2 Pro" 21.0 168.0 0.0 0.0 400000 128000 true openRouterCompat #[ { level := .level .xhigh, mapped := some "xhigh" } ] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-5.3-chat" "OpenAI: GPT-5.3 Chat" 1.75 14.0 0.175 0.0 128000 16384 false openRouterCompat #[ { level := .level .xhigh, mapped := some "xhigh" } ] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-5.3-codex" "OpenAI: GPT-5.3-Codex" 1.75 14.0 0.175 0.0 400000 128000 true openRouterCompat #[ { level := .level .xhigh, mapped := some "xhigh" } ] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-5.4" "OpenAI: GPT-5.4" 2.5 15.0 0.25 0.0 1050000 128000 true openRouterCompat #[ { level := .level .xhigh, mapped := some "xhigh" } ] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-5.4-mini" "OpenAI: GPT-5.4 Mini" 0.75 4.5 0.075 0.0 400000 128000 true openRouterCompat #[ { level := .level .xhigh, mapped := some "xhigh" } ] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-5.4-nano" "OpenAI: GPT-5.4 Nano" 0.2 1.25 0.02 0.0 400000 128000 true openRouterCompat #[ { level := .level .xhigh, mapped := some "xhigh" } ] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-5.4-pro" "OpenAI: GPT-5.4 Pro" 30.0 180.0 0.0 0.0 1050000 128000 true openRouterCompat #[ { level := .level .xhigh, mapped := some "xhigh" } ] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-5.5" "OpenAI: GPT-5.5" 5.0 30.0 0.5 0.0 1050000 128000 true openRouterCompat #[ { level := .level .xhigh, mapped := some "xhigh" } ] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-5.5-pro" "OpenAI: GPT-5.5 Pro" 30.0 180.0 0.0 0.0 1050000 128000 true openRouterCompat #[ { level := .level .xhigh, mapped := some "xhigh" }, { level := .off, mapped := none }, { level := .level .minimal, mapped := none }, { level := .level .low, mapped := none } ] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-audio" "OpenAI: GPT Audio" 2.5 10.0 0.0 0.0 128000 16384 false openRouterCompat #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-audio-mini" "OpenAI: GPT Audio Mini" 0.6 2.4 0.0 0.0 128000 16384 false openRouterCompat #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-chat-latest" "OpenAI: GPT Chat Latest" 5.0 30.0 0.5 0.0 400000 128000 false openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-oss-120b" "OpenAI: gpt-oss-120b" 0.039 0.18 0.0 0.0 131072 4096 true openRouterCompat #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-oss-120b:free" "OpenAI: gpt-oss-120b (free)" 0.0 0.0 0.0 0.0 131072 131072 true openRouterCompat #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-oss-20b" "OpenAI: gpt-oss-20b" 0.029 0.14 0.0 0.0 131072 4096 true openRouterCompat #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-oss-20b:free" "OpenAI: gpt-oss-20b (free)" 0.0 0.0 0.0 0.0 131072 32768 true openRouterCompat #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/gpt-oss-safeguard-20b" "OpenAI: gpt-oss-safeguard-20b" 0.075 0.3 0.0375 0.0 131072 65536 true openRouterCompat #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/o1" "OpenAI: o1" 15.0 60.0 7.5 0.0 200000 100000 true openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/o3" "OpenAI: o3" 2.0 8.0 0.5 0.0 200000 100000 true openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/o3-deep-research" "OpenAI: o3 Deep Research" 10.0 40.0 2.5 0.0 200000 100000 true openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/o3-mini" "OpenAI: o3 Mini" 1.1 4.4 0.55 0.0 200000 100000 true openRouterCompat #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/o3-mini-high" "OpenAI: o3 Mini High" 1.1 4.4 0.55 0.0 200000 100000 true openRouterCompat #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/o3-pro" "OpenAI: o3 Pro" 20.0 80.0 0.0 0.0 200000 100000 true openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/o4-mini" "OpenAI: o4 Mini" 1.1 4.4 0.275 0.0 200000 100000 true openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/o4-mini-deep-research" "OpenAI: o4 Mini Deep Research" 2.0 8.0 0.5 0.0 200000 100000 true openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openai/o4-mini-high" "OpenAI: o4 Mini High" 1.1 4.4 0.275 0.0 200000 100000 true openRouterCompat #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openrouter/auto" "Auto Router" 0.0 0.0 0.0 0.0 2000000 4096 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openrouter/free" "Free Models Router" 0.0 0.0 0.0 0.0 200000 4096 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openrouter/fusion" "OpenRouter: Fusion" 0.0 0.0 0.0 0.0 1000000 30000 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "openrouter/owl-alpha" "Owl Alpha" 0.0 0.0 0.0 0.0 1048756 262144 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "poolside/laguna-m.1" "Poolside: Laguna M.1" 0.2 0.4 0.1 0.0 262144 32768 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "poolside/laguna-m.1:free" "Poolside: Laguna M.1 (free)" 0.0 0.0 0.0 0.0 262144 32768 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "poolside/laguna-xs.2" "Poolside: Laguna XS.2" 0.1 0.2 0.05 0.0 262144 32768 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "poolside/laguna-xs.2:free" "Poolside: Laguna XS.2 (free)" 0.0 0.0 0.0 0.0 262144 32768 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen-2.5-72b-instruct" "Qwen2.5 72B Instruct" 0.36 0.4 0.0 0.0 131072 16384 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen-2.5-7b-instruct" "Qwen: Qwen2.5 7B Instruct" 0.04 0.1 0.0 0.0 131072 32768 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen-plus" "Qwen: Qwen-Plus" 0.26 0.78 0.052 0.325 1000000 32768 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen-plus-2025-07-28" "Qwen: Qwen Plus 0728" 0.26 0.78 0.0 0.0 1000000 32768 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen-plus-2025-07-28:thinking" "Qwen: Qwen Plus 0728 (thinking)" 0.26 0.78 0.0 0.325 1000000 32768 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-14b" "Qwen: Qwen3 14B" 0.1 0.24 0.0 0.0 131702 40960 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-235b-a22b" "Qwen: Qwen3 235B A22B" 0.455 1.82 0.0 0.0 131072 8192 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-235b-a22b-2507" "Qwen: Qwen3 235B A22B Instruct 2507" 0.09 0.1 0.0 0.0 262144 16384 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-235b-a22b-thinking-2507" "Qwen: Qwen3 235B A22B Thinking 2507" 0.1 0.1 0.1 0.0 262144 262144 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-30b-a3b" "Qwen: Qwen3 30B A3B" 0.12 0.5 0.0 0.0 131072 16384 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-30b-a3b-instruct-2507" "Qwen: Qwen3 30B A3B Instruct 2507" 0.04815 0.19305 0.0 0.0 131072 32000 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-30b-a3b-thinking-2507" "Qwen: Qwen3 30B A3B Thinking 2507" 0.08 0.4 0.08 0.0 131072 131072 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-32b" "Qwen: Qwen3 32B" 0.08 0.28 0.0 0.0 131072 16384 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-8b" "Qwen: Qwen3 8B" 0.05 0.4 0.05 0.0 131072 8192 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-coder" "Qwen: Qwen3 Coder 480B A35B" 0.22 1.8 0.0 0.0 1048576 65536 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-coder-30b-a3b-instruct" "Qwen: Qwen3 Coder 30B A3B Instruct" 0.07 0.27 0.0 0.0 160000 32768 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-coder-flash" "Qwen: Qwen3 Coder Flash" 0.195 0.975 0.039 0.24375 1000000 65536 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-coder-next" "Qwen: Qwen3 Coder Next" 0.11 0.8 0.07 0.0 262144 262144 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-coder-plus" "Qwen: Qwen3 Coder Plus" 0.65 3.25 0.13 0.8125 1000000 65536 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-coder:free" "Qwen: Qwen3 Coder 480B A35B (free)" 0.0 0.0 0.0 0.0 1048576 262000 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-max" "Qwen: Qwen3 Max" 0.78 3.9 0.156 0.975 262144 32768 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-max-thinking" "Qwen: Qwen3 Max Thinking" 0.78 3.9 0.0 0.0 262144 32768 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-next-80b-a3b-instruct" "Qwen: Qwen3 Next 80B A3B Instruct" 0.09 1.1 0.0 0.0 262144 16384 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-next-80b-a3b-instruct:free" "Qwen: Qwen3 Next 80B A3B Instruct (free)" 0.0 0.0 0.0 0.0 262144 4096 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-next-80b-a3b-thinking" "Qwen: Qwen3 Next 80B A3B Thinking" 0.0975 0.78 0.0 0.0 262144 32768 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-vl-235b-a22b-instruct" "Qwen: Qwen3 VL 235B A22B Instruct" 0.2 0.88 0.11 0.0 262144 16384 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-vl-235b-a22b-thinking" "Qwen: Qwen3 VL 235B A22B Thinking" 0.26 2.6 0.0 0.0 131072 32768 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-vl-30b-a3b-instruct" "Qwen: Qwen3 VL 30B A3B Instruct" 0.13 0.52 0.0 0.0 262144 32768 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-vl-30b-a3b-thinking" "Qwen: Qwen3 VL 30B A3B Thinking" 0.13 1.56 0.0 0.0 131072 32768 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-vl-32b-instruct" "Qwen: Qwen3 VL 32B Instruct" 0.104 0.416 0.0 0.0 262144 32768 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-vl-8b-instruct" "Qwen: Qwen3 VL 8B Instruct" 0.08 0.5 0.0 0.0 256000 32768 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3-vl-8b-thinking" "Qwen: Qwen3 VL 8B Thinking" 0.117 1.365 0.0 0.0 256000 32768 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3.5-122b-a10b" "Qwen: Qwen3.5-122B-A10B" 0.26 2.08 0.0 0.0 262144 262144 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3.5-27b" "Qwen: Qwen3.5-27B" 0.195 1.56 0.0 0.0 262144 65536 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3.5-35b-a3b" "Qwen: Qwen3.5-35B-A3B" 0.14 1.0 0.05 0.0 262144 81920 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3.5-397b-a17b" "Qwen: Qwen3.5 397B A17B" 0.385 2.45 0.0 0.0 256000 4096 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3.5-9b" "Qwen: Qwen3.5-9B" 0.1 0.15 0.0 0.0 262144 262144 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3.5-flash-02-23" "Qwen: Qwen3.5-Flash" 0.065 0.26 0.0 0.0 1000000 65536 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3.5-plus-02-15" "Qwen: Qwen3.5 Plus 2026-02-15" 0.26 1.56 0.0 0.0 1000000 65536 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3.5-plus-20260420" "Qwen: Qwen3.5 Plus 2026-04-20" 0.3 1.8 0.0 0.375 1000000 65536 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3.6-27b" "Qwen: Qwen3.6 27B" 0.2885 3.17 0.0 0.0 262144 262140 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3.6-35b-a3b" "Qwen: Qwen3.6 35B A3B" 0.14 1.0 0.0 0.0 262144 262144 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3.6-flash" "Qwen: Qwen3.6 Flash" 0.1875 1.125 0.0 0.234375 1000000 65536 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3.6-max-preview" "Qwen: Qwen3.6 Max Preview" 1.04 6.24 0.0 1.3 262144 65536 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3.6-plus" "Qwen: Qwen3.6 Plus" 0.325 1.95 0.0 0.40625 1000000 65536 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3.7-max" "Qwen: Qwen3.7 Max" 1.25 3.75 0.25 1.5625 1000000 65536 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "qwen/qwen3.7-plus" "Qwen: Qwen3.7 Plus" 0.32 1.28 0.064 0.4 1000000 65536 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "rekaai/reka-edge" "Reka Edge" 0.1 0.1 0.0 0.0 16384 16384 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "relace/relace-search" "Relace: Relace Search" 1.0 3.0 0.0 0.0 256000 128000 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "sakana/fugu-ultra" "Sakana: Fugu Ultra" 5.0 30.0 0.5 0.0 1000000 128000 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "sao10k/l3.1-euryale-70b" "Sao10K: Llama 3.1 Euryale 70B v2.2" 0.85 0.85 0.0 0.0 131072 16384 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "stepfun/step-3.5-flash" "StepFun: Step 3.5 Flash" 0.09 0.3 0.02 0.0 262144 16384 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "stepfun/step-3.7-flash" "StepFun: Step 3.7 Flash" 0.2 1.15 0.04 0.0 256000 256000 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "tencent/hy3-preview" "Tencent: Hy3 preview" 0.063 0.21 0.021 0.0 262144 4096 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "thedrummer/unslopnemo-12b" "TheDrummer: UnslopNemo 12B" 0.4 0.4 0.0 0.0 32768 32768 false { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "upstage/solar-pro-3" "Upstage: Solar Pro 3" 0.15 0.6 0.015 0.0 128000 4096 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "x-ai/grok-4.20" "xAI: Grok 4.20" 1.25 2.5 0.2 0.0 2000000 4096 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "x-ai/grok-4.3" "xAI: Grok 4.3" 1.25 2.5 0.2 0.0 1000000 4096 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "x-ai/grok-build-0.1" "xAI: Grok Build 0.1" 1.0 2.0 0.2 0.0 256000 4096 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "xiaomi/mimo-v2.5" "Xiaomi: MiMo-V2.5" 0.105 0.28 0.0 0.0 1048576 4096 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "xiaomi/mimo-v2.5-pro" "Xiaomi: MiMo-V2.5-Pro" 0.435 0.87 0.0036 0.0 1048576 131072 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "z-ai/glm-4.5" "Z.ai: GLM 4.5" 0.6 2.2 0.11 0.0 131072 98304 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "z-ai/glm-4.5-air" "Z.ai: GLM 4.5 Air" 0.13 0.85 0.025 0.0 131072 98304 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "z-ai/glm-4.5v" "Z.ai: GLM 4.5V" 0.6 1.8 0.11 0.0 65536 16384 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "z-ai/glm-4.6" "Z.ai: GLM 4.6" 0.43 1.74 0.08 0.0 202752 131072 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "z-ai/glm-4.6v" "Z.ai: GLM 4.6V" 0.3 0.9 0.055 0.0 131072 32768 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "z-ai/glm-4.7" "Z.ai: GLM 4.7" 0.4 1.75 0.08 0.0 202752 131072 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "z-ai/glm-4.7-flash" "Z.ai: GLM 4.7 Flash" 0.06 0.4 0.01 0.0 202752 16384 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "z-ai/glm-5" "Z.ai: GLM 5" 0.6 1.9 0.119 0.0 202752 4096 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "z-ai/glm-5-turbo" "Z.ai: GLM 5 Turbo" 1.2 4.0 0.24 0.0 262144 131072 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "z-ai/glm-5.1" "Z.ai: GLM 5.1" 0.98 3.08 0.182 0.0 202752 4096 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "z-ai/glm-5.2" "Z.ai: GLM 5.2" 0.95 3.0 0.18 0.0 1048576 32768 true { openRouterCompat with supportsDeveloperRole := false } #[ { level := .level .xhigh, mapped := some "xhigh" } ] #["text"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "z-ai/glm-5v-turbo" "Z.ai: GLM 5V Turbo" 1.2 4.0 0.24 0.0 202752 131072 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "~anthropic/claude-fable-latest" "Anthropic: Claude Fable Latest" 10.0 50.0 1.0 12.5 1000000 128000 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "~anthropic/claude-haiku-latest" "Anthropic Claude Haiku Latest" 1.0 5.0 0.1 1.25 200000 64000 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "~anthropic/claude-opus-latest" "Anthropic: Claude Opus Latest" 5.0 25.0 0.5 6.25 1000000 128000 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "~anthropic/claude-sonnet-latest" "Anthropic Claude Sonnet Latest" 3.0 15.0 0.3 3.75 1000000 128000 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "~google/gemini-flash-latest" "Google Gemini Flash Latest" 1.5 9.0 0.15 0.083333 1048576 65536 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "~google/gemini-pro-latest" "Google Gemini Pro Latest" 2.0 12.0 0.2 0.375 1048576 65536 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "~moonshotai/kimi-latest" "MoonshotAI Kimi Latest" 0.66 3.41 0.144 0.0 262144 262144 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "~openai/gpt-latest" "OpenAI GPT Latest" 5.0 30.0 0.5 0.0 1050000 128000 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   , catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl "~openai/gpt-mini-latest" "OpenAI GPT Mini Latest" 0.75 4.5 0.075 0.0 400000 128000 true { openRouterCompat with supportsDeveloperRole := false } #[] #["text", "image"]
+   ]
+
+
+/-- Legacy named refs for existing call sites. -/
 def openRouterGptOss120B : ModelInfo :=
-  { id := openRouterDefaultModel
-    name := "OpenAI: gpt-oss-120b"
-    provider := openRouterProviderId
-    api := "openai-completions"
-    baseUrl := openRouterBaseUrl
-    cost := cost 0.039 0.18 0.0 0.0
-    contextWindow := 131072
-    maxTokens := 4096
-    reasoning := true
-    compat := openRouterCompat
-  }
+  (openRouterModels.find? (fun m => m.id == openRouterDefaultModel)).getD
+    (catalogOpenAICompatibleModel openRouterProviderId openRouterBaseUrl openRouterDefaultModel "GPT OSS 120B" 0.039 0.19 0.0 0.0 131072 131072 true openRouterCompat #[] #["text"])
 
 def openRouterKimiK26 : ModelInfo :=
-  { id := "moonshotai/kimi-k2.6"
-    name := "MoonshotAI: Kimi K2.6"
-    provider := openRouterProviderId
-    api := "openai-completions"
-    baseUrl := openRouterBaseUrl
-    cost := cost 0.66 3.41 0.144 0.0
-    contextWindow := 262144
-    maxTokens := 262144
-    reasoning := true
-    compat := openRouterKimiCompat
-    input := #["text", "image"]
-  }
+  (openRouterModels.find? (fun m => m.id == "moonshotai/kimi-k2.6")).getD openRouterGptOss120B
 
 def openRouterKimiK27Code : ModelInfo :=
-  { id := "moonshotai/kimi-k2.7-code"
-    name := "MoonshotAI: Kimi K2.7 Code"
-    provider := openRouterProviderId
+  (openRouterModels.find? (fun m => m.id == "moonshotai/kimi-k2.7-code")).getD openRouterGptOss120B
+
+
+def groqLlama31_8BInstant : ModelInfo :=
+  { id := "llama-3.1-8b-instant"
+    name := "Llama 3.1 8B"
+    provider := groqProviderId
     api := "openai-completions"
-    baseUrl := openRouterBaseUrl
-    cost := cost 0.74 3.5 0.15 0.0
-    contextWindow := 262144
-    maxTokens := 16384
-    reasoning := true
-    compat := { openRouterCompat with supportsDeveloperRole := false }
+    baseUrl := groqBaseUrl
+    cost := cost 0.05 0.08 0.0 0.0
+    contextWindow := 131072
+    maxTokens := 131072
+  }
+
+def groqLlama33_70BVersatile : ModelInfo :=
+  { id := "llama-3.3-70b-versatile"
+    name := "Llama 3.3 70B"
+    provider := groqProviderId
+    api := "openai-completions"
+    baseUrl := groqBaseUrl
+    cost := cost 0.59 0.79 0.0 0.0
+    contextWindow := 131072
+    maxTokens := 32768
+  }
+
+def groqLlama4Scout17B : ModelInfo :=
+  { id := "meta-llama/llama-4-scout-17b-16e-instruct"
+    name := "Llama 4 Scout 17B 16E"
+    provider := groqProviderId
+    api := "openai-completions"
+    baseUrl := groqBaseUrl
+    cost := cost 0.11 0.34 0.0 0.0
+    contextWindow := 131072
+    maxTokens := 8192
     input := #["text", "image"]
   }
 
@@ -608,6 +875,18 @@ def groqGptOss20B : ModelInfo :=
     reasoning := true
   }
 
+def groqGptOssSafeguard20B : ModelInfo :=
+  { id := "openai/gpt-oss-safeguard-20b"
+    name := "Safety GPT OSS 20B"
+    provider := groqProviderId
+    api := "openai-completions"
+    baseUrl := groqBaseUrl
+    cost := cost 0.075 0.3 0.037 0.0
+    contextWindow := 131072
+    maxTokens := 65536
+    reasoning := true
+  }
+
 def groqQwen332B : ModelInfo :=
   { id := "qwen/qwen3-32b"
     name := "Qwen3-32B"
@@ -628,6 +907,86 @@ def groqQwen332B : ModelInfo :=
 def xaiCompat : ModelCompat :=
   { supportsStore := false
     supportsDeveloperRole := false
+  }
+
+/-- Pi `providers/xai.models.ts` (pin catalog). -/
+def xaiGrok3 : ModelInfo :=
+  { id := "grok-3"
+    name := "Grok 3"
+    provider := xaiProviderId
+    api := "openai-completions"
+    baseUrl := xaiBaseUrl
+    cost := cost 3.0 15.0 0.75 0.0
+    contextWindow := 131072
+    maxTokens := 8192
+    compat := xaiCompat
+  }
+
+def xaiGrok3Fast : ModelInfo :=
+  { id := "grok-3-fast"
+    name := "Grok 3 Fast"
+    provider := xaiProviderId
+    api := "openai-completions"
+    baseUrl := xaiBaseUrl
+    cost := cost 5.0 25.0 1.25 0.0
+    contextWindow := 131072
+    maxTokens := 8192
+    compat := xaiCompat
+  }
+
+def xaiGrok420NonReasoning : ModelInfo :=
+  { id := "grok-4.20-0309-non-reasoning"
+    name := "Grok 4.20 (Non-Reasoning)"
+    provider := xaiProviderId
+    api := "openai-completions"
+    baseUrl := xaiBaseUrl
+    cost := cost 1.25 2.5 0.2 0.0
+    contextWindow := 1000000
+    maxTokens := 30000
+    compat := xaiCompat
+    input := #["text", "image"]
+  }
+
+def xaiGrok420Reasoning : ModelInfo :=
+  { id := "grok-4.20-0309-reasoning"
+    name := "Grok 4.20 (Reasoning)"
+    provider := xaiProviderId
+    api := "openai-completions"
+    baseUrl := xaiBaseUrl
+    cost := cost 1.25 2.5 0.2 0.0
+    contextWindow := 1000000
+    maxTokens := 30000
+    reasoning := true
+    compat := xaiCompat
+    input := #["text", "image"]
+  }
+
+def xaiGrok43 : ModelInfo :=
+  { id := "grok-4.3"
+    name := "Grok 4.3"
+    provider := xaiProviderId
+    api := "openai-completions"
+    baseUrl := xaiBaseUrl
+    cost := cost 1.25 2.5 0.2 0.0
+    contextWindow := 1000000
+    maxTokens := 30000
+    reasoning := true
+    compat := xaiCompat
+    input := #["text", "image"]
+  }
+
+def xaiGrokBuild01 : ModelInfo :=
+  { id := "grok-build-0.1"
+    name := "Grok Build 0.1"
+    provider := xaiProviderId
+    api := "openai-completions"
+    baseUrl := xaiBaseUrl
+    cost := cost 1.0 2.0 0.2 0.0
+    contextWindow := 256000
+    maxTokens := 256000
+    reasoning := true
+    compat := xaiCompat
+    input := #["text", "image"]
   }
 
 def xaiGrokCodeFast1 : ModelInfo :=
@@ -654,6 +1013,19 @@ def cerebrasGptOss120B : ModelInfo :=
     api := "openai-completions"
     baseUrl := cerebrasBaseUrl
     cost := cost 0.35 0.75 0.0 0.0
+    contextWindow := 131072
+    maxTokens := 40960
+    reasoning := true
+    compat := cerebrasCompat
+  }
+
+def cerebrasZaiGlm47 : ModelInfo :=
+  { id := "zai-glm-4.7"
+    name := "Z.AI GLM-4.7"
+    provider := cerebrasProviderId
+    api := "openai-completions"
+    baseUrl := cerebrasBaseUrl
+    cost := cost 2.25 2.75 0.0 0.0
     contextWindow := 131072
     maxTokens := 40960
     reasoning := true
@@ -699,6 +1071,278 @@ def togetherGptOss20B : ModelInfo :=
     maxTokens := 131072
     reasoning := true
     compat := togetherReasoningEffortCompat
+    thinkingLevelMap := #[ { level := .off, mapped := none }
+                        , { level := .level .minimal, mapped := none }
+                        ]
+  }
+
+def together_Qwen_Qwen2_5_7B_Instruct_Turbo : ModelInfo :=
+  { id := "Qwen/Qwen2.5-7B-Instruct-Turbo"
+    name := "Qwen 2.5 7B Instruct Turbo"
+    provider := togetherProviderId
+    api := "openai-completions"
+    baseUrl := togetherBaseUrl
+    cost := cost 0.3 0.3 0.0 0.0
+    contextWindow := 32768
+    maxTokens := 32768
+    reasoning := false
+    compat := togetherReasoningEffortCompat
+    input := #["text"]
+  }
+
+def together_Qwen_Qwen3_235B_A22B_Instruct_2507_tput : ModelInfo :=
+  { id := "Qwen/Qwen3-235B-A22B-Instruct-2507-tput"
+    name := "Qwen3 235B A22B Instruct 2507 FP8"
+    provider := togetherProviderId
+    api := "openai-completions"
+    baseUrl := togetherBaseUrl
+    cost := cost 0.2 0.6 0.0 0.0
+    contextWindow := 262144
+    maxTokens := 262144
+    reasoning := false
+    compat := togetherReasoningEffortCompat
+    input := #["text"]
+  }
+
+def together_Qwen_Qwen3_6_Plus : ModelInfo :=
+  { id := "Qwen/Qwen3.6-Plus"
+    name := "Qwen3.6 Plus"
+    provider := togetherProviderId
+    api := "openai-completions"
+    baseUrl := togetherBaseUrl
+    cost := cost 0.5 3.0 0.0 0.0
+    contextWindow := 1000000
+    maxTokens := 500000
+    reasoning := true
+    compat := togetherReasoningEffortCompat
+    input := #["text"]
+    thinkingLevelMap := #[ { level := .level .minimal, mapped := none }, { level := .level .low, mapped := none }, { level := .level .medium, mapped := none } ]
+  }
+
+def together_Qwen_Qwen3_7_Max : ModelInfo :=
+  { id := "Qwen/Qwen3.7-Max"
+    name := "Qwen3.7 Max"
+    provider := togetherProviderId
+    api := "openai-completions"
+    baseUrl := togetherBaseUrl
+    cost := cost 1.25 3.75 0.0 0.0
+    contextWindow := 1000000
+    maxTokens := 500000
+    reasoning := false
+    compat := togetherReasoningEffortCompat
+    input := #["text"]
+  }
+
+def together_essentialai_Rnj_1_Instruct : ModelInfo :=
+  { id := "essentialai/Rnj-1-Instruct"
+    name := "Rnj-1 Instruct"
+    provider := togetherProviderId
+    api := "openai-completions"
+    baseUrl := togetherBaseUrl
+    cost := cost 0.15 0.15 0.0 0.0
+    contextWindow := 32768
+    maxTokens := 32768
+    reasoning := false
+    compat := togetherReasoningEffortCompat
+    input := #["text"]
+  }
+
+def together_meta_llama_Llama_3_3_70B_Instruct_Turbo : ModelInfo :=
+  { id := "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+    name := "Llama 3.3 70B"
+    provider := togetherProviderId
+    api := "openai-completions"
+    baseUrl := togetherBaseUrl
+    cost := cost 0.88 0.88 0.0 0.0
+    contextWindow := 131072
+    maxTokens := 131072
+    reasoning := false
+    compat := togetherReasoningEffortCompat
+    input := #["text"]
+  }
+
+def together_MiniMaxAI_MiniMax_M2_7 : ModelInfo :=
+  { id := "MiniMaxAI/MiniMax-M2.7"
+    name := "MiniMax-M2.7"
+    provider := togetherProviderId
+    api := "openai-completions"
+    baseUrl := togetherBaseUrl
+    cost := cost 0.3 1.2 0.06 0
+    contextWindow := 202752
+    maxTokens := 131072
+    reasoning := true
+    compat := togetherReasoningEffortCompat
+    input := #["text"]
+    thinkingLevelMap := #[ { level := .off, mapped := none }
+                        , { level := .level .minimal, mapped := none }
+                        ]
+  }
+
+def together_MiniMaxAI_MiniMax_M3 : ModelInfo :=
+  { id := "MiniMaxAI/MiniMax-M3"
+    name := "MiniMax-M3"
+    provider := togetherProviderId
+    api := "openai-completions"
+    baseUrl := togetherBaseUrl
+    cost := cost 0.3 1.2 0.06 0
+    contextWindow := 524288
+    maxTokens := 250000
+    reasoning := true
+    compat := togetherReasoningEffortCompat
+    input := #["text", "image"]
+    thinkingLevelMap := #[ { level := .off, mapped := none }
+                        , { level := .level .minimal, mapped := none }
+                        ]
+  }
+
+def together_Qwen_Qwen3_5_397B_A17B : ModelInfo :=
+  { id := "Qwen/Qwen3.5-397B-A17B"
+    name := "Qwen3.5 397B A17B"
+    provider := togetherProviderId
+    api := "openai-completions"
+    baseUrl := togetherBaseUrl
+    cost := cost 0.6 3.6 0 0
+    contextWindow := 262144
+    maxTokens := 130000
+    reasoning := true
+    compat := togetherReasoningEffortCompat
+    input := #["text", "image"]
+    thinkingLevelMap := #[ { level := .off, mapped := none }
+                        , { level := .level .minimal, mapped := none }
+                        ]
+  }
+
+def together_Qwen_Qwen3_5_9B : ModelInfo :=
+  { id := "Qwen/Qwen3.5-9B"
+    name := "Qwen3.5 9B"
+    provider := togetherProviderId
+    api := "openai-completions"
+    baseUrl := togetherBaseUrl
+    cost := cost 0.17 0.25 0 0
+    contextWindow := 262144
+    maxTokens := 65536
+    reasoning := true
+    compat := togetherReasoningEffortCompat
+    input := #["text", "image"]
+    thinkingLevelMap := #[ { level := .off, mapped := none }
+                        , { level := .level .minimal, mapped := none }
+                        ]
+  }
+
+def together_deepseek_ai_DeepSeek_V4_Pro : ModelInfo :=
+  { id := "deepseek-ai/DeepSeek-V4-Pro"
+    name := "DeepSeek V4 Pro"
+    provider := togetherProviderId
+    api := "openai-completions"
+    baseUrl := togetherBaseUrl
+    cost := cost 1.74 3.48 0.2 0
+    contextWindow := 512000
+    maxTokens := 384000
+    reasoning := true
+    compat := togetherReasoningEffortCompat
+    input := #["text"]
+    thinkingLevelMap := #[ { level := .off, mapped := none }
+                        , { level := .level .minimal, mapped := none }
+                        ]
+  }
+
+def together_google_gemma_4_31B_it : ModelInfo :=
+  { id := "google/gemma-4-31B-it"
+    name := "Gemma 4 31B Instruct"
+    provider := togetherProviderId
+    api := "openai-completions"
+    baseUrl := togetherBaseUrl
+    cost := cost 0.39 0.97 0 0
+    contextWindow := 262144
+    maxTokens := 131072
+    reasoning := true
+    compat := togetherReasoningEffortCompat
+    input := #["text", "image"]
+    thinkingLevelMap := #[ { level := .off, mapped := none }
+                        , { level := .level .minimal, mapped := none }
+                        ]
+  }
+
+def together_moonshotai_Kimi_K2_6 : ModelInfo :=
+  { id := "moonshotai/Kimi-K2.6"
+    name := "Kimi K2.6"
+    provider := togetherProviderId
+    api := "openai-completions"
+    baseUrl := togetherBaseUrl
+    cost := cost 1.2 4.5 0.2 0
+    contextWindow := 262144
+    maxTokens := 131000
+    reasoning := true
+    compat := togetherReasoningEffortCompat
+    input := #["text", "image"]
+    thinkingLevelMap := #[ { level := .off, mapped := none }
+                        , { level := .level .minimal, mapped := none }
+                        ]
+  }
+
+def together_moonshotai_Kimi_K2_7_Code : ModelInfo :=
+  { id := "moonshotai/Kimi-K2.7-Code"
+    name := "Kimi K2.7 Code"
+    provider := togetherProviderId
+    api := "openai-completions"
+    baseUrl := togetherBaseUrl
+    cost := cost 0.95 4 0.19 0
+    contextWindow := 262144
+    maxTokens := 131072
+    reasoning := true
+    compat := togetherReasoningEffortCompat
+    input := #["text"]
+    thinkingLevelMap := #[ { level := .off, mapped := none }
+                        , { level := .level .minimal, mapped := none }
+                        ]
+  }
+
+def together_nvidia_nemotron_3_ultra_550b_a55b : ModelInfo :=
+  { id := "nvidia/nemotron-3-ultra-550b-a55b"
+    name := "Nemotron 3 Ultra 550B A55B"
+    provider := togetherProviderId
+    api := "openai-completions"
+    baseUrl := togetherBaseUrl
+    cost := cost 0.6 3.6 0.2 0
+    contextWindow := 512300
+    maxTokens := 512300
+    reasoning := true
+    compat := togetherReasoningEffortCompat
+    input := #["text"]
+    thinkingLevelMap := #[ { level := .off, mapped := none }
+                        , { level := .level .minimal, mapped := none }
+                        ]
+  }
+
+def together_zai_org_GLM_5 : ModelInfo :=
+  { id := "zai-org/GLM-5"
+    name := "GLM-5"
+    provider := togetherProviderId
+    api := "openai-completions"
+    baseUrl := togetherBaseUrl
+    cost := cost 1 3.2 0 0
+    contextWindow := 202752
+    maxTokens := 131072
+    reasoning := true
+    compat := togetherReasoningEffortCompat
+    input := #["text"]
+    thinkingLevelMap := #[ { level := .off, mapped := none }
+                        , { level := .level .minimal, mapped := none }
+                        ]
+  }
+
+def together_zai_org_GLM_5_1 : ModelInfo :=
+  { id := "zai-org/GLM-5.1"
+    name := "GLM-5.1"
+    provider := togetherProviderId
+    api := "openai-completions"
+    baseUrl := togetherBaseUrl
+    cost := cost 1.4 4.4 0 0
+    contextWindow := 202752
+    maxTokens := 131072
+    reasoning := true
+    compat := togetherReasoningEffortCompat
+    input := #["text"]
     thinkingLevelMap := #[ { level := .off, mapped := none }
                         , { level := .level .minimal, mapped := none }
                         ]
@@ -945,27 +1589,29 @@ def huggingFaceModels : Array ModelInfo :=
    ]
 
 def moonshotAIModels : Array ModelInfo :=
-  #[ catalogOpenAICompatibleModel moonshotAIProviderId moonshotAIBaseUrl "kimi-k2-0711-preview" "Kimi K2 0711" 0.6 2.5 0.15 0.0 131072 16384 false moonshotAICompat #[] #["text"]
+  #[
+     catalogOpenAICompatibleModel moonshotAIProviderId moonshotAIBaseUrl "kimi-k2-0711-preview" "Kimi K2 0711" 0.6 2.5 0.15 0.0 131072 16384 false moonshotAICompat #[] #["text"]
    , catalogOpenAICompatibleModel moonshotAIProviderId moonshotAIBaseUrl "kimi-k2-0905-preview" "Kimi K2 0905" 0.6 2.5 0.15 0.0 262144 262144 false moonshotAICompat #[] #["text"]
    , catalogOpenAICompatibleModel moonshotAIProviderId moonshotAIBaseUrl "kimi-k2-thinking" "Kimi K2 Thinking" 0.6 2.5 0.15 0.0 262144 262144 true moonshotAICompat #[] #["text"]
    , catalogOpenAICompatibleModel moonshotAIProviderId moonshotAIBaseUrl "kimi-k2-thinking-turbo" "Kimi K2 Thinking Turbo" 1.15 8.0 0.15 0.0 262144 262144 true moonshotAICompat #[] #["text"]
    , catalogOpenAICompatibleModel moonshotAIProviderId moonshotAIBaseUrl "kimi-k2-turbo-preview" "Kimi K2 Turbo" 2.4 10.0 0.6 0.0 262144 262144 false moonshotAICompat #[] #["text"]
    , catalogOpenAICompatibleModel moonshotAIProviderId moonshotAIBaseUrl "kimi-k2.5" "Kimi K2.5" 0.6 3.0 0.1 0.0 262144 262144 true moonshotAICompat #[] #["text", "image"]
    , catalogOpenAICompatibleModel moonshotAIProviderId moonshotAIBaseUrl "kimi-k2.6" "Kimi K2.6" 0.95 4.0 0.16 0.0 262144 262144 true moonshotAICompat #[] #["text", "image"]
-   , catalogOpenAICompatibleModel moonshotAIProviderId moonshotAIBaseUrl "kimi-k2.7-code" "Kimi K2.7 Code" 0.95 4.0 0.19 0.0 262144 262144 true moonshotAICompat #[{ level := .off, mapped := none }] #["text", "image"]
-   , catalogOpenAICompatibleModel moonshotAIProviderId moonshotAIBaseUrl "kimi-k2.7-code-highspeed" "Kimi K2.7 Code HighSpeed" 1.9 8.0 0.38 0.0 262144 262144 true moonshotAICompat #[{ level := .off, mapped := none }] #["text", "image"]
+   , catalogOpenAICompatibleModel moonshotAIProviderId moonshotAIBaseUrl "kimi-k2.7-code" "Kimi K2.7 Code" 0.95 4.0 0.19 0.0 262144 262144 true moonshotAICompat #[ { level := .off, mapped := none } ] #["text", "image"]
+   , catalogOpenAICompatibleModel moonshotAIProviderId moonshotAIBaseUrl "kimi-k2.7-code-highspeed" "Kimi K2.7 Code HighSpeed" 1.9 8.0 0.38 0.0 262144 262144 true moonshotAICompat #[ { level := .off, mapped := none } ] #["text", "image"]
    ]
 
 def moonshotAICNModels : Array ModelInfo :=
-  #[ catalogOpenAICompatibleModel moonshotAICNProviderId moonshotAICNBaseUrl "kimi-k2-0711-preview" "Kimi K2 0711" 0.6 2.5 0.15 0.0 131072 16384 false moonshotAICompat #[] #["text"]
+  #[
+     catalogOpenAICompatibleModel moonshotAICNProviderId moonshotAICNBaseUrl "kimi-k2-0711-preview" "Kimi K2 0711" 0.6 2.5 0.15 0.0 131072 16384 false moonshotAICompat #[] #["text"]
    , catalogOpenAICompatibleModel moonshotAICNProviderId moonshotAICNBaseUrl "kimi-k2-0905-preview" "Kimi K2 0905" 0.6 2.5 0.15 0.0 262144 262144 false moonshotAICompat #[] #["text"]
    , catalogOpenAICompatibleModel moonshotAICNProviderId moonshotAICNBaseUrl "kimi-k2-thinking" "Kimi K2 Thinking" 0.6 2.5 0.15 0.0 262144 262144 true moonshotAICompat #[] #["text"]
    , catalogOpenAICompatibleModel moonshotAICNProviderId moonshotAICNBaseUrl "kimi-k2-thinking-turbo" "Kimi K2 Thinking Turbo" 1.15 8.0 0.15 0.0 262144 262144 true moonshotAICompat #[] #["text"]
    , catalogOpenAICompatibleModel moonshotAICNProviderId moonshotAICNBaseUrl "kimi-k2-turbo-preview" "Kimi K2 Turbo" 2.4 10.0 0.6 0.0 262144 262144 false moonshotAICompat #[] #["text"]
    , catalogOpenAICompatibleModel moonshotAICNProviderId moonshotAICNBaseUrl "kimi-k2.5" "Kimi K2.5" 0.6 3.0 0.1 0.0 262144 262144 true moonshotAICompat #[] #["text", "image"]
    , catalogOpenAICompatibleModel moonshotAICNProviderId moonshotAICNBaseUrl "kimi-k2.6" "Kimi K2.6" 0.95 4.0 0.16 0.0 262144 262144 true moonshotAICompat #[] #["text", "image"]
-   , catalogOpenAICompatibleModel moonshotAICNProviderId moonshotAICNBaseUrl "kimi-k2.7-code" "Kimi K2.7 Code" 0.95 4.0 0.19 0.0 262144 262144 true moonshotAICompat #[{ level := .off, mapped := none }] #["text", "image"]
-   , catalogOpenAICompatibleModel moonshotAICNProviderId moonshotAICNBaseUrl "kimi-k2.7-code-highspeed" "Kimi K2.7 Code HighSpeed" 1.9 8.0 0.38 0.0 262144 262144 true moonshotAICompat #[{ level := .off, mapped := none }] #["text", "image"]
+   , catalogOpenAICompatibleModel moonshotAICNProviderId moonshotAICNBaseUrl "kimi-k2.7-code" "Kimi K2.7 Code" 0.95 4.0 0.19 0.0 262144 262144 true moonshotAICompat #[ { level := .off, mapped := none } ] #["text", "image"]
+   , catalogOpenAICompatibleModel moonshotAICNProviderId moonshotAICNBaseUrl "kimi-k2.7-code-highspeed" "Kimi K2.7 Code HighSpeed" 1.9 8.0 0.38 0.0 262144 262144 true moonshotAICompat #[ { level := .off, mapped := none } ] #["text", "image"]
    ]
 
 def nvidiaModels : Array ModelInfo :=
@@ -991,7 +1637,8 @@ def nvidiaModels : Array ModelInfo :=
    ].map fun model => { model with headers := nvidiaModelHeaders }
 
 def xiaomiModels : Array ModelInfo :=
-  #[ catalogOpenAICompatibleModel xiaomiProviderId xiaomiBaseUrl "mimo-v2-flash" "MiMo-V2-Flash" 0.1 0.3 0.01 0.0 262144 65536 true xiaomiCompat #[] #["text"]
+  #[
+     catalogOpenAICompatibleModel xiaomiProviderId xiaomiBaseUrl "mimo-v2-flash" "MiMo-V2-Flash" 0.1 0.3 0.01 0.0 262144 65536 true xiaomiCompat #[] #["text"]
    , catalogOpenAICompatibleModel xiaomiProviderId xiaomiBaseUrl "mimo-v2-omni" "MiMo-V2-Omni" 0.4 2.0 0.08 0.0 262144 131072 true xiaomiCompat #[] #["text", "image"]
    , catalogOpenAICompatibleModel xiaomiProviderId xiaomiBaseUrl "mimo-v2-pro" "MiMo-V2-Pro" 1.0 3.0 0.2 0.0 1048576 131072 true xiaomiCompat #[] #["text"]
    , catalogOpenAICompatibleModel xiaomiProviderId xiaomiBaseUrl "mimo-v2.5" "MiMo-V2.5" 0.4 2.0 0.08 0.0 1048576 131072 true xiaomiCompat #[] #["text", "image"]
@@ -1000,7 +1647,8 @@ def xiaomiModels : Array ModelInfo :=
    ]
 
 def xiaomiTokenPlanAMSModels : Array ModelInfo :=
-  #[ catalogOpenAICompatibleModel xiaomiTokenPlanAMSProviderId xiaomiTokenPlanAMSBaseUrl "mimo-v2-omni" "MiMo-V2-Omni" 0.4 2.0 0.08 0.0 262144 131072 true xiaomiCompat #[] #["text", "image"]
+  #[
+     catalogOpenAICompatibleModel xiaomiTokenPlanAMSProviderId xiaomiTokenPlanAMSBaseUrl "mimo-v2-omni" "MiMo-V2-Omni" 0.4 2.0 0.08 0.0 262144 131072 true xiaomiCompat #[] #["text", "image"]
    , catalogOpenAICompatibleModel xiaomiTokenPlanAMSProviderId xiaomiTokenPlanAMSBaseUrl "mimo-v2-pro" "MiMo-V2-Pro" 1.0 3.0 0.2 0.0 1048576 131072 true xiaomiCompat #[] #["text"]
    , catalogOpenAICompatibleModel xiaomiTokenPlanAMSProviderId xiaomiTokenPlanAMSBaseUrl "mimo-v2.5" "MiMo-V2.5" 0.4 2.0 0.08 0.0 1048576 131072 true xiaomiCompat #[] #["text", "image"]
    , catalogOpenAICompatibleModel xiaomiTokenPlanAMSProviderId xiaomiTokenPlanAMSBaseUrl "mimo-v2.5-pro" "MiMo-V2.5-Pro" 1.0 3.0 0.2 0.0 1048576 131072 true xiaomiCompat #[] #["text"]
@@ -1008,7 +1656,8 @@ def xiaomiTokenPlanAMSModels : Array ModelInfo :=
    ]
 
 def xiaomiTokenPlanCNModels : Array ModelInfo :=
-  #[ catalogOpenAICompatibleModel xiaomiTokenPlanCNProviderId xiaomiTokenPlanCNBaseUrl "mimo-v2-omni" "MiMo-V2-Omni" 0.4 2.0 0.08 0.0 262144 131072 true xiaomiCompat #[] #["text", "image"]
+  #[
+     catalogOpenAICompatibleModel xiaomiTokenPlanCNProviderId xiaomiTokenPlanCNBaseUrl "mimo-v2-omni" "MiMo-V2-Omni" 0.4 2.0 0.08 0.0 262144 131072 true xiaomiCompat #[] #["text", "image"]
    , catalogOpenAICompatibleModel xiaomiTokenPlanCNProviderId xiaomiTokenPlanCNBaseUrl "mimo-v2-pro" "MiMo-V2-Pro" 1.0 3.0 0.2 0.0 1048576 131072 true xiaomiCompat #[] #["text"]
    , catalogOpenAICompatibleModel xiaomiTokenPlanCNProviderId xiaomiTokenPlanCNBaseUrl "mimo-v2.5" "MiMo-V2.5" 0.4 2.0 0.08 0.0 1048576 131072 true xiaomiCompat #[] #["text", "image"]
    , catalogOpenAICompatibleModel xiaomiTokenPlanCNProviderId xiaomiTokenPlanCNBaseUrl "mimo-v2.5-pro" "MiMo-V2.5-Pro" 1.0 3.0 0.2 0.0 1048576 131072 true xiaomiCompat #[] #["text"]
@@ -1016,7 +1665,8 @@ def xiaomiTokenPlanCNModels : Array ModelInfo :=
    ]
 
 def xiaomiTokenPlanSGPModels : Array ModelInfo :=
-  #[ catalogOpenAICompatibleModel xiaomiTokenPlanSGPProviderId xiaomiTokenPlanSGPBaseUrl "mimo-v2-omni" "MiMo-V2-Omni" 0.4 2.0 0.08 0.0 262144 131072 true xiaomiCompat #[] #["text", "image"]
+  #[
+     catalogOpenAICompatibleModel xiaomiTokenPlanSGPProviderId xiaomiTokenPlanSGPBaseUrl "mimo-v2-omni" "MiMo-V2-Omni" 0.4 2.0 0.08 0.0 262144 131072 true xiaomiCompat #[] #["text", "image"]
    , catalogOpenAICompatibleModel xiaomiTokenPlanSGPProviderId xiaomiTokenPlanSGPBaseUrl "mimo-v2-pro" "MiMo-V2-Pro" 1.0 3.0 0.2 0.0 1048576 131072 true xiaomiCompat #[] #["text"]
    , catalogOpenAICompatibleModel xiaomiTokenPlanSGPProviderId xiaomiTokenPlanSGPBaseUrl "mimo-v2.5" "MiMo-V2.5" 0.4 2.0 0.08 0.0 1048576 131072 true xiaomiCompat #[] #["text", "image"]
    , catalogOpenAICompatibleModel xiaomiTokenPlanSGPProviderId xiaomiTokenPlanSGPBaseUrl "mimo-v2.5-pro" "MiMo-V2.5-Pro" 1.0 3.0 0.2 0.0 1048576 131072 true xiaomiCompat #[] #["text"]
@@ -1051,57 +1701,52 @@ def zaiCodingCNModels : Array ModelInfo :=
    , catalogOpenAICompatibleModel zaiCodingCNProviderId zaiCodingCNBaseUrl "glm-5v-turbo" "GLM-5V-Turbo" 0.0 0.0 0.0 0.0 200000 131072 true zaiToolStreamCompat #[] #["text", "image"]
    ]
 
+def anthropicModels : Array ModelInfo :=
+  #[
+     catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-3-5-haiku-20241022" "Claude Haiku 3.5" 0.8 4.0 0.08 1.0 200000 8192 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-3-5-haiku-latest" "Claude Haiku 3.5 (latest)" 0.8 4.0 0.08 1.0 200000 8192 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-3-5-sonnet-20240620" "Claude Sonnet 3.5" 3.0 15.0 0.3 3.75 200000 8192 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-3-5-sonnet-20241022" "Claude Sonnet 3.5 v2" 3.0 15.0 0.3 3.75 200000 8192 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-3-7-sonnet-20250219" "Claude Sonnet 3.7" 3.0 15.0 0.3 3.75 200000 64000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-3-haiku-20240307" "Claude Haiku 3" 0.25 1.25 0.03 0.3 200000 4096 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-3-opus-20240229" "Claude Opus 3" 15.0 75.0 1.5 18.75 200000 4096 false #[] #["text", "image"]
+   , catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-3-sonnet-20240229" "Claude Sonnet 3" 3.0 15.0 0.3 0.3 200000 4096 false #[] #["text", "image"]
+   , { (catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-fable-5" "Claude Fable 5" 10.0 50.0 1.0 12.5 1000000 128000 true #[ { level := .level .xhigh, mapped := some "xhigh" } ] #["text", "image"]) with compat := { forceAdaptiveThinking := true } }
+   , catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-haiku-4-5" "Claude Haiku 4.5 (latest)" 1.0 5.0 0.1 1.25 200000 64000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-haiku-4-5-20251001" "Claude Haiku 4.5" 1.0 5.0 0.1 1.25 200000 64000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-opus-4-0" "Claude Opus 4 (latest)" 15.0 75.0 1.5 18.75 200000 32000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-opus-4-1" "Claude Opus 4.1 (latest)" 15.0 75.0 1.5 18.75 200000 32000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-opus-4-1-20250805" "Claude Opus 4.1" 15.0 75.0 1.5 18.75 200000 32000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-opus-4-20250514" "Claude Opus 4" 15.0 75.0 1.5 18.75 200000 32000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-opus-4-5" "Claude Opus 4.5 (latest)" 5.0 25.0 0.5 6.25 200000 64000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-opus-4-5-20251101" "Claude Opus 4.5" 5.0 25.0 0.5 6.25 200000 64000 true #[] #["text", "image"]
+   , { (catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-opus-4-6" "Claude Opus 4.6" 5.0 25.0 0.5 6.25 1000000 128000 true #[ { level := .level .xhigh, mapped := some "max" } ] #["text", "image"]) with compat := { forceAdaptiveThinking := true } }
+   , { (catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-opus-4-7" "Claude Opus 4.7" 5.0 25.0 0.5 6.25 1000000 128000 true #[ { level := .level .xhigh, mapped := some "xhigh" } ] #["text", "image"]) with compat := { supportsTemperature := false, forceAdaptiveThinking := true } }
+   , { (catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-opus-4-8" "Claude Opus 4.8" 5.0 25.0 0.5 6.25 1000000 128000 true #[ { level := .level .xhigh, mapped := some "xhigh" } ] #["text", "image"]) with compat := { supportsTemperature := false, forceAdaptiveThinking := true } }
+   , catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-sonnet-4-0" "Claude Sonnet 4 (latest)" 3.0 15.0 0.3 3.75 200000 64000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-sonnet-4-20250514" "Claude Sonnet 4" 3.0 15.0 0.3 3.75 200000 64000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-sonnet-4-5" "Claude Sonnet 4.5 (latest)" 3.0 15.0 0.3 3.75 200000 64000 true #[] #["text", "image"]
+   , catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-sonnet-4-5-20250929" "Claude Sonnet 4.5" 3.0 15.0 0.3 3.75 200000 64000 true #[] #["text", "image"]
+   , { (catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-sonnet-4-6" "Claude Sonnet 4.6" 3.0 15.0 0.3 3.75 1000000 64000 true #[] #["text", "image"]) with compat := { forceAdaptiveThinking := true } }
+   ]
+
+
+/-- Legacy named refs kept for existing call sites. -/
 def anthropicSonnet45 : ModelInfo :=
-  { id := anthropicDefaultModel
-    name := "Claude Sonnet 4.5 (latest)"
-    provider := anthropicProviderId
-    api := LeanAgent.AI.Api.AnthropicMessages.api
-    baseUrl := anthropicBaseUrl
-    cost := cost 3.0 15.0 0.3 3.75
-    contextWindow := 200000
-    maxTokens := 64000
-    reasoning := true
-    input := #["text", "image"]
-  }
+  (anthropicModels.find? (fun m => m.id == anthropicDefaultModel)).getD
+    (catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl anthropicDefaultModel "Claude Sonnet 4.5 (latest)" 3.0 15.0 0.3 3.75 200000 64000 true #[] #["text", "image"])
 
 def anthropicHaiku45 : ModelInfo :=
-  { id := "claude-haiku-4-5"
-    name := "Claude Haiku 4.5 (latest)"
-    provider := anthropicProviderId
-    api := LeanAgent.AI.Api.AnthropicMessages.api
-    baseUrl := anthropicBaseUrl
-    cost := cost 1.0 5.0 0.1 1.25
-    contextWindow := 200000
-    maxTokens := 64000
-    reasoning := true
-    input := #["text", "image"]
-  }
+  (anthropicModels.find? (fun m => m.id == "claude-haiku-4-5")).getD
+    (catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-haiku-4-5" "Claude Haiku 4.5 (latest)" 1.0 5.0 0.1 1.25 200000 64000 true #[] #["text", "image"])
 
 def anthropicOpus45 : ModelInfo :=
-  { id := "claude-opus-4-5"
-    name := "Claude Opus 4.5 (latest)"
-    provider := anthropicProviderId
-    api := LeanAgent.AI.Api.AnthropicMessages.api
-    baseUrl := anthropicBaseUrl
-    cost := cost 15.0 75.0 1.5 18.75
-    contextWindow := 200000
-    maxTokens := 64000
-    reasoning := true
-    input := #["text", "image"]
-  }
+  (anthropicModels.find? (fun m => m.id == "claude-opus-4-5")).getD
+    (catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-opus-4-5" "Claude Opus 4.5 (latest)" 5.0 25.0 0.5 6.25 200000 64000 true #[] #["text", "image"])
 
 def anthropicSonnet37 : ModelInfo :=
-  { id := "claude-3-7-sonnet-20250219"
-    name := "Claude Sonnet 3.7"
-    provider := anthropicProviderId
-    api := LeanAgent.AI.Api.AnthropicMessages.api
-    baseUrl := anthropicBaseUrl
-    cost := cost 3.0 15.0 0.3 3.75
-    contextWindow := 200000
-    maxTokens := 64000
-    reasoning := true
-    input := #["text", "image"]
-  }
+  (anthropicModels.find? (fun m => m.id == "claude-3-7-sonnet-20250219")).getD
+    (catalogAnthropicMessagesModel anthropicProviderId anthropicBaseUrl "claude-3-7-sonnet-20250219" "Claude Sonnet 3.7" 3.0 15.0 0.3 3.75 200000 64000 true #[] #["text", "image"])
 
 def kimiCodingModels : Array ModelInfo :=
   #[ catalogAnthropicMessagesModel kimiCodingProviderId kimiCodingBaseUrl "k2p7" "Kimi K2.7 Code" 0.0 0.0 0.0 0.0 262144 32768 true #[] #["text", "image"]
@@ -1915,7 +2560,7 @@ def openRouterProviderInfo : ProviderInfo :=
     baseUrl := openRouterBaseUrl
     apiKeyEnv := openRouterApiKeyEnv
     defaultModel := openRouterDefaultModel
-    models := #[openRouterGptOss120B, openRouterKimiK26, openRouterKimiK27Code]
+    models := openRouterModels
   }
 
 def groqProviderInfo : ProviderInfo :=
@@ -1924,7 +2569,15 @@ def groqProviderInfo : ProviderInfo :=
     baseUrl := groqBaseUrl
     apiKeyEnv := groqApiKeyEnv
     defaultModel := groqDefaultModel
-    models := #[groqGptOss120B, groqGptOss20B, groqQwen332B]
+    models :=
+      #[ groqLlama31_8BInstant
+       , groqLlama33_70BVersatile
+       , groqLlama4Scout17B
+       , groqGptOss120B
+       , groqGptOss20B
+       , groqGptOssSafeguard20B
+       , groqQwen332B
+       ]
   }
 
 def xaiProviderInfo : ProviderInfo :=
@@ -1933,7 +2586,15 @@ def xaiProviderInfo : ProviderInfo :=
     baseUrl := xaiBaseUrl
     apiKeyEnv := xaiApiKeyEnv
     defaultModel := xaiDefaultModel
-    models := #[xaiGrokCodeFast1]
+    models :=
+      #[ xaiGrok3
+       , xaiGrok3Fast
+       , xaiGrok420NonReasoning
+       , xaiGrok420Reasoning
+       , xaiGrok43
+       , xaiGrokBuild01
+       , xaiGrokCodeFast1
+       ]
   }
 
 def cerebrasProviderInfo : ProviderInfo :=
@@ -1942,7 +2603,7 @@ def cerebrasProviderInfo : ProviderInfo :=
     baseUrl := cerebrasBaseUrl
     apiKeyEnv := cerebrasApiKeyEnv
     defaultModel := cerebrasDefaultModel
-    models := #[cerebrasGptOss120B]
+    models := #[cerebrasGptOss120B, cerebrasZaiGlm47]
   }
 
 def togetherProviderInfo : ProviderInfo :=
@@ -1951,7 +2612,7 @@ def togetherProviderInfo : ProviderInfo :=
     baseUrl := togetherBaseUrl
     apiKeyEnv := togetherApiKeyEnv
     defaultModel := togetherDefaultModel
-    models := #[togetherGptOss120B, togetherGptOss20B]
+    models := #[togetherGptOss120B, togetherGptOss20B, together_Qwen_Qwen2_5_7B_Instruct_Turbo, together_Qwen_Qwen3_235B_A22B_Instruct_2507_tput, together_Qwen_Qwen3_6_Plus, together_Qwen_Qwen3_7_Max, together_essentialai_Rnj_1_Instruct, together_meta_llama_Llama_3_3_70B_Instruct_Turbo, together_MiniMaxAI_MiniMax_M2_7, together_MiniMaxAI_MiniMax_M3, together_Qwen_Qwen3_5_397B_A17B, together_Qwen_Qwen3_5_9B, together_deepseek_ai_DeepSeek_V4_Pro, together_google_gemma_4_31B_it, together_moonshotai_Kimi_K2_6, together_moonshotai_Kimi_K2_7_Code, together_nvidia_nemotron_3_ultra_550b_a55b, together_zai_org_GLM_5, together_zai_org_GLM_5_1]
   }
 
 def fireworksProviderInfo : ProviderInfo :=
@@ -2069,7 +2730,7 @@ def anthropicProviderInfo : ProviderInfo :=
     apiKeyEnv := anthropicApiKeyEnv
     apiKeyEnvs := #[anthropicOAuthTokenEnv, anthropicApiKeyEnv]
     defaultModel := anthropicDefaultModel
-    models := #[anthropicSonnet45, anthropicHaiku45, anthropicOpus45, anthropicSonnet37]
+    models := anthropicModels
   }
 
 def kimiCodingProviderInfo : ProviderInfo :=

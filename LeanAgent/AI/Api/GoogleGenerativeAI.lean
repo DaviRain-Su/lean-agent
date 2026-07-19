@@ -4,6 +4,7 @@ import LeanAgent.AI.Types
 import LeanAgent.AI.Util.Diagnostics
 import LeanAgent.AI.Util.Headers
 import LeanAgent.AI.Util.JsonParse
+import LeanAgent.AI.Util.ProgressiveSse
 import LeanAgent.AI.Util.Retry
 import LeanAgent.AI.Util.SSE
 import LeanAgent.Http
@@ -194,23 +195,46 @@ def requestHeaders
     (config.headers ++ (authHeaders ++ #[("accept", "application/json")]))
     (LeanAgent.AI.Util.Headers.providerHeadersToArray options.headers)
 
+def httpJsonPostConfig
+    (config : GoogleGenerativeAIConfig)
+    (url : String)
+    (options : GoogleGenerativeAIOptions := {}) : LeanAgent.Http.JsonPostConfig :=
+  { url := url
+    apiKey := ""
+    signal := options.signal
+    headers := requestHeaders config options
+    timeoutSeconds := config.timeoutSeconds
+    connectTimeoutSeconds := config.connectTimeoutSeconds
+    maxResponseBytes := config.maxResponseBytes
+    noProxy := config.noProxy
+    userAgent := config.userAgent
+  }
+
 def runHttpJson
     (config : GoogleGenerativeAIConfig)
     (model : LeanAgent.AI.ModelRef)
     (url : String)
     (payload : Lean.Json)
     (options : GoogleGenerativeAIOptions := {}) : IO String := do
-  let response ← LeanAgent.Http.postJsonResponse
-    { url := url
-      apiKey := ""
-      headers := requestHeaders config options
-      timeoutSeconds := config.timeoutSeconds
-      connectTimeoutSeconds := config.connectTimeoutSeconds
-      maxResponseBytes := config.maxResponseBytes
-      noProxy := config.noProxy
-      userAgent := config.userAgent
-    }
-    payload.compress
+  let response ←
+    LeanAgent.Http.postJsonResponse (httpJsonPostConfig config url options) payload.compress
+  callResponseHook options (modelRef config model) response
+  if response.status < 200 || response.status >= 300 then
+    throw (IO.userError (LeanAgent.AI.Util.Diagnostics.providerHttpErrorMessage response.status response.body))
+  pure response.body
+
+def runHttpJsonProgressive
+    (config : GoogleGenerativeAIConfig)
+    (model : LeanAgent.AI.ModelRef)
+    (url : String)
+    (payload : Lean.Json)
+    (options : GoogleGenerativeAIOptions := {})
+    (onChunk : String → IO Unit := fun _ => pure ()) : IO String := do
+  let response ←
+    LeanAgent.Http.postJsonResponseProgressive
+      (httpJsonPostConfig config url options)
+      payload.compress
+      onChunk
   callResponseHook options (modelRef config model) response
   if response.status < 200 || response.status >= 300 then
     throw (IO.userError (LeanAgent.AI.Util.Diagnostics.providerHttpErrorMessage response.status response.body))
@@ -619,6 +643,20 @@ def messageFromStreamingState
     timestamp := timestamp
   }
 
+def buildStreamFromState
+    (api provider model : String)
+    (timestamp : Nat)
+    (state : StreamingState)
+    (parsedEvents : Array ParsedStreamEvent) :
+    Except String LeanAgent.AI.AssistantMessageEventStream := do
+  let (finalState, finalParsedEvents) := closeCurrentBlock state parsedEvents
+  let message := messageFromStreamingState api provider model timestamp finalState
+  let events :=
+    #[LeanAgent.AI.AssistantMessageEvent.start message]
+      ++ finalParsedEvents.map (parsedEventToAssistantEvent message)
+      ++ #[LeanAgent.AI.completionEvent message]
+  pure { events := events, finalResult := message }
+
 def parseStreamingEventStream
     (api provider model : String)
     (timestamp : Nat)
@@ -630,13 +668,51 @@ def parseStreamingEventStream
     let (nextState, nextEvents) := applyStreamingChunk model state parsedEvents chunk
     state := nextState
     parsedEvents := nextEvents
-  let (finalState, finalParsedEvents) := closeCurrentBlock state parsedEvents
-  let message := messageFromStreamingState api provider model timestamp finalState
-  let events :=
-    #[LeanAgent.AI.AssistantMessageEvent.start message]
-      ++ finalParsedEvents.map (parsedEventToAssistantEvent message)
-      ++ #[LeanAgent.AI.completionEvent message]
-  pure { events := events, finalResult := message }
+  buildStreamFromState api provider model timestamp state parsedEvents
+
+def sseEventToGoogleChunk? (event : LeanAgent.AI.Util.SSE.Event) : Except String (Option Lean.Json) := do
+  let data := event.data.trimAscii.toString
+  if data == "[DONE]" || data.isEmpty then
+    pure none
+  else
+    let json ← LeanAgent.AI.Util.JsonParse.parseJsonWithRepair data
+    if (LeanAgent.Json.optVal? json "error").isSome then
+      throw (LeanAgent.AI.Util.Diagnostics.providerParseErrorMessage json.compress)
+    pure (some json)
+
+def streamRawProgressive
+    (produceBody : (String → IO Unit) → IO String)
+    (api provider modelId : String)
+    (timestamp : Nat)
+    (sseEventsSeen : Option (IO.Ref Nat) := none) :
+    IO LeanAgent.AI.AssistantMessageEventStream := do
+  let stateRef ← IO.mkRef ({} : StreamingState)
+  let parsedRef ← IO.mkRef (#[] : Array ParsedStreamEvent)
+  let (raw, count, progressiveErr) ← LeanAgent.AI.Util.ProgressiveSse.feedWhile produceBody fun event => do
+    match sseEventToGoogleChunk? event with
+    | .error err => pure (.error err)
+    | .ok none => pure (.ok ())
+    | .ok (some chunk) =>
+        let (state, parsed) := applyStreamingChunk modelId (← stateRef.get) (← parsedRef.get) chunk
+        stateRef.set state
+        parsedRef.set parsed
+        pure (.ok ())
+  match sseEventsSeen with
+  | some counter => counter.set count
+  | none => pure ()
+  match progressiveErr with
+  | some _ =>
+      match parseStreamingEventStream api provider modelId timestamp raw with
+      | .ok stream => pure stream
+      | .error err => throw (IO.userError s!"failed to parse Google Generative AI stream: {err}\n{raw}")
+  | none =>
+      match buildStreamFromState api provider modelId timestamp (← stateRef.get) (← parsedRef.get) with
+      | .ok stream => pure stream
+      | .error err =>
+          match parseStreamingEventStream api provider modelId timestamp raw with
+          | .ok stream => pure stream
+          | .error err2 =>
+              throw (IO.userError s!"failed to parse Google Generative AI stream: {err}\n{err2}\n{raw}")
 
 def completeWithOptions
     (config : GoogleGenerativeAIConfig)
@@ -670,12 +746,13 @@ def completeStreamWithOptions
   let payload ← applyPayloadHook options ref
     (requestToJsonWithOptions ref input reasoning context options)
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
-  let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
-    (runHttpJson config ref (streamGenerateContentUrl config.baseUrl model.id) payload options)
-    options.signal
   let timestamp ← IO.monoMsNow
-  match parseStreamingEventStream model.api model.provider model.id timestamp raw with
-  | .ok stream => pure stream
-  | .error err => throw (IO.userError s!"failed to parse Google Generative AI stream: {err}\n{raw}")
+  let url := streamGenerateContentUrl config.baseUrl model.id
+  streamRawProgressive
+    (fun onChunk =>
+      LeanAgent.AI.Util.Retry.withRetries retryPolicy
+        (runHttpJsonProgressive config ref url payload options onChunk)
+        options.signal)
+    model.api model.provider model.id timestamp
 
 end LeanAgent.AI.Api.GoogleGenerativeAI

@@ -3,32 +3,59 @@
 Living counts for the full rewrite. **Not** a completion certificate.  
 Charter: [`goals/FULL_PI_PORT_PROMPT.md`](goals/FULL_PI_PORT_PROMPT.md), [`goals/FULL_PI_PORT_GOAL.md`](goals/FULL_PI_PORT_GOAL.md).
 
-Update when ledgers change. Prefer under-claiming.
+## Package rollup (honest)
 
-## Package rollup (manual; re-count from ledgers)
+| Domain | Pi `src/**/*.ts` | Ledger | Reality |
+| --- | ---: | --- | --- |
+| AI | 147 | [`AI_PARITY.md`](AI_PARITY.md) | **159 implemented / 0 partial / 0 missing** (offline inventory CLOSED; milestones M1–M6 offline done) |
+| Agent | 25 | [`AGENT_PARITY.md`](AGENT_PARITY.md) | **partial** — core offline loop usable; harness thin vs Pi |
+| Coding-agent | 160 | [`CODING_AGENT_PARITY.md`](CODING_AGENT_PARITY.md) | **MVP partial** — tools + EventBus/Defaults + Config/SessionManager/AgentSession façades; most `src` rows still missing |
+| TUI | 28 | [`TUI_PARITY.md`](TUI_PARITY.md) | **missing** (inventory only) |
+| Orchestrator | 13 | [`ORCHESTRATOR_PARITY.md`](ORCHESTRATOR_PARITY.md) | **missing** (inventory only) |
 
-| Domain | Pi package | Lean target | Reality (honest) | Ledger |
-| --- | --- | --- | --- | --- |
-| AI | `packages/ai` | `LeanAgent.AI.*`, `Models`, `Http` | **Large partial** — many providers/APIs exist; transport live-stream, generated catalog, edges still open | `AI_PARITY.md` |
-| Agent | `packages/agent` | `Agent.*`, `Session`, `Harness.*` | **Partial** — core loop usable offline; harness is thin vs Pi | `AGENT_PARITY.md` |
-| Coding-agent | `packages/coding-agent` | `CodingTools`, `Project`, `Main` | **MVP partial** — few tools, REPL, OMP skills/commands, v1 JSONL | create `CODING_AGENT_PARITY.md` |
-| TUI | `packages/tui` | future `LeanAgent.Tui` | **Missing** | create `TUI_PARITY.md` when started |
-| Orchestrator | `packages/orchestrator` | future `LeanAgent.Orchestrator` | **Missing** | create `ORCHESTRATOR_PARITY.md` when started |
-
-## Scale reminder (upstream pin)
-
-| Package | ~TS LOC under `src` |
-| --- | ---: |
-| ai | ~35k |
-| agent | ~8k |
-| coding-agent | ~51k |
-| tui | ~12k |
-| orchestrator | ~2k |
+**Inventory file count source:** `vendor/pi/packages/*/src/**/*.ts` at pin `54113731`.
 
 ## Definition of done
 
-See `FULL_PI_PORT_PROMPT.md` §8. Until every in-scope Pi module is `implemented` or Exclusion-`deferred`, status is **IN PROGRESS**.
+See `FULL_PI_PORT_PROMPT.md` §8. Product remains **IN PROGRESS** until all five packages are terminal (`implemented` or Exclusion-`deferred` only).
 
-## Last audit note
+## Recent slice notes
 
-Earlier “agent full parity” Goal completion was **rejected as product-complete**: harness façades and broad deferred must not be treated as a finished port. Use `FULL_PI_PORT_*` only for whole-project rewrite tracking.
+- Coding-agent: Mime/Frontmatter/Deprecation utils; AuthStorage; Compaction; ProviderAttribution; Config/SessionManager/AgentSession; many core/tools rows still missing.
+- Agent: force-sequential when tool.executionMode=sequential under parallel config (`testAgentLoopForceSequentialToolMode`).
+- Agent: session entry types model_change/thinking_level_change/compaction in buildContext (`testHarnessSessionContextEntryTypes`).
+- Agent: parallel tool_execution_end completion order vs source-order results (`testAgentLoopParallelEndOrderSourceOrder`); AgentHarness appendMessage/compact/setModel/setThinkingLevel.
+- Agent: `Truncate` Pi truncateHead/Tail/Line + sanitizeBinaryOutput (`testHarnessTruncate`); durable `JsonlSessionRepo` create/open/list/delete/fork (`testJsonlSessionRepoDurable`).
+- Agent: Session façade `buildContext` / branch messages over InMemorySessionStorage.
+- Agent: `InMemorySessionRepo` create/openSession/list/delete/fork + tests.
+- Agent: `InMemorySessionStorage` leaf pointer + labels (Pi memory-storage subset).
+- AI: offline inventory CLOSED (159 implemented, 0 partial/missing); evidence inventory-audit-ai.txt + lake-test.log.
+- Agent: offline agent-loop tests for transformContext + custom convertToLlm.
+- AI: Bedrock progressive AWS event-stream mid-transfer; AI ledger 0 partial/missing (inventory complete).
+- AI: progressive AWS event-stream mid-transfer for Bedrock (`aws_mode` progressive pump + NDJSON events).
+- AI: Faux chunked stream + mid-abort; Cloudflare login; credential per-provider locks; ledger promotions for progressive SSE protocols.
+- AI: Cloudflare auth login prompts; promote faux/images/protocol progressive-SSE rows; Faux chunked stream.
+- AI: Faux provider Pi streamWithDeltas (chunked deltas, mid-stream abort, factory throw); promote faux/images ledger rows.
+- Coding-agent: `EventBus` + `Defaults` (`DEFAULT_THINKING_LEVEL`) with offline tests.
+- Agent: `streamProxyHttp` progressive line-oriented SSE mid-transfer parse.
+- AI: progressive SSE for Google Generative AI, Vertex, and Mistral stream paths.
+- AI: progressive SSE for OpenAI Responses/Codex/Azure/Anthropic via ProgressiveSse.feedWhile + delayed local SSE routes.
+- AI: OpenAI Completions progressive HTTP + incremental SSE (`streamRawProgressive`); `SSE.feed`/`finish`; offline delayed SSE server test.
+- AI CLI: `lean-agent ai list` / `ai help` (Pi cli.ts offline surface).
+
+- AI: `MutableAssistantMessageEventStream` push/end/result; promoted json-parse, simple-options, event-stream, validation.
+
+- AI offline: Pi `retry.test.ts` + overflow LiteLLM false-positive fix (ServiceUnavailableError).
+- AI offline: full Pi `overflow.test.ts` matrix + trailing orphan transform; promoted `transform-messages`/`openai-prompt-cache`/`overflow` to implemented.
+- Agent: `LeanAgent.Agent.Proxy` progressive HTTP line-oriented SSE (was buffered-only).
+- AI catalogs: pin-synced Together (19), Anthropic (25), Moonshot AI/CN, Z.AI/Z.AI Coding CN, Xiaomi (+ token-plan AMS/CN/SGP), OpenRouter (257), Cloudflare Workers AI (13), Cloudflare AI Gateway (37); extended `testPinnedProviderModelCatalogIds`.
+- Prior: lazyApi wrappers, Headers helpers, groq/xai/cerebras/deepseek pins.
+
+- Coding-agent: `grep` / `find` / `git_status` tools; `AGENTS.md`/`CLAUDE.md` into system prompt via `Project.buildSystemPrompt`.
+- Agent harness: `messagesOnBranch`, `appendChild`, `replaceEntryMessage`.
+- TUI: `LeanAgent.Tui.Render` event/transcript formatting starter.
+- Orchestrator: in-memory `Registry` spawn/status/list starter.
+- Ledgers: full Pi `src` inventory rows for coding-agent (160), tui (28), orchestrator (13).
+- Evidence: `{SCRATCH}/lake-test.log` green; inventory-audit.txt.
+
+**Global DoD: NOT MET** — do not close FULL_PI_PORT_GOAL until AI/agent/coding-agent/tui/orchestrator rows are terminal.

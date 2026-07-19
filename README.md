@@ -69,6 +69,10 @@ Reference and planning docs:
 - [AI parity ledger](docs/AI_PARITY.md)
 - [Agent parity ledger](docs/AGENT_PARITY.md)
 - [Port status dashboard](docs/PORT_STATUS.md)
+- [Coding-agent parity ledger](docs/CODING_AGENT_PARITY.md)
+- [TUI parity ledger](docs/TUI_PARITY.md)
+- [Orchestrator parity ledger](docs/ORCHESTRATOR_PARITY.md)
+
 - [**Full Pi → Lean rewrite prompt**](docs/goals/FULL_PI_PORT_PROMPT.md) (standing)
 - [**Full Pi → Lean rewrite goal**](docs/goals/FULL_PI_PORT_GOAL.md) (standing)
 - [Agent-only port notes (superseded for product-complete)](docs/goals/AGENT_FULL_PARITY_GOAL.md)

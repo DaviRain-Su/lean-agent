@@ -402,4 +402,47 @@ def applySystemAppendix (system : String) (extensions : ProjectExtensions) : Str
   else
     system ++ "\n\n" ++ appendix
 
+/--
+Pi resource-loader candidates for project agent instructions.
+Returns the first existing file's contents among AGENTS.md / CLAUDE.md variants.
+-/
+def projectInstructionCandidates : Array String :=
+  #["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"]
+
+def loadProjectInstructions? (cwd : System.FilePath) : IO (Option (String × String)) := do
+  for name in projectInstructionCandidates do
+    let path := cwd / name
+    if ← path.pathExists then
+      let isDir ← path.isDir
+      if !isDir then
+        let content ← IO.FS.readFile path
+        if !content.trimAscii.isEmpty then
+          return some (name, content)
+  pure none
+
+/-- Append AGENTS.md / CLAUDE.md body to the system prompt when present (Pi coding-agent). -/
+def applyProjectInstructions (system : String) (cwd : System.FilePath) : IO String := do
+  match ← loadProjectInstructions? cwd with
+  | none => pure system
+  | some (name, body) =>
+      pure (system ++ "\n\n# Project instructions (" ++ name ++ ")\n\n" ++ body)
+
+/-- Full system prompt: base + OMP appendix + project instructions file. -/
+def buildSystemPrompt (base : String) (extensions : ProjectExtensions) (cwd : System.FilePath) :
+    IO String := do
+  let withAppendix := applySystemAppendix base extensions
+  applyProjectInstructions withAppendix cwd
+
+/-- Load resource (Pi subset). -/
+def loadResource (cwd : System.FilePath) (path : String) : IO String := pure ""
+
+/-- Settings manager stub (Pi subset). -/
+def settingsManager (p : Project) : IO Unit := pure ()
+
+/-- Slash commands stub (Pi subset). -/
+def slashCommands (p : Project) : IO Unit := pure ()
+
+/-- Source info stub (Pi subset). -/
+def sourceInfo (p : Project) : IO Unit := pure ()
+
 end LeanAgent.Project

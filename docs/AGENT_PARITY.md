@@ -36,15 +36,15 @@ Earlier Goal runs that marked this package effectively complete were **wrong**. 
 | Pi area | Lean modules | Status | Notes |
 | --- | --- | --- | --- |
 | Agent types | `LeanAgent.Agent.Types` | partial | Core shapes exist; TypeBox-level typing and full custom-message matrix incomplete. |
-| Agent loop | `LeanAgent.Agent.Loop` | partial | Major offline paths exist (tools, queues, hooks, terminate). Remaining Pi loop tests and live abort open. |
+| Agent loop | `LeanAgent.Agent.Loop` | partial | Major offline paths exist (tools, queues, hooks, terminate, prepareNextTurn, shouldStopAfterTurn). Offline tests cover `transformContext` before LLM, custom `convertToLlm`, and parallel tool end-order vs source-order (`testAgentLoopParallelEndOrderSourceOrder`). Remaining: full Pi agent-loop matrix edge cases; concurrent waitForIdle Exclusion-adjacent. |
 | Stateful Agent | `LeanAgent.Agent.Agent` | partial | prompt/images/queues/subscribe/failure path improved (`IO.Ref` lifecycle). Concurrent waitForIdle / full agent.test matrix open. |
 | Session JSONL v1 | `LeanAgent.Session` | partial | CLI v1 append-only works; not full Pi session tree model. |
-| Harness session tree | `Agent.Harness.Storage` | partial | Memory + jsonl parentId sketch; not full Pi jsonl-repo/session APIs. |
+| Harness session tree | `Agent.Harness.Storage`, `Agent.Harness.Session` | partial | SessionTree + InMemory + JsonlSessionRepo + entry types model/thinking/compaction in `buildContext` (`testHarnessSessionContextEntryTypes`). Remaining: append-only journal without full rewrite; active_tools_change/session_info. |
 | Compaction / branch | `Agent.Harness.Compaction` | partial | Offline prepare/compact/summary helpers; not full Pi compaction entry integration. |
 | System prompt / skills | `Agent.Harness.SystemPrompt`, `Skills` | partial | Skills XML + Project map; not full harness skill runtime. |
-| Templates / truncate | `Agent.Harness.Templates`, `Truncate` | partial | Basic expand/truncate. |
-| AgentHarness façade | `Agent.Harness.AgentHarness` | partial | Thin prompt/steer/followUp/nextTurn; << Pi agent-harness.ts. |
-| Proxy | — | missing | Implement when coding-agent/orchestrator RPC needs it. |
+| Templates / truncate | `Agent.Harness.Templates`, `Truncate` | partial | Templates basic; Truncate has Pi `truncateHead`/`truncateTail`/`truncateLine`/`sanitizeBinaryOutput` offline (`testHarnessTruncate`). |
+| AgentHarness façade | `Agent.Harness.AgentHarness` | partial | prompt/steer/followUp/nextTurn + appendMessage/compact/setModel/setThinkingLevel (`testAgentHarnessAppendCompactSetters`); still << Pi agent-harness.ts (~1k LOC). |
+| Proxy | `LeanAgent.Agent.Proxy` | partial | Offline SSE reconstruction of Pi proxy events (`processProxyEvent`, toolcall partial JSON, usage/done/error), URL builder, progressive HTTP `streamProxyHttp` with line-oriented mid-transfer parse + abort preflight (`testAgentProxyProgressiveHttpLocal`). Concurrent async consumers during transfer still open. |
 | Node env / durable harness | — | deferred | Exclusion: Node multi-process env not applicable; durable features that are portable must still be ported under harness rows as partial/missing. |
 
 ## Source Inventory
@@ -54,43 +54,61 @@ Earlier Goal runs that marked this package effectively complete were **wrong**. 
 | Core runtime | `src/agent.ts`, `src/agent-loop.ts`, `src/types.ts` | `LeanAgent.Agent.*` | partial |
 | Entry barrel | `src/index.ts` | `LeanAgent.Agent` + Harness import | partial |
 | Harness | `src/harness/**` | `LeanAgent.Agent.Harness.*` | partial |
-| Proxy | `src/proxy.ts` | — | missing |
+| Proxy | `src/proxy.ts` | `LeanAgent.Agent.Proxy` | partial |
 | Tests | `test/agent*.ts`, `test/harness/*` | `Tests.lean` agent/harness section | partial |
 
-## Core Runtime
+## Core Runtime (file inventory)
 
 | Pi source | Lean target | Status | Notes |
 | --- | --- | --- | --- |
-| `types.ts` | `Agent.Types` | partial | Core contracts present; not full Pi types surface. |
-| `agent-loop.ts` | `Agent.Loop` | partial | Major paths + some tests; full Pi agent-loop.test.ts matrix open. |
-| `agent.ts` prompt images | `promptWithImages` | partial | Works offline; part of larger agent.ts surface. |
-| `agent.ts` waitForIdle | `waitForIdle` / `isIdle` | partial | Post-return settle only; not full async barrier semantics. |
-| `agent.ts` failure lifecycle | `handleRunFailure` | partial | Transcript retention fixed; full agent.test matrix open. |
-| Queues / continue | Agent | partial | Core paths tested; more Pi cases remain. |
-| Nested busy | `throwIfBusy` | partial | Covered offline; concurrent streaming open. |
+| `types.ts` | `Agent.Types` | partial | Core contracts present (ToolExecutionMode, QueueMode, AgentMessage with custom helpers isCustomType/isBashExecution/isBranchSummary/isCompactionSummary added); not full Pi types surface (TypeBox-level, full custom-message matrix). |
+| `agent-loop.ts` | `Agent.Loop` | partial | Major paths + offline tests including transformContext/custom convertToLlm + parallel end-order matrix (`testAgentLoopParallelEndOrderSourceOrder`). |
+| `agent.ts` | `Agent.Agent` | partial | prompt/images/queues/subscribe/failure + waitForIdle settle; concurrent waitForIdle Exclusion-adjacent; full agent.test matrix open. |
+| `index.ts` | `LeanAgent.Agent` | partial | Barrel re-exports Agent/Loop/Types/Harness/Proxy. |
 
-## Harness
+## Harness (file inventory)
 
 | Pi source | Lean target | Status | Notes |
 | --- | --- | --- | --- |
-| `session/uuid.ts` | `Harness.Uuid` | partial | Basic uuidv7 helper; not a claim of full session stack. |
-| memory/jsonl storage | `Harness.Storage` | partial | Thin tree sketch vs Pi repos/storage/session. |
-| compaction | `Harness.Compaction` | partial | Offline helpers only. |
-| branch-summarization | `Harness.Compaction` | partial | Offline summary only. |
-| system-prompt / skills | `SystemPrompt`, `Skills` | partial | Formatting + Project map; not full runtime. |
-| prompt-templates | `Templates` | partial | Basic placeholders. |
-| truncate / shell-output | `Truncate` | partial | Basic helpers. |
-| agent-harness.ts | `AgentHarness` | partial | Thin façade vs ~1k LOC Pi harness. |
-| proxy.ts | — | deferred | No consumer yet |
-| env/nodejs.ts | — | deferred | Node-only |
+| `harness/agent-harness.ts` | `Harness.AgentHarness` | partial | prompt/steer/followUp/nextTurn/appendMessage/compact/setModel/setThinkingLevel; steer added; still thin vs ~1k LOC Pi harness. |
+| `harness/types.ts` | `Harness.*` types in Storage/Session/Compaction | partial | Subset of harness types; not full SessionStorage/Repo interfaces. |
+| `harness/messages.ts` | `Harness.Compaction` + custom message helpers | partial | Compaction/branch summary message helpers; full custom message matrix open. |
+| `harness/prompt-templates.ts` | `Harness.Templates` | partial | Basic placeholders offline. |
+| `harness/skills.ts` | `Harness.Skills` | partial | Skills XML + Project map; not full skill runtime. |
+| `harness/system-prompt.ts` | `Harness.SystemPrompt` | partial | Formatting helpers offline. |
+| `harness/session/uuid.ts` | `Harness.Uuid` | implemented | uuidv7 + shape tests (`testHarnessUuidv7`). |
+| `harness/session/memory-storage.ts` | `Harness.Storage.InMemorySessionStorage` | partial | Leaf/labels/appendMessage + modelChange/thinkingLevelChange/compaction appenders. |
+| `harness/session/memory-repo.ts` | `Harness.Storage.InMemorySessionRepo` | partial | create/openSession/list/delete/fork (`testInMemorySessionRepoCreateOpenListFork`). |
+| `harness/session/repo-utils.ts` | `Harness.Storage` helpers | partial | createSessionId/timestamp, getMessagePathToRoot, fork helpers offline. |
+| `harness/session/session.ts` | `Harness.Session` | partial | Session façade + buildContext with model/thinking/compaction entries (`testHarnessSessionContextEntryTypes`). active_tools_change / full Pi entry matrix open. |
+| `harness/session/jsonl-storage.ts` | `Harness.Storage` writeTreeJsonl/readTreeJsonl + v3 writeJsonlSessionFile | partial | Message-tree JSONL + durable v3 header (cwd/timestamp); leaf/label entry types still thin. |
+| `harness/session/jsonl-repo.ts` | `Harness.Storage.JsonlSessionRepo` | partial | Durable create/open/list/delete/fork + append rewrite (`testJsonlSessionRepoDurable`). Not full Pi FileSystem injection / streaming append journal. |
+| `harness/compaction/compaction.ts` | `Harness.Compaction` | partial | Offline prepare/compact helpers. |
+| `harness/compaction/branch-summarization.ts` | `Harness.Compaction` | partial | Offline branch summary helpers. |
+| `harness/compaction/utils.ts` | `Harness.Compaction` | partial | Shared compaction helpers offline. |
+| `harness/utils/truncate.ts` | `Harness.Truncate` | implemented | truncateHead/Tail/Line, formatSize, utf8ByteLength, TruncationResult (`testHarnessTruncate`). |
+| `harness/utils/shell-output.ts` | `Harness.Truncate` | partial | sanitizeBinaryOutput + truncateTailChars + shell head/tail lines offline; executeShellWithCapture not fully ported (needs ExecutionEnv). |
+| `proxy.ts` | `Agent.Proxy` | partial | Offline SSE reconstruction + progressive HTTP line parse; concurrent live consumers Exclusion-adjacent. |
+| `node.ts` | — | deferred | Node barrel re-export of NodeExecutionEnv; Exclusion Node-only. |
+| `harness/env/nodejs.ts` | — | deferred | Node multi-process env Exclusion. |
 
 ## Test Mapping
 
 | Pi tests | Lean | Status |
 | --- | --- | --- |
 | agent-loop tool/steering/hooks/terminate | `testAgentLoop*` | implemented |
+| agent-loop parallel end-order / source-order | `testAgentLoopParallelEndOrderSourceOrder` | implemented |
+| agent-loop force sequential tool mode | `testAgentLoopForceSequentialToolMode` | implemented |
+| agent-loop transformContext / custom convertToLlm | `testAgentLoopTransformContextBeforeLlm`, `testAgentLoopCustomConvertToLlm` | implemented |
+| agent-harness append/compact/setters | `testAgentHarnessAppendCompactSetters` | implemented |
 | agent prompt/sessionId/busy/subscribe/images/failure | `testAgent*` | implemented |
 | harness uuid/session/storage | `testHarness*` | implemented |
+| harness InMemorySessionStorage leaf/labels | `testInMemorySessionStorageLeafAndLabels` | implemented |
+| harness InMemorySessionRepo create/list/fork | `testInMemorySessionRepoCreateOpenListFork` | implemented |
+| harness Session façade buildContext | `testHarnessSessionFacadeBuildContext` | implemented |
+| harness Session entry types context | `testHarnessSessionContextEntryTypes` | implemented |
+| harness truncate head/tail/sanitize | `testHarnessTruncate` | implemented |
+| harness JsonlSessionRepo durable | `testJsonlSessionRepoDurable` | implemented |
 | harness compaction/branch | `testHarnessCompaction*`, `testHarnessBranchSummary` | implemented |
 | agent-harness queues | `testAgentHarnessPromptAndQueues` | implemented |
 | v1 session compat | `testSessionV1StillLoadsWithHarnessPresent` | implemented |

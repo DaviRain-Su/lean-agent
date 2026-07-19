@@ -36,4 +36,18 @@ def providerHeadersToArray? (headers : Array ProviderHeader) : Option (Array Hea
 def headersToArray (headers : Array Header) : Array Header :=
   headers
 
+/-- Case-insensitive lookup of a single header value (Pi Headers.get subset). -/
+def get? (headers : Array Header) (name : String) : Option String :=
+  headers.findSome? fun (headerName, value) =>
+    if nameEq headerName name then some value else none
+
+/-- All values for a header name (case-insensitive). -/
+def getAll (headers : Array Header) (name : String) : Array String :=
+  headers.filterMap fun (headerName, value) =>
+    if nameEq headerName name then some value else none
+
+/-- True when a header name is present (case-insensitive). -/
+def has (headers : Array Header) (name : String) : Bool :=
+  (get? headers name).isSome
+
 end LeanAgent.AI.Util.Headers

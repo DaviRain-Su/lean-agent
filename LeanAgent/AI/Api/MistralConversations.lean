@@ -5,6 +5,7 @@ import LeanAgent.AI.Util.Diagnostics
 import LeanAgent.AI.Util.Hash
 import LeanAgent.AI.Util.Headers
 import LeanAgent.AI.Util.JsonParse
+import LeanAgent.AI.Util.ProgressiveSse
 import LeanAgent.AI.Util.Retry
 import LeanAgent.AI.Util.SSE
 import LeanAgent.AI.Util.SanitizeUnicode
@@ -351,22 +352,43 @@ def requestHeaders
       if hasHeader headers "x-affinity" then headers else headers.push ("x-affinity", sessionId)
   | none => headers
 
+def httpJsonPostConfig
+    (config : MistralConversationsConfig)
+    (options : MistralOptions := {}) : LeanAgent.Http.JsonPostConfig :=
+  { url := chatCompletionsUrl config.baseUrl
+    apiKey := ""
+    signal := options.signal
+    headers := requestHeaders config options
+    timeoutSeconds := config.timeoutSeconds
+    connectTimeoutSeconds := config.connectTimeoutSeconds
+    maxResponseBytes := config.maxResponseBytes
+    noProxy := config.noProxy
+    userAgent := config.userAgent
+  }
+
 def runHttpJson
     (config : MistralConversationsConfig)
     (model : LeanAgent.AI.ModelRef)
     (payload : Lean.Json)
     (options : MistralOptions := {}) : IO String := do
-  let response ← LeanAgent.Http.postJsonResponse
-    { url := chatCompletionsUrl config.baseUrl
-      apiKey := ""
-      headers := requestHeaders config options
-      timeoutSeconds := config.timeoutSeconds
-      connectTimeoutSeconds := config.connectTimeoutSeconds
-      maxResponseBytes := config.maxResponseBytes
-      noProxy := config.noProxy
-      userAgent := config.userAgent
-    }
-    payload.compress
+  let response ←
+    LeanAgent.Http.postJsonResponse (httpJsonPostConfig config options) payload.compress
+  callResponseHook options (modelRef config model) response
+  if response.status < 200 || response.status >= 300 then
+    throw (IO.userError (LeanAgent.AI.Util.Diagnostics.providerHttpErrorMessage response.status response.body))
+  pure response.body
+
+def runHttpJsonProgressive
+    (config : MistralConversationsConfig)
+    (model : LeanAgent.AI.ModelRef)
+    (payload : Lean.Json)
+    (options : MistralOptions := {})
+    (onChunk : String → IO Unit := fun _ => pure ()) : IO String := do
+  let response ←
+    LeanAgent.Http.postJsonResponseProgressive
+      (httpJsonPostConfig config options)
+      payload.compress
+      onChunk
   callResponseHook options (modelRef config model) response
   if response.status < 200 || response.status >= 300 then
     throw (IO.userError (LeanAgent.AI.Util.Diagnostics.providerHttpErrorMessage response.status response.body))
@@ -838,6 +860,20 @@ def finalParsedEvents (state : StreamingState) : Array ParsedStreamEvent :=
           | _, _ => pure ()
     pure events
 
+def buildStreamFromState
+    (api provider model : String)
+    (timestamp : Nat)
+    (state : StreamingState)
+    (parsedEvents : Array ParsedStreamEvent) :
+    Except String LeanAgent.AI.AssistantMessageEventStream := do
+  let allParsedEvents := parsedEvents ++ finalParsedEvents state
+  let message := messageFromStreamingState api provider model timestamp state
+  let events :=
+    #[LeanAgent.AI.AssistantMessageEvent.start message]
+      ++ allParsedEvents.map (parsedEventToAssistantEvent message)
+      ++ #[LeanAgent.AI.completionEvent message]
+  pure { events := events, finalResult := message }
+
 def parseStreamingEventStream
     (api provider model : String)
     (timestamp : Nat)
@@ -849,13 +885,51 @@ def parseStreamingEventStream
     let (nextState, nextEvents) := applyStreamingChunk model state parsedEvents chunk
     state := nextState
     parsedEvents := nextEvents
-  let allParsedEvents := parsedEvents ++ finalParsedEvents state
-  let message := messageFromStreamingState api provider model timestamp state
-  let events :=
-    #[LeanAgent.AI.AssistantMessageEvent.start message]
-      ++ allParsedEvents.map (parsedEventToAssistantEvent message)
-      ++ #[LeanAgent.AI.completionEvent message]
-  pure { events := events, finalResult := message }
+  buildStreamFromState api provider model timestamp state parsedEvents
+
+def sseEventToMistralChunk? (event : LeanAgent.AI.Util.SSE.Event) : Except String (Option Lean.Json) := do
+  let data := event.data.trimAscii.toString
+  if data == "[DONE]" || data.isEmpty then
+    pure none
+  else
+    let json ← Lean.Json.parse event.data
+    if (LeanAgent.Json.optVal? json "error").isSome then
+      throw (LeanAgent.AI.Util.Diagnostics.providerParseErrorMessage json.compress)
+    pure (some json)
+
+def streamRawProgressive
+    (produceBody : (String → IO Unit) → IO String)
+    (api provider modelId : String)
+    (timestamp : Nat)
+    (sseEventsSeen : Option (IO.Ref Nat) := none) :
+    IO LeanAgent.AI.AssistantMessageEventStream := do
+  let stateRef ← IO.mkRef ({} : StreamingState)
+  let parsedRef ← IO.mkRef (#[] : Array ParsedStreamEvent)
+  let (raw, count, progressiveErr) ← LeanAgent.AI.Util.ProgressiveSse.feedWhile produceBody fun event => do
+    match sseEventToMistralChunk? event with
+    | .error err => pure (.error err)
+    | .ok none => pure (.ok ())
+    | .ok (some chunk) =>
+        let (state, parsed) := applyStreamingChunk modelId (← stateRef.get) (← parsedRef.get) chunk
+        stateRef.set state
+        parsedRef.set parsed
+        pure (.ok ())
+  match sseEventsSeen with
+  | some counter => counter.set count
+  | none => pure ()
+  match progressiveErr with
+  | some _ =>
+      match parseStreamingEventStream api provider modelId timestamp raw with
+      | .ok stream => pure stream
+      | .error err => throw (IO.userError s!"failed to parse Mistral streaming response: {err}\n{raw}")
+  | none =>
+      match buildStreamFromState api provider modelId timestamp (← stateRef.get) (← parsedRef.get) with
+      | .ok stream => pure stream
+      | .error err =>
+          match parseStreamingEventStream api provider modelId timestamp raw with
+          | .ok stream => pure stream
+          | .error err2 =>
+              throw (IO.userError s!"failed to parse Mistral streaming response: {err}\n{err2}\n{raw}")
 
 def completeWithOptions
     (config : MistralConversationsConfig)
@@ -885,12 +959,12 @@ def completeStreamWithOptions
   let payload ← applyPayloadHook options (modelRef config model)
     (requestToJsonWithOptions model input context options true)
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
-  let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
-    (runHttpJson config model payload options)
-    options.signal
   let timestamp ← IO.monoMsNow
-  match parseStreamingEventStream api model.provider model.id timestamp raw with
-  | .ok stream => pure stream
-  | .error err => throw (IO.userError s!"failed to parse Mistral streaming response: {err}\n{raw}")
+  streamRawProgressive
+    (fun onChunk =>
+      LeanAgent.AI.Util.Retry.withRetries retryPolicy
+        (runHttpJsonProgressive config model payload options onChunk)
+        options.signal)
+    api model.provider model.id timestamp
 
 end LeanAgent.AI.Api.MistralConversations

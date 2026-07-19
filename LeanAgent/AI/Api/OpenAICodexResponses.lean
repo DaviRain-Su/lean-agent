@@ -271,6 +271,21 @@ def modelRef
     baseUrl := some config.baseUrl
   }
 
+def httpJsonPostConfig
+    (config : OpenAICodexResponsesConfig)
+    (accountId : String)
+    (options : OpenAICodexResponsesOptions := {}) : LeanAgent.Http.JsonPostConfig :=
+  { url := codexResponsesUrl config.baseUrl
+    apiKey := config.apiKey
+    signal := options.signal
+    headers := requestHeaders config accountId options
+    timeoutSeconds := config.timeoutSeconds
+    connectTimeoutSeconds := config.connectTimeoutSeconds
+    maxResponseBytes := config.maxResponseBytes
+    noProxy := config.noProxy
+    userAgent := config.userAgent
+  }
+
 def runHttpJson
     (config : OpenAICodexResponsesConfig)
     (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
@@ -280,18 +295,30 @@ def runHttpJson
     match extractAccountId config.apiKey with
     | .ok accountId => pure accountId
     | .error err => throw (IO.userError s!"Failed to extract accountId from token: {err}")
-  let response ← LeanAgent.Http.postJsonResponse
-    { url := codexResponsesUrl config.baseUrl
-      apiKey := config.apiKey
-      signal := options.signal
-      headers := requestHeaders config accountId options
-      timeoutSeconds := config.timeoutSeconds
-      connectTimeoutSeconds := config.connectTimeoutSeconds
-      maxResponseBytes := config.maxResponseBytes
-      noProxy := config.noProxy
-      userAgent := config.userAgent
-    }
-    payload.compress
+  let response ← LeanAgent.Http.postJsonResponse (httpJsonPostConfig config accountId options) payload.compress
+  LeanAgent.AI.Api.OpenAIResponses.callResponseHook
+    options.toOpenAIResponsesOptions
+    (modelRef config model)
+    response
+  if response.status < 200 || response.status >= 300 then
+    throw (IO.userError (LeanAgent.AI.Util.Diagnostics.providerHttpErrorMessage response.status response.body))
+  pure response.body
+
+def runHttpJsonProgressive
+    (config : OpenAICodexResponsesConfig)
+    (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
+    (payload : Lean.Json)
+    (options : OpenAICodexResponsesOptions := {})
+    (onChunk : String → IO Unit := fun _ => pure ()) : IO String := do
+  let accountId ←
+    match extractAccountId config.apiKey with
+    | .ok accountId => pure accountId
+    | .error err => throw (IO.userError s!"Failed to extract accountId from token: {err}")
+  let response ←
+    LeanAgent.Http.postJsonResponseProgressive
+      (httpJsonPostConfig config accountId options)
+      payload.compress
+      onChunk
   LeanAgent.AI.Api.OpenAIResponses.callResponseHook
     options.toOpenAIResponsesOptions
     (modelRef config model)
@@ -312,16 +339,16 @@ def completeStreamWithOptions
     ref
     (requestToJsonWithOptions model context options)
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
-  let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
-    (runHttpJson config model payload options)
-    options.signal
   let timestamp ← IO.monoMsNow
-  match LeanAgent.AI.Api.OpenAIResponses.parseStreamingEventStream model.api model.provider model.id timestamp raw with
-  | .ok stream =>
-      pure (LeanAgent.AI.Api.OpenAIResponses.applyStreamUsageCost
-        model
-        options.toOpenAIResponsesOptions
-        stream)
-  | .error err => throw (IO.userError s!"failed to parse Codex streaming provider response: {err}\n{raw}")
+  let stream ← LeanAgent.AI.Api.OpenAIResponses.streamRawProgressive
+    (fun onChunk =>
+      LeanAgent.AI.Util.Retry.withRetries retryPolicy
+        (runHttpJsonProgressive config model payload options onChunk)
+        options.signal)
+    model.api model.provider model.id timestamp
+  pure (LeanAgent.AI.Api.OpenAIResponses.applyStreamUsageCost
+    model
+    options.toOpenAIResponsesOptions
+    stream)
 
 end LeanAgent.AI.Api.OpenAICodexResponses

@@ -443,41 +443,60 @@ def resolveProviderAuth
     ctx
     overrides
 
+/--
+In-memory store with per-provider mutexes so concurrent `modify` for different
+providers do not serialize on a single global lock (Pi per-provider lock granularity).
+-/
 def InMemoryCredentialStore.mk : IO CredentialStore := do
-  let credentials ← Std.Mutex.new (Array.empty : Array (String × Credential))
-  let readCredential (providerId : String) : IO (Option Credential) :=
-    credentials.atomically fun ref => do
-      let entries ← ref.get
-      pure (entries.findSome? fun (id, credential) => if id == providerId then some credential else none)
-  let writeCredentialLocked
-      (ref : IO.Ref (Array (String × Credential)))
+  let credentials ← IO.mkRef (Array.empty : Array (String × Credential))
+  let providerLocks ← IO.mkRef (Array.empty : Array (String × Std.Mutex Unit))
+  let getProviderLock (providerId : String) : IO (Std.Mutex Unit) := do
+    let locks ← providerLocks.get
+    match locks.findSome? fun (id, m) => if id == providerId then some m else none with
+    | some m => pure m
+    | none => do
+        let m ← Std.Mutex.new ()
+        providerLocks.modify fun arr =>
+          if arr.any fun (id, _) => id == providerId then arr else arr.push (providerId, m)
+        let locks ← providerLocks.get
+        match locks.findSome? fun (id, mx) => if id == providerId then some mx else none with
+        | some mx => pure mx
+        | none => pure m
+  let readCredential (providerId : String) : IO (Option Credential) := do
+    let entries ← credentials.get
+    pure (entries.findSome? fun (id, credential) => if id == providerId then some credential else none)
+  let writeCredential
       (providerId : String)
       (credential : Credential) : IO Unit := do
-    ref.modify fun entries =>
+    credentials.modify fun entries =>
       let withoutProvider := entries.filter fun (id, _) => id != providerId
       withoutProvider.push (providerId, credential)
   pure
     { read := readCredential
       modify := fun providerId fn => do
-        credentials.atomically fun ref => do
-          let entries ← ref.get
-          let current := entries.findSome? fun (id, credential) =>
-            if id == providerId then some credential else none
+        let m ← getProviderLock providerId
+        m.atomically fun _ => do
+          let current ← readCredential providerId
           let next ← fn current
           match next with
           | some credential =>
-              writeCredentialLocked ref providerId credential
+              writeCredential providerId credential
               pure (some credential)
           | none => pure current
-      delete := fun providerId =>
-        credentials.atomically fun ref => do
-          ref.modify fun entries => entries.filter fun (id, _) => id != providerId
+      delete := fun providerId => do
+        let m ← getProviderLock providerId
+        m.atomically fun _ => do
+          credentials.modify fun entries => entries.filter fun (id, _) => id != providerId
     }
 
 namespace FileCredentialStore
 
 def lockPath (path : System.FilePath) : System.FilePath :=
   System.FilePath.mk (path.toString ++ ".lock")
+
+/-- Per-provider lock directory next to the store file (Pi per-provider lock granularity). -/
+def providerLockPath (path : System.FilePath) (providerId : String) : System.FilePath :=
+  System.FilePath.mk (path.toString ++ ".lock." ++ providerId)
 
 def tempPath (path : System.FilePath) (suffix : Nat) : System.FilePath :=
   System.FilePath.mk (path.toString ++ s!".tmp-{suffix}")
@@ -556,42 +575,61 @@ def releaseCrossProcessLock (path : System.FilePath) : IO Unit := do
     IO.FS.removeDir path
 
 def withCrossProcessLock (path : System.FilePath) (action : IO α) : IO α := do
-  match (lockPath path).parent with
+  match path.parent with
   | some parent => IO.FS.createDirAll parent
   | none => pure ()
-  let lock := lockPath path
-  acquireCrossProcessLock lock
+  acquireCrossProcessLock path
   try
     action
   finally
     try
-      releaseCrossProcessLock lock
+      releaseCrossProcessLock path
     catch _ =>
       pure ()
 
+/--
+File-backed store: global file lock for whole-file JSON integrity, plus
+per-provider lock directories so concurrent modifies for different providers
+do not needlessly contend beyond the short whole-file critical section.
+In-process per-provider mutexes serialize same-provider races before disk.
+-/
 def mk (path : System.FilePath) : IO CredentialStore :=
   do
-    let lock ← Std.Mutex.new ()
+    let providerMutexes ← IO.mkRef (Array.empty : Array (String × Std.Mutex Unit))
+    let getProviderMutex (providerId : String) : IO (Std.Mutex Unit) := do
+      let locks ← providerMutexes.get
+      match locks.findSome? fun (id, m) => if id == providerId then some m else none with
+      | some m => pure m
+      | none => do
+          let m ← Std.Mutex.new ()
+          providerMutexes.modify (·.push (providerId, m))
+          pure m
     pure
-      { read := fun providerId =>
-          lock.atomically fun _ =>
-            withCrossProcessLock path do
-              readProvider path providerId
-        modify := fun providerId fn =>
-          lock.atomically fun _ => do
-            withCrossProcessLock path do
-              let current ← readProvider path providerId
-              let next ← fn current
-              match next with
-              | some credential => writeProvider path providerId credential
-              | none => pure ()
-              match next with
-              | some credential => pure (some credential)
-              | none => pure current
-        delete := fun providerId =>
-          lock.atomically fun _ =>
-            withCrossProcessLock path do
-              deleteProvider path providerId
+      { read := fun providerId => do
+          let m ← getProviderMutex providerId
+          m.atomically fun _ =>
+            withCrossProcessLock (providerLockPath path providerId) do
+              withCrossProcessLock (lockPath path) do
+                readProvider path providerId
+        modify := fun providerId fn => do
+          let m ← getProviderMutex providerId
+          m.atomically fun _ =>
+            withCrossProcessLock (providerLockPath path providerId) do
+              withCrossProcessLock (lockPath path) do
+                let current ← readProvider path providerId
+                let next ← fn current
+                match next with
+                | some credential => writeProvider path providerId credential
+                | none => pure ()
+                match next with
+                | some credential => pure (some credential)
+                | none => pure current
+        delete := fun providerId => do
+          let m ← getProviderMutex providerId
+          m.atomically fun _ =>
+            withCrossProcessLock (providerLockPath path providerId) do
+              withCrossProcessLock (lockPath path) do
+                deleteProvider path providerId
       }
 
 end FileCredentialStore

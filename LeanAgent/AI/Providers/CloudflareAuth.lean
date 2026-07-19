@@ -94,14 +94,39 @@ def resolveCloudflareEnv
             pure (some { auth := auth, env := env, source := some source })
   | _, _ => pure none
 
+/-- Pi `cloudflareWorkersAIAuth().login` — secret API key + account ID prompts. -/
+def cloudflareWorkersAILogin
+    (callbacks : LeanAgent.AI.Auth.AuthLoginCallbacks) :
+    IO LeanAgent.AI.Auth.ApiKeyCredential := do
+  let key ← callbacks.prompt (.secret "Enter Cloudflare API key" none callbacks.signal)
+  let accountId ← callbacks.prompt (.text "Enter Cloudflare account ID" none callbacks.signal)
+  pure
+    { key := some key
+      env := #[(accountIdEnv, accountId)]
+    }
+
+/-- Pi `cloudflareAIGatewayAuth().login` — secret key + account + gateway prompts. -/
+def cloudflareAIGatewayLogin
+    (callbacks : LeanAgent.AI.Auth.AuthLoginCallbacks) :
+    IO LeanAgent.AI.Auth.ApiKeyCredential := do
+  let key ← callbacks.prompt (.secret "Enter Cloudflare API key" none callbacks.signal)
+  let accountId ← callbacks.prompt (.text "Enter Cloudflare account ID" none callbacks.signal)
+  let gatewayId ← callbacks.prompt (.text "Enter Cloudflare AI Gateway ID" none callbacks.signal)
+  pure
+    { key := some key
+      env := #[(accountIdEnv, accountId), (gatewayIdEnv, gatewayId)]
+    }
+
 def cloudflareWorkersAIAuth : LeanAgent.AI.Auth.ApiKeyAuth :=
   { name := "Cloudflare API key"
+    login := some cloudflareWorkersAILogin
     resolve := fun model ctx credential =>
       resolveCloudflareEnv .workersAI model ctx credential
   }
 
 def cloudflareAIGatewayAuth : LeanAgent.AI.Auth.ApiKeyAuth :=
   { name := "Cloudflare API key"
+    login := some cloudflareAIGatewayLogin
     resolve := fun model ctx credential =>
       resolveCloudflareEnv .aiGateway model ctx credential
   }

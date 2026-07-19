@@ -1,5 +1,6 @@
 import LeanAgent.AI.EventStream
 import LeanAgent.AI.Types
+import LeanAgent.AI.Util.Abort
 import LeanAgent.AI.Util.Estimate
 import LeanAgent.Json
 import LeanAgent.Models
@@ -11,6 +12,8 @@ def defaultProvider : String := "faux"
 def defaultModelId : String := "faux-1"
 def defaultModelName : String := "Faux Model"
 def defaultBaseUrl : String := "http://localhost:0"
+def defaultMinTokenSize : Nat := 3
+def defaultMaxTokenSize : Nat := 5
 
 def defaultUsage : Usage := {}
 
@@ -24,10 +27,19 @@ structure FauxModelDefinition where
   maxTokens : Nat := 16384
 deriving BEq
 
+structure FauxTokenSize where
+  min : Nat := defaultMinTokenSize
+  max : Nat := defaultMaxTokenSize
+deriving BEq
+
 structure FauxOptions where
   api : Option String := none
   provider : Option String := none
   models : Array FauxModelDefinition := #[]
+  /-- Approximate token size range for chunking stream deltas (Pi `tokenSize`). -/
+  tokenSize : FauxTokenSize := {}
+  /-- Optional pacing: when set, sleep roughly estimateTokens(chunk)/tps seconds between chunks. -/
+  tokensPerSecond : Option Nat := none
 deriving BEq
 
 structure FauxState where
@@ -197,6 +209,171 @@ def errorMessage (message api provider modelId : String) (timestamp : Nat) : Ass
 def errorStream (message : AssistantMessage) : AssistantMessageEventStream :=
   { events := #[.error .error message], finalResult := message }
 
+def abortedMessage (snapshot : AssistantMessage) : AssistantMessage :=
+  { snapshot with
+    stopReason := .aborted
+    errorMessage := some LeanAgent.AI.Util.Abort.requestAbortedMessage
+  }
+
+def resolvedTokenSize (options : FauxOptions) : Nat × Nat :=
+  let minSize := Nat.max 1 options.tokenSize.min
+  let maxSize := Nat.max minSize options.tokenSize.max
+  (minSize, maxSize)
+
+/-- Split text into chunks of ~tokenSize*4 chars (Pi faux). Fixed size when min==max. -/
+def splitStringByTokenSize (text : String) (minTokenSize maxTokenSize : Nat) : Array String :=
+  if text.isEmpty then
+    #[""]
+  else
+    Id.run do
+      let mut chunks : Array String := #[]
+      let mut index : Nat := 0
+      let chars := text.toList
+      let total := chars.length
+      while index < total do
+        -- Deterministic when min==max; otherwise use mid-range for offline stability.
+        let tokenSize :=
+          if minTokenSize == maxTokenSize then minTokenSize
+          else (minTokenSize + maxTokenSize) / 2
+        let charSize := Nat.max 1 (tokenSize * 4)
+        let take := Nat.min charSize (total - index)
+        let chunk := String.ofList (chars.drop index |>.take take)
+        chunks := chunks.push chunk
+        index := index + take
+      pure chunks
+
+def scheduleChunk (chunk : String) (tokensPerSecond? : Option Nat) : IO Unit := do
+  match tokensPerSecond? with
+  | none => pure ()
+  | some tps =>
+      if tps == 0 then
+        pure ()
+      else
+        let tokens := Nat.max 1 (estimateTokens chunk)
+        -- milliseconds ≈ tokens/tps * 1000
+        let delayMs := (tokens * 1000) / tps
+        if delayMs > 0 then
+          IO.sleep (UInt32.ofNat delayMs)
+
+def isAborted? (signal? : Option LeanAgent.AI.Util.Abort.AbortSignal) : IO Bool :=
+  LeanAgent.AI.Util.Abort.isAborted signal?
+
+/-- Pi `streamWithDeltas`: emit start + per-block chunked deltas; honor abort mid-stream. -/
+def streamWithDeltas
+    (message : AssistantMessage)
+    (minTokenSize maxTokenSize : Nat)
+    (tokensPerSecond? : Option Nat)
+    (signal? : Option LeanAgent.AI.Util.Abort.AbortSignal) :
+    IO AssistantMessageEventStream := do
+  let mutable ← createAssistantMessageEventStream
+  let mut snapshot : AssistantMessage := { message with content := #[] }
+  if ← isAborted? signal? then
+    let aborted := abortedMessage snapshot
+    mutable.push (.error .aborted aborted)
+    pure (← mutable.toBuffered)
+  else
+    mutable.push (.start snapshot)
+    let mut abortedEarly := false
+    let mut contentIndex : Nat := 0
+    for block in message.content do
+      if abortedEarly then
+        pure ()
+      else if ← isAborted? signal? then
+        let aborted := abortedMessage snapshot
+        mutable.push (.error .aborted aborted)
+        abortedEarly := true
+      else
+        match block with
+        | .thinking thinkingBlock =>
+            snapshot :=
+              { snapshot with content := snapshot.content.push (.thinking { thinking := "" }) }
+            mutable.push (.thinkingStart contentIndex snapshot)
+            for chunk in splitStringByTokenSize thinkingBlock.thinking minTokenSize maxTokenSize do
+              if !abortedEarly then
+                do
+                  _ ← scheduleChunk chunk tokensPerSecond?
+                  if ← isAborted? signal? then
+                    let aborted := abortedMessage snapshot
+                    mutable.push (.error .aborted aborted)
+                    abortedEarly := true
+                  else
+                    let prev :=
+                      match snapshot.content[contentIndex]? with
+                      | some (.thinking t) => t.thinking
+                      | _ => ""
+                    let nextThinking := prev ++ chunk
+                    snapshot :=
+                      { snapshot with
+                        content :=
+                          snapshot.content.set! contentIndex (.thinking { thinking := nextThinking })
+                      }
+                    if !chunk.isEmpty then
+                      mutable.push (.thinkingDelta contentIndex chunk snapshot)
+            if !abortedEarly then
+              mutable.push
+                (.thinkingEnd contentIndex thinkingBlock.thinking snapshot)
+              contentIndex := contentIndex + 1
+        | .text textBlock =>
+            snapshot := { snapshot with content := snapshot.content.push (.text { text := "" }) }
+            mutable.push (.textStart contentIndex snapshot)
+            for chunk in splitStringByTokenSize textBlock.text minTokenSize maxTokenSize do
+              if !abortedEarly then
+                do
+                  _ ← scheduleChunk chunk tokensPerSecond?
+                  if ← isAborted? signal? then
+                    let aborted := abortedMessage snapshot
+                    mutable.push (.error .aborted aborted)
+                    abortedEarly := true
+                  else
+                    let prev :=
+                      match snapshot.content[contentIndex]? with
+                      | some (.text t) => t.text
+                      | _ => ""
+                    let nextText := prev ++ chunk
+                    snapshot :=
+                      { snapshot with
+                        content := snapshot.content.set! contentIndex (.text { text := nextText })
+                      }
+                    if !chunk.isEmpty then
+                      mutable.push (.textDelta contentIndex chunk snapshot)
+            if !abortedEarly then
+              mutable.push (.textEnd contentIndex textBlock.text snapshot)
+              contentIndex := contentIndex + 1
+        | .toolCall call =>
+            let emptyCall : LeanAgent.AI.ToolCall := { call with arguments := LeanAgent.Json.obj [] }
+            snapshot := { snapshot with content := snapshot.content.push (.toolCall emptyCall) }
+            mutable.push (.toolCallStart contentIndex snapshot)
+            let argsJson := call.arguments.compress
+            for chunk in splitStringByTokenSize argsJson minTokenSize maxTokenSize do
+              if !abortedEarly then
+                do
+                  _ ← scheduleChunk chunk tokensPerSecond?
+                  if ← isAborted? signal? then
+                    let aborted := abortedMessage snapshot
+                    mutable.push (.error .aborted aborted)
+                    abortedEarly := true
+                  else if !chunk.isEmpty then
+                    mutable.push (.toolCallDelta contentIndex chunk snapshot)
+            if !abortedEarly then
+              snapshot :=
+                { snapshot with content := snapshot.content.set! contentIndex (.toolCall call) }
+              mutable.push (.toolCallEnd contentIndex call snapshot)
+              contentIndex := contentIndex + 1
+        | .image imageContent =>
+            snapshot := { snapshot with content := snapshot.content.push (.image imageContent) }
+            contentIndex := contentIndex + 1
+    if abortedEarly then
+      mutable.toBuffered
+    else
+      match message.stopReason with
+      | .error =>
+          mutable.push (.error .error message)
+      | .aborted =>
+          mutable.push (.error .aborted message)
+      | reason =>
+          mutable.push (.done reason message)
+      mutable.toBuffered
+
 def modelFromDefinition (api providerId : String) (definition : FauxModelDefinition) :
     LeanAgent.Models.ModelInfo :=
   { id := definition.id
@@ -227,6 +404,9 @@ structure FauxProviderHandle where
   stateRef : IO.Ref FauxState
   responsesRef : IO.Ref (Array FauxResponseStep)
   promptCacheRef : IO.Ref (Array (String × String))
+  minTokenSize : Nat
+  maxTokenSize : Nat
+  tokensPerSecond : Option Nat
 
 def FauxProviderHandle.state (handle : FauxProviderHandle) : IO FauxState :=
   handle.stateRef.get
@@ -260,12 +440,17 @@ def createStream
     (stateRef : IO.Ref FauxState)
     (responsesRef : IO.Ref (Array FauxResponseStep))
     (promptCacheRef : IO.Ref (Array (String × String)))
+    (minTokenSize maxTokenSize : Nat)
+    (tokensPerSecond : Option Nat)
     (model : LeanAgent.Models.ModelInfo)
     (context : Context)
     (options : SimpleStreamOptions) : IO AssistantMessageEventStream := do
+  match options.onResponse with
+  | some hook => hook { status := 200, headers := #[] } { id := model.id, api := api, provider := providerId }
+  | none => pure ()
   if ← LeanAgent.AI.Util.Abort.isAborted options.signal then
     let timestamp ← IO.monoMsNow
-    pure <| fromMessage
+    pure <| errorStream
       { content := #[]
         api := api
         provider := providerId
@@ -292,13 +477,13 @@ def createStream
     | some (.message message) =>
         let message := rewriteMessage message api providerId model.id timestamp
         let message ← withUsageEstimate message context options promptCacheRef
-        pure (fromMessage message)
+        streamWithDeltas message minTokenSize maxTokenSize tokensPerSecond options.signal
     | some (.factory factory) =>
         try
           let resolved ← factory context options nextState model
           let message := rewriteMessage resolved api providerId model.id timestamp
           let message ← withUsageEstimate message context options promptCacheRef
-          pure (fromMessage message)
+          streamWithDeltas message minTokenSize maxTokenSize tokensPerSecond options.signal
         catch err =>
           let message := errorMessage err.toString api providerId model.id timestamp
           pure (errorStream message)
@@ -307,10 +492,13 @@ def fauxProvider (options : FauxOptions := {}) : IO FauxProviderHandle := do
   let api := options.api.getD defaultApi
   let providerId := options.provider.getD defaultProvider
   let models := modelDefinitions options |>.map (modelFromDefinition api providerId)
+  let (minTokenSize, maxTokenSize) := resolvedTokenSize options
   let stateRef ← IO.mkRef {}
   let responsesRef ← IO.mkRef #[]
   let promptCacheRef ← IO.mkRef #[]
-  let streamSimple := createStream api providerId stateRef responsesRef promptCacheRef
+  let streamSimple :=
+    createStream api providerId stateRef responsesRef promptCacheRef
+      minTokenSize maxTokenSize options.tokensPerSecond
   let provider : LeanAgent.Models.Provider :=
     { id := providerId
       name := providerId
@@ -327,6 +515,9 @@ def fauxProvider (options : FauxOptions := {}) : IO FauxProviderHandle := do
       stateRef := stateRef
       responsesRef := responsesRef
       promptCacheRef := promptCacheRef
+      minTokenSize := minTokenSize
+      maxTokenSize := maxTokenSize
+      tokensPerSecond := options.tokensPerSecond
     }
 
 end LeanAgent.AI.Providers.Faux

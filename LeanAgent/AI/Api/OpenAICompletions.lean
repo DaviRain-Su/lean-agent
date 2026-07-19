@@ -1515,24 +1515,46 @@ def requestToStreamingJsonWithContextOptions
            | some toolStream => [("tool_stream", toolStream)]
            | none => []))
 
+def httpJsonPostConfig
+    (config : OpenAICompatibleConfig)
+    (headers : Array (String × String) := #[])
+    (options : OpenAICompletionsOptions := {}) : LeanAgent.Http.JsonPostConfig :=
+  { url := chatCompletionsUrl config.baseUrl
+    apiKey := config.apiKey
+    signal := options.signal
+    headers := LeanAgent.AI.Util.Headers.merge config.headers headers
+    timeoutSeconds := config.timeoutSeconds
+    connectTimeoutSeconds := config.connectTimeoutSeconds
+    maxResponseBytes := config.maxResponseBytes
+    noProxy := config.noProxy
+    userAgent := config.userAgent
+  }
+
 def runHttpJson
     (config : OpenAICompatibleConfig)
     (payload : Lean.Json)
     (headers : Array (String × String) := #[])
     (options : OpenAICompletionsOptions := {})
     (model : LeanAgent.AI.ModelRef := { id := "", api := "openai-completions", provider := "" }) : IO String := do
-  let response ← LeanAgent.Http.postJsonResponse
-    { url := chatCompletionsUrl config.baseUrl
-      apiKey := config.apiKey
-      signal := options.signal
-      headers := LeanAgent.AI.Util.Headers.merge config.headers headers
-      timeoutSeconds := config.timeoutSeconds
-      connectTimeoutSeconds := config.connectTimeoutSeconds
-      maxResponseBytes := config.maxResponseBytes
-      noProxy := config.noProxy
-      userAgent := config.userAgent
-    }
-    payload.compress
+  let response ← LeanAgent.Http.postJsonResponse (httpJsonPostConfig config headers options) payload.compress
+  callResponseHook options model response
+  if response.status < 200 || response.status >= 300 then
+    throw (IO.userError (LeanAgent.AI.Util.Diagnostics.providerHttpErrorMessage response.status response.body))
+  pure response.body
+
+/-- Progressive JSON POST: invokes `onChunk` as response body bytes arrive. -/
+def runHttpJsonProgressive
+    (config : OpenAICompatibleConfig)
+    (payload : Lean.Json)
+    (headers : Array (String × String) := #[])
+    (options : OpenAICompletionsOptions := {})
+    (model : LeanAgent.AI.ModelRef := { id := "", api := "openai-completions", provider := "" })
+    (onChunk : String → IO Unit := fun _ => pure ()) : IO String := do
+  let response ←
+    LeanAgent.Http.postJsonResponseProgressive
+      (httpJsonPostConfig config headers options)
+      payload.compress
+      onChunk
   callResponseHook options model response
   if response.status < 200 || response.status >= 300 then
     throw (IO.userError (LeanAgent.AI.Util.Diagnostics.providerHttpErrorMessage response.status response.body))
@@ -2060,6 +2082,35 @@ def parseStreamingChunks (raw : String) : Except String (Array Lean.Json) := do
       chunks := chunks.push json
   pure chunks
 
+/-- Map one completed SSE event into an optional chat-completion JSON chunk. -/
+def sseEventToChunk? (event : LeanAgent.AI.Util.SSE.Event) : Except String (Option Lean.Json) := do
+  let data := event.data.trimAscii.toString
+  if data == "[DONE]" then
+    pure none
+  else
+    let json ← Lean.Json.parse event.data
+    if (LeanAgent.Json.optVal? json "error").isSome then
+      throw (LeanAgent.AI.Util.Diagnostics.providerParseErrorMessage json.compress)
+    pure (some json)
+
+/-- Apply completed SSE events into streaming state (progressive path). -/
+def applySseEvents
+    (provider model : String)
+    (state : StreamingState)
+    (parsedEvents : Array ParsedStreamEvent)
+    (sseEvents : Array LeanAgent.AI.Util.SSE.Event) :
+    Except String (StreamingState × Array ParsedStreamEvent) := do
+  let mut state := state
+  let mut parsedEvents := parsedEvents
+  for event in sseEvents do
+    match ← sseEventToChunk? event with
+    | none => pure ()
+    | some chunk =>
+        let (nextState, nextEvents) := applyStreamingChunk provider model state parsedEvents chunk
+        state := nextState
+        parsedEvents := nextEvents
+  pure (state, parsedEvents)
+
 def finalParsedEvents (state : StreamingState) : Except String (Array ParsedStreamEvent) := do
   let mut events := #[]
   for key in state.order do
@@ -2080,6 +2131,21 @@ def finalParsedEvents (state : StreamingState) : Except String (Array ParsedStre
         | _, _ => pure ()
   pure events
 
+def buildStreamFromState
+    (api provider model : String)
+    (timestamp : Nat)
+    (state : StreamingState)
+    (parsedEvents : Array ParsedStreamEvent) :
+    Except String LeanAgent.AI.AssistantMessageEventStream := do
+  let finalEvents ← finalParsedEvents state
+  let allParsedEvents := parsedEvents ++ finalEvents
+  let message := messageFromStreamingState api provider model timestamp state
+  let events :=
+    #[LeanAgent.AI.AssistantMessageEvent.start message]
+      ++ allParsedEvents.map (parsedEventToAssistantEvent message)
+      ++ #[LeanAgent.AI.completionEvent message]
+  pure { events := events, finalResult := message }
+
 def parseStreamingEventStream
     (api provider model : String)
     (timestamp : Nat)
@@ -2091,14 +2157,74 @@ def parseStreamingEventStream
     let (nextState, nextEvents) := applyStreamingChunk provider model state parsedEvents chunk
     state := nextState
     parsedEvents := nextEvents
-  let finalEvents ← finalParsedEvents state
-  let allParsedEvents := parsedEvents ++ finalEvents
-  let message := messageFromStreamingState api provider model timestamp state
-  let events :=
-    #[LeanAgent.AI.AssistantMessageEvent.start message]
-      ++ allParsedEvents.map (parsedEventToAssistantEvent message)
-      ++ #[LeanAgent.AI.completionEvent message]
-  pure { events := events, finalResult := message }
+  buildStreamFromState api provider model timestamp state parsedEvents
+
+/--
+Stream a chat completion using progressive HTTP + incremental SSE parse.
+
+As body bytes arrive, completed SSE events update streaming state immediately.
+`sseEventsSeen` counts completed SSE events applied mid-transfer (for tests).
+On parse errors during progressive feed, falls back to batch parse of the full body.
+-/
+def streamRawProgressive
+    (config : OpenAICompatibleConfig)
+    (payload : Lean.Json)
+    (headers : Array (String × String))
+    (options : OpenAICompletionsOptions)
+    (model : LeanAgent.AI.ModelRef)
+    (api provider modelId : String)
+    (timestamp : Nat)
+    (sseEventsSeen : Option (IO.Ref Nat) := none) :
+    IO LeanAgent.AI.AssistantMessageEventStream := do
+  let sseRef ← IO.mkRef ({} : LeanAgent.AI.Util.SSE.Parser)
+  let stateRef ← IO.mkRef ({} : StreamingState)
+  let parsedRef ← IO.mkRef (#[] : Array ParsedStreamEvent)
+  let progressiveErrRef ← IO.mkRef (none : Option String)
+  let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
+  let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
+    (runHttpJsonProgressive config payload headers options model fun chunk => do
+      if (← progressiveErrRef.get).isSome then
+        pure ()
+      else
+        let p ← sseRef.get
+        let (p', events) := LeanAgent.AI.Util.SSE.feed p chunk
+        sseRef.set p'
+        if !events.isEmpty then
+          match sseEventsSeen with
+          | some counter => counter.modify (· + events.size)
+          | none => pure ()
+          match applySseEvents provider modelId (← stateRef.get) (← parsedRef.get) events with
+          | .error err => progressiveErrRef.set (some err)
+          | .ok (state, parsed) =>
+              stateRef.set state
+              parsedRef.set parsed)
+    options.signal
+  -- Flush trailing SSE buffer after transfer.
+  if (← progressiveErrRef.get).isNone then
+    let trailing := LeanAgent.AI.Util.SSE.finish (← sseRef.get)
+    if !trailing.isEmpty then
+      match sseEventsSeen with
+      | some counter => counter.modify (· + trailing.size)
+      | none => pure ()
+      match applySseEvents provider modelId (← stateRef.get) (← parsedRef.get) trailing with
+      | .error err => progressiveErrRef.set (some err)
+      | .ok (state, parsed) =>
+          stateRef.set state
+          parsedRef.set parsed
+  match ← progressiveErrRef.get with
+  | some _ =>
+      -- Fall back to batch parse of full body (same errors as pre-progressive path).
+      match parseStreamingEventStream api provider modelId timestamp raw with
+      | .ok stream => pure stream
+      | .error err => throw (IO.userError s!"failed to parse streaming provider response: {err}\n{raw}")
+  | none =>
+      match buildStreamFromState api provider modelId timestamp (← stateRef.get) (← parsedRef.get) with
+      | .ok stream => pure stream
+      | .error err =>
+          match parseStreamingEventStream api provider modelId timestamp raw with
+          | .ok stream => pure stream
+          | .error err2 =>
+              throw (IO.userError s!"failed to parse streaming provider response: {err}\n{err2}\n{raw}")
 
 def parseChatCompletion (raw : String) : Except String LeanAgent.ProviderResponse := do
   let json ← Lean.Json.parse raw
@@ -2149,14 +2275,9 @@ def streamWithOptions
   let payload ←
     applyPayloadHook options model
       (requestToStreamingJsonWithOptions request options config.baseUrl providerId)
-  let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
-  let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
-    (runHttpJson config payload (requestHeaders options) options model)
-    options.signal
   let timestamp ← IO.monoMsNow
-  match parseStreamingEventStream api providerId request.model timestamp raw with
-  | .ok stream => pure stream
-  | .error err => throw (IO.userError s!"failed to parse streaming provider response: {err}\n{raw}")
+  streamRawProgressive config payload (requestHeaders options) options model
+    api providerId request.model timestamp
 
 def streamContextWithOptions
     (config : OpenAICompatibleConfig)
@@ -2169,14 +2290,9 @@ def streamContextWithOptions
   let payload ←
     applyPayloadHook options ref
       (requestToStreamingJsonWithContextOptions model context options config.baseUrl)
-  let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
-  let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
-    (runHttpJson config payload (requestHeaders options) options ref)
-    options.signal
   let timestamp ← IO.monoMsNow
-  match parseStreamingEventStream model.api model.provider model.id timestamp raw with
-  | .ok stream => pure stream
-  | .error err => throw (IO.userError s!"failed to parse streaming provider response: {err}\n{raw}")
+  streamRawProgressive config payload (requestHeaders options) options ref
+    model.api model.provider model.id timestamp
 
 def provider (config : OpenAICompatibleConfig) : LeanAgent.ModelProvider :=
   { complete := fun request => completeWithOptions config request }

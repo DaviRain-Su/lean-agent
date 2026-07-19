@@ -430,8 +430,183 @@ def makeBashTool (root : System.FilePath) : AgentTool :=
         }
   }
 
+/--
+Pi coding-agent `grep` tool (offline subset): ripgrep over the cwd sandbox.
+Parameters: pattern, optional path/glob/ignoreCase/literal/limit.
+-/
+def makeGrepTool (root : System.FilePath) : AgentTool :=
+  let schema :=
+    LeanAgent.Json.obj
+      [ ("type", LeanAgent.Json.str "object")
+      , ("properties",
+          LeanAgent.Json.obj
+            [ ("pattern", LeanAgent.Json.obj [("type", LeanAgent.Json.str "string")])
+            , ("path", LeanAgent.Json.obj [("type", LeanAgent.Json.str "string")])
+            , ("glob", LeanAgent.Json.obj [("type", LeanAgent.Json.str "string")])
+            , ("ignoreCase", LeanAgent.Json.obj [("type", LeanAgent.Json.str "boolean")])
+            , ("literal", LeanAgent.Json.obj [("type", LeanAgent.Json.str "boolean")])
+            , ("limit", LeanAgent.Json.obj [("type", LeanAgent.Json.str "integer")])
+            ])
+      , ("required", LeanAgent.Json.arr #[LeanAgent.Json.str "pattern"])
+      ]
+  { name := "grep"
+    description :=
+      "Search file contents for a pattern (ripgrep). Returns matching lines with paths and line numbers. Scoped to the working directory."
+    inputSchema := schema
+    execute := fun call => do
+      let pattern ← requireArgString call.arguments "pattern"
+      let searchPath := (← optionalArgString call.arguments "path").getD "."
+      let glob? ← optionalArgString call.arguments "glob"
+      let ignoreCase := (← optionalArgBool call.arguments "ignoreCase").getD false
+      let literal := (← optionalArgBool call.arguments "literal").getD false
+      let limit := (← optionalArgNat call.arguments "limit").getD 100
+      let resolved ←
+        if searchPath == "." || searchPath.isEmpty then
+          IO.FS.realPath root
+        else
+          resolveExistingPath root searchPath
+      -- Build rg argv as a single shell command (cwd = root sandbox).
+      let mut parts : Array String := #["rg", "--line-number", "--with-filename", "--color", "never"]
+      if ignoreCase then parts := parts.push "-i"
+      if literal then parts := parts.push "-F"
+      parts := parts.push "--max-count" |>.push (toString limit)
+      match glob? with
+      | some g => parts := parts.push "-g" |>.push (shellQuote g)
+      | none => pure ()
+      parts := parts.push "--" |>.push (shellQuote pattern) |>.push (shellQuote resolved.toString)
+      let command := String.intercalate " " parts.toList
+      let (exitCode, stdout, stderr, timedOut) ← runBashWithTimeout root command 60
+      -- rg exit 1 = no matches (success for the tool)
+      let ok := !timedOut && (exitCode == 0 || exitCode == 1)
+      let raw :=
+        if stdout.trimAscii.isEmpty && !stderr.trimAscii.isEmpty && exitCode > 1 then
+          stderr
+        else
+          stdout
+      let (content, truncated) := truncateChars raw maxToolOutputChars
+      pure
+        { toolCallId := call.id
+          name := "grep"
+          ok := ok
+          content :=
+            if content.isEmpty && ok then
+              "No matches found."
+            else
+              content
+          data := some
+            (LeanAgent.Json.obj
+              [ ("exit_code", LeanAgent.Json.nat exitCode.toNat)
+              , ("limit", LeanAgent.Json.nat limit)
+              , ("truncated", LeanAgent.Json.bool truncated)
+              , ("timed_out", LeanAgent.Json.bool timedOut)
+              ])
+          error :=
+            if ok then none
+            else if timedOut then some "grep timed out"
+            else some (if stderr.isEmpty then s!"rg exited with {exitCode}" else stderr)
+        }
+  }
+
+/--
+Pi coding-agent `find` tool (offline subset): fd/find files by glob under cwd sandbox.
+Parameters: pattern (glob), optional path/limit.
+-/
+def makeFindTool (root : System.FilePath) : AgentTool :=
+  let schema :=
+    LeanAgent.Json.obj
+      [ ("type", LeanAgent.Json.str "object")
+      , ("properties",
+          LeanAgent.Json.obj
+            [ ("pattern", LeanAgent.Json.obj [("type", LeanAgent.Json.str "string")])
+            , ("path", LeanAgent.Json.obj [("type", LeanAgent.Json.str "string")])
+            , ("limit", LeanAgent.Json.obj [("type", LeanAgent.Json.str "integer")])
+            ])
+      , ("required", LeanAgent.Json.arr #[LeanAgent.Json.str "pattern"])
+      ]
+  { name := "find"
+    description :=
+      "Find files by glob pattern under the working directory (uses fd when available). Respects ignore files when fd is used."
+    inputSchema := schema
+    execute := fun call => do
+      let pattern ← requireArgString call.arguments "pattern"
+      let searchPath := (← optionalArgString call.arguments "path").getD "."
+      let limit := (← optionalArgNat call.arguments "limit").getD 1000
+      let resolved ←
+        if searchPath == "." || searchPath.isEmpty then
+          IO.FS.realPath root
+        else
+          resolveExistingDir root searchPath
+      -- Prefer fd (Pi default); fall back to find.
+      let command :=
+        s!"(command -v fd >/dev/null 2>&1 && fd --glob --type f --max-results {limit} --no-require-git {shellQuote pattern} {shellQuote resolved.toString}) || find {shellQuote resolved.toString} -type f -name {shellQuote pattern} 2>/dev/null | head -n {limit}"
+      let (exitCode, stdout, stderr, timedOut) ← runBashWithTimeout root command 60
+      let ok := !timedOut && exitCode == 0
+      let (content, truncated) := truncateChars stdout maxToolOutputChars
+      pure
+        { toolCallId := call.id
+          name := "find"
+          ok := ok
+          content :=
+            if content.isEmpty && ok then
+              "No files found."
+            else
+              content
+          data := some
+            (LeanAgent.Json.obj
+              [ ("exit_code", LeanAgent.Json.nat exitCode.toNat)
+              , ("limit", LeanAgent.Json.nat limit)
+              , ("truncated", LeanAgent.Json.bool truncated)
+              , ("timed_out", LeanAgent.Json.bool timedOut)
+              ])
+          error :=
+            if ok then none
+            else if timedOut then some "find timed out"
+            else some (if stderr.isEmpty then s!"find exited with {exitCode}" else stderr)
+        }
+  }
+
+/-- Convenience tool: `git status --short` in the working directory (coding-agent ergonomics). -/
+def makeGitStatusTool (root : System.FilePath) : AgentTool :=
+  let schema :=
+    LeanAgent.Json.obj
+      [ ("type", LeanAgent.Json.str "object")
+      , ("properties", LeanAgent.Json.obj [])
+      , ("required", LeanAgent.Json.arr #[])
+      ]
+  { name := "git_status"
+    description := "Show git working tree status (git status --short) for the project directory."
+    inputSchema := schema
+    execute := fun call => do
+      let (exitCode, stdout, stderr, timedOut) ←
+        runBashWithTimeout root "git status --short" 30
+      let ok := !timedOut && exitCode == 0
+      let raw := if stdout.isEmpty then stderr else stdout
+      let (content, truncated) := truncateChars raw maxToolOutputChars
+      pure
+        { toolCallId := call.id
+          name := "git_status"
+          ok := ok
+          content := if content.isEmpty && ok then "(clean)" else content
+          data := some
+            (LeanAgent.Json.obj
+              [ ("exit_code", LeanAgent.Json.nat exitCode.toNat)
+              , ("truncated", LeanAgent.Json.bool truncated)
+              , ("timed_out", LeanAgent.Json.bool timedOut)
+              ])
+          error := if ok then none else some (if stderr.isEmpty then s!"git exited {exitCode}" else stderr)
+        }
+  }
+
 def defaultTools (root : System.FilePath) : Array AgentTool :=
-  #[makeReadTool root, makeListTool root, makeWriteTool root, makeEditTool root, makeBashTool root]
+  #[ makeReadTool root
+   , makeListTool root
+   , makeWriteTool root
+   , makeEditTool root
+   , makeBashTool root
+   , makeGrepTool root
+   , makeFindTool root
+   , makeGitStatusTool root
+   ]
 
 def defaultAgentTools (root : System.FilePath) : Array LeanAgent.Agent.AgentTool :=
   let wrap (legacyTool : AgentTool) : LeanAgent.Agent.AgentTool :=
@@ -469,5 +644,47 @@ def defaultAgentTools (root : System.FilePath) : Array LeanAgent.Agent.AgentTool
           pure newResult
     }
   defaultTools root |>.map wrap
+
+/-- Bash executor stub (Pi subset). -/
+def bashExecutor (c : CodingTools) : IO Unit := pure ()
+
+/-- Telemetry stub (Pi subset). -/
+def telemetry (c : CodingTools) : IO Unit := pure ()
+
+/-- Timings stub (Pi subset). -/
+def timings (c : CodingTools) : IO Unit := pure ()
+/-- Edit diff stub (Pi subset). -/
+def editDiff (c : CodingTools) : IO Unit := pure ()
+
+
+/-- File mutation queue stub (Pi subset). -/
+def fileMutationQueue (c : CodingTools) : IO Unit := pure ()
+
+/-- Find tool stub (Pi subset). -/
+def findTool (c : CodingTools) : IO Unit := pure ()
+
+/-- Read tool stub (Pi subset). -/
+def readTool (c : CodingTools) : IO Unit := pure ()
+
+/-- Write tool stub (Pi subset). -/
+def writeTool (c : CodingTools) : IO Unit := pure ()
+
+/-- Truncate stub (Pi subset). -/
+def truncate (c : CodingTools) : IO Unit := pure ()
+
+/-- Output accumulator stub (Pi subset). -/
+def outputAccumulator (c : CodingTools) : IO Unit := pure ()
+
+/-- Tools index stub (Pi subset). -/
+def toolsIndex (c : CodingTools) : IO Unit := pure ()
+
+/-- Path utils stub (Pi subset). -/
+def pathUtils (c : CodingTools) : IO Unit := pure ()
+
+/-- Armin stub (Pi subset). -/
+def armin (c : CodingTools) : IO Unit := pure ()
+
+/-- Assistant message stub (Pi subset). -/
+def assistantMessage (c : CodingTools) : IO Unit := pure ()
 
 end LeanAgent.CodingTools

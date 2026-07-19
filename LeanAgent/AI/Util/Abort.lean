@@ -72,6 +72,6 @@ partial def sleep
 def isAbortErrorMessage
     (message : String)
     (abortMessage : String := requestAbortedMessage) : Bool :=
-  message.contains abortMessage
+  message.toLower.contains abortMessage.toLower
 
 end LeanAgent.AI.Util.Abort

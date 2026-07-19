@@ -5,12 +5,15 @@ import LeanAgent.AI.Types
 import LeanAgent.AI.Util.Abort
 import LeanAgent.Agent.Harness.SystemPrompt
 import LeanAgent.Agent.Harness.Storage
+import LeanAgent.Agent.Harness.Compaction
+import LeanAgent.Models
 
 namespace LeanAgent.Agent.Harness
 
 open LeanAgent.Agent
 open LeanAgent.Agent.Harness.SystemPrompt
 open LeanAgent.Agent.Harness.Storage
+open LeanAgent.Agent.Harness.Compaction
 
 /-- Queue snapshot for harness queue_update events (Pi subset). -/
 structure QueueSnapshot where
@@ -128,6 +131,65 @@ def promptWithImages
 
 def continue_ (h : AgentHarness) : IO AgentHarness := do
   let agent ← h.agent.continue
+  pure { h with agent := agent }
+
+/-- Append a message to the agent transcript without starting a turn (Pi `appendMessage`). -/
+def appendMessage (h : AgentHarness) (message : AgentMessage) : IO AgentHarness := do
+  let agent :=
+    { h.agent with
+      state :=
+        { h.agent.state with
+          messages := h.agent.state.messages.push message
+        }
+    }
+  pure { h with agent := agent }
+
+/-- Update the active model on the agent state (Pi `setModel`). -/
+def setModel (h : AgentHarness) (model : LeanAgent.Models.ModelInfo) : IO AgentHarness := do
+  pure
+    { h with
+      agent :=
+        { h.agent with
+          state := { h.agent.state with model := model }
+        }
+    }
+
+
+def getModel (h : AgentHarness) : LeanAgent.Models.ModelInfo :=
+  h.agent.state.model
+
+/-- Update thinking level (Pi `setThinkingLevel`). -/
+def setThinkingLevel
+    (h : AgentHarness)
+    (level : LeanAgent.AI.ModelThinkingLevel) : IO AgentHarness := do
+  pure
+    { h with
+      agent :=
+        { h.agent with
+          state := { h.agent.state with thinkingLevel := level }
+        }
+    }
+
+def getThinkingLevel (h : AgentHarness) : LeanAgent.AI.ModelThinkingLevel :=
+  h.agent.state.thinkingLevel
+
+/--
+Offline compact via `Compaction.compact` summary text (Pi compact subset without live LLM).
+Replaces agent transcript with summary + kept suffix.
+-/
+def compact
+    (h : AgentHarness)
+    (summary : String)
+    (settings : CompactionSettings := DEFAULT_COMPACTION_SETTINGS) :
+    IO AgentHarness := do
+  h.emit (.phase "compaction")
+  let compacted ←
+    LeanAgent.Agent.Harness.Compaction.compact h.agent.state.messages summary settings
+  let agent :=
+    { h.agent with
+      state := { h.agent.state with messages := compacted }
+    }
+  h.emit (.phase "idle")
   pure { h with agent := agent }
 
 /-- Persist harness transcript into a SessionTree (memory). -/

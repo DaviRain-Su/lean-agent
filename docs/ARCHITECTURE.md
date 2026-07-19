@@ -14,8 +14,8 @@ ledger whenever `packages/ai` coverage changes. Agent-runtime parity with
 | `packages/ai` | `LeanAgent.Http`, `LeanAgent.AI.*` (Types, Api, Auth, OAuth, Compat, Providers, Images, Util), `LeanAgent.Models` |
 | `packages/agent` | `LeanAgent.Agent.*` (Types, Loop, Agent), `LeanAgent.Agent.Harness.*` (Uuid, Storage, Compaction, SystemPrompt, Skills, Templates, Truncate, AgentHarness), `LeanAgent.Session` (v1 CLI JSONL) |
 | `packages/coding-agent` | `LeanAgent.CodingTools`, `LeanAgent.Project`, `Main` |
-| `packages/tui` | future `LeanAgent.Tui` |
-| `packages/orchestrator` | future `LeanAgent.Orchestrator` |
+| `packages/tui` | `LeanAgent.Tui` / `Tui.Render` (event formatting starter; full TUI missing) |
+| `packages/orchestrator` | `LeanAgent.Orchestrator` / `Registry` (in-memory instance bookkeeping; process supervision missing) |
 | root distribution | `lakefile.lean`, README, docs, release/install scripts |
 
 Agent harness owns tree session storage, compaction helpers, and the high-level

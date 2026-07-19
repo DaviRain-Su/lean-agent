@@ -66,6 +66,35 @@ static size_t write_header(void *contents, size_t size, size_t nmemb, void *user
     return write_response(contents, size, nmemb, userp);
 }
 
+/* Mid-transfer abort: Lean writes '1' to abort_flag_path from another task while
+ * curl_easy_perform blocks. Checked from XFERINFO (progress) callbacks. */
+static int abort_flag_is_set(const char *abort_flag_path) {
+    if (abort_flag_path == NULL || abort_flag_path[0] == 0) {
+        return 0;
+    }
+    FILE *file = fopen(abort_flag_path, "rb");
+    if (file == NULL) {
+        return 0;
+    }
+    int ch = fgetc(file);
+    fclose(file);
+    return ch == '1';
+}
+
+static int xferinfo_abort_callback(
+    void *clientp,
+    curl_off_t dltotal,
+    curl_off_t dlnow,
+    curl_off_t ultotal,
+    curl_off_t ulnow
+) {
+    (void)dltotal;
+    (void)dlnow;
+    (void)ultotal;
+    (void)ulnow;
+    return abort_flag_is_set((const char *)clientp) ? 1 : 0;
+}
+
 static lean_obj_res io_error(const char *message) {
     return lean_io_result_mk_error(
         lean_mk_io_error_other_error(1, lean_mk_string(message))
@@ -997,6 +1026,7 @@ static lean_obj_res lean_agent_http_request_core(
     lean_obj_arg lean_no_proxy,
     lean_obj_arg lean_user_agent,
     lean_obj_arg lean_extra_headers,
+    lean_obj_arg lean_abort_flag_path,
     uint32_t timeout_seconds,
     uint32_t connect_timeout_seconds,
     uint64_t max_response_bytes,
@@ -1009,6 +1039,7 @@ static lean_obj_res lean_agent_http_request_core(
     const char *no_proxy = lean_string_cstr(lean_no_proxy);
     const char *user_agent = lean_string_cstr(lean_user_agent);
     const char *extra_headers = lean_string_cstr(lean_extra_headers);
+    const char *abort_flag_path = lean_string_cstr(lean_abort_flag_path);
     lean_obj_res result = NULL;
 
     if (max_response_bytes == 0) {
@@ -1111,10 +1142,22 @@ static lean_obj_res lean_agent_http_request_core(
     }
     /* Do not pin the TLS version; libcurl should negotiate with the server/proxy. */
     SETOPT_OR_GOTO(CURLOPT_NOSIGNAL, 1L);
+    if (abort_flag_path[0] != 0) {
+        /* Abort before starting if Lean already flipped the flag. */
+        if (abort_flag_is_set(abort_flag_path)) {
+            result = io_error("Request was aborted");
+            goto cleanup;
+        }
+        SETOPT_OR_GOTO(CURLOPT_NOPROGRESS, 0L);
+        SETOPT_OR_GOTO(CURLOPT_XFERINFOFUNCTION, xferinfo_abort_callback);
+        SETOPT_OR_GOTO(CURLOPT_XFERINFODATA, (void *)abort_flag_path);
+    }
 
     CURLcode code = curl_easy_perform(curl);
     if (code != CURLE_OK) {
-        if (response.too_large) {
+        if (code == CURLE_ABORTED_BY_CALLBACK || abort_flag_is_set(abort_flag_path)) {
+            result = io_error("Request was aborted");
+        } else if (response.too_large) {
             result = io_errorf_u64("HTTP response exceeded maxResponseBytes", max_response_bytes);
         } else if (response_headers.too_large) {
             result = io_errorf_u64("HTTP response headers exceeded maxHeaderBytes", MAX_RESPONSE_HEADER_BYTES);
@@ -1194,6 +1237,7 @@ lean_obj_res lean_agent_http_request(
     lean_obj_arg lean_no_proxy,
     lean_obj_arg lean_user_agent,
     lean_obj_arg lean_extra_headers,
+    lean_obj_arg lean_abort_flag_path,
     uint32_t timeout_seconds,
     uint32_t connect_timeout_seconds,
     uint64_t max_response_bytes
@@ -1206,6 +1250,7 @@ lean_obj_res lean_agent_http_request(
         lean_no_proxy,
         lean_user_agent,
         lean_extra_headers,
+        lean_abort_flag_path,
         timeout_seconds,
         connect_timeout_seconds,
         max_response_bytes,
@@ -1221,6 +1266,7 @@ lean_obj_res lean_agent_http_request_aws_eventstream_json(
     lean_obj_arg lean_no_proxy,
     lean_obj_arg lean_user_agent,
     lean_obj_arg lean_extra_headers,
+    lean_obj_arg lean_abort_flag_path,
     uint32_t timeout_seconds,
     uint32_t connect_timeout_seconds,
     uint64_t max_response_bytes
@@ -1233,6 +1279,7 @@ lean_obj_res lean_agent_http_request_aws_eventstream_json(
         lean_no_proxy,
         lean_user_agent,
         lean_extra_headers,
+        lean_abort_flag_path,
         timeout_seconds,
         connect_timeout_seconds,
         max_response_bytes,
@@ -1265,6 +1312,7 @@ lean_obj_res lean_agent_http_post_json(
     authorization[auth_prefix_len + key_len] = 0;
     lean_object *lean_authorization = lean_mk_string(authorization);
     free(authorization);
+    lean_object *lean_abort_flag_path = lean_mk_string("");
     lean_obj_res result = lean_agent_http_request(
         method,
         lean_url,
@@ -1273,11 +1321,468 @@ lean_obj_res lean_agent_http_post_json(
         lean_no_proxy,
         lean_user_agent,
         lean_extra_headers,
+        lean_abort_flag_path,
         timeout_seconds,
         connect_timeout_seconds,
         max_response_bytes
     );
     lean_dec(method);
     lean_dec(lean_authorization);
+    lean_dec(lean_abort_flag_path);
     return result;
+}
+
+/* --- Progressive request session (Lean-driven pump) --- */
+
+struct progressive_session {
+    CURL *easy;
+    CURLM *multi;
+    struct response_buffer response;
+    struct response_buffer headers;
+    struct response_buffer aws_json;      /* full normalized JSON array body */
+    struct response_buffer aws_pending;   /* newly completed NDJSON events this pump */
+    struct curl_slist *headers_list;
+    char *auth_header;
+    char error_buffer[CURL_ERROR_SIZE];
+    char *abort_flag_path;
+    size_t last_emitted;
+    size_t aws_frame_offset;
+    int aws_mode;
+    int aws_first_item;
+    int aws_ready_done; /* network finished; next emission may be final D */
+    int done;
+    int failed;
+    long status_code;
+};
+
+static void progressive_session_free(struct progressive_session *s) {
+    if (s == NULL) return;
+    if (s->multi != NULL && s->easy != NULL) {
+        curl_multi_remove_handle(s->multi, s->easy);
+    }
+    if (s->easy != NULL) curl_easy_cleanup(s->easy);
+    if (s->multi != NULL) curl_multi_cleanup(s->multi);
+    curl_slist_free_all(s->headers_list);
+    free(s->auth_header);
+    free(s->abort_flag_path);
+    free(s->response.data);
+    free(s->headers.data);
+    free(s->aws_json.data);
+    free(s->aws_pending.data);
+    free(s);
+}
+
+/*
+ * Consume complete AWS event-stream frames from [aws_frame_offset, response.size).
+ * Appends JSON objects to aws_json (array) and NDJSON lines to aws_pending.
+ * Returns 1 on success (including "need more bytes"), 0 on hard error.
+ */
+static int progressive_aws_consume_frames(struct progressive_session *s, const char **error_message) {
+    const unsigned char *bytes = (const unsigned char *)s->response.data;
+    size_t size = s->response.size;
+    size_t offset = s->aws_frame_offset;
+
+    while (offset < size) {
+        if (size - offset < 16) {
+            /* incomplete prelude — wait for more bytes */
+            break;
+        }
+        uint32_t total_len = read_be_u32(bytes + offset);
+        uint32_t headers_len = read_be_u32(bytes + offset + 4);
+        if (total_len < 16) {
+            *error_message = "AWS event-stream frame total length was too small";
+            return 0;
+        }
+        if ((uint64_t)total_len > (uint64_t)(size - offset)) {
+            /* incomplete frame — wait */
+            break;
+        }
+        if (headers_len > total_len - 16) {
+            *error_message = "AWS event-stream frame header length was invalid";
+            return 0;
+        }
+
+        const unsigned char *frame = bytes + offset;
+        const unsigned char *header_bytes = frame + 12;
+        const unsigned char *payload_bytes = header_bytes + headers_len;
+        size_t payload_len = (size_t)total_len - (size_t)headers_len - 16;
+
+        struct aws_eventstream_headers headers = { 0 };
+        if (!parse_aws_eventstream_headers(header_bytes, headers_len, &headers, error_message)) {
+            free_aws_eventstream_headers(&headers);
+            return 0;
+        }
+
+        const char *event_key = headers.event_type;
+        if (event_key == NULL || event_key[0] == 0) {
+            event_key = headers.exception_type;
+        }
+        if (event_key == NULL || event_key[0] == 0) {
+            event_key = headers.message_type;
+        }
+        if (event_key == NULL || event_key[0] == 0) {
+            event_key = "payload";
+        }
+
+        /* Append to full JSON array */
+        if (s->aws_first_item) {
+            if (!append_response_bytes(&s->aws_json, "[", 1)) {
+                free_aws_eventstream_headers(&headers);
+                *error_message = "failed to allocate AWS progressive JSON array";
+                return 0;
+            }
+            s->aws_first_item = 0;
+        } else {
+            if (!append_response_bytes(&s->aws_json, ",", 1)) {
+                free_aws_eventstream_headers(&headers);
+                *error_message = "failed to allocate AWS progressive JSON separator";
+                return 0;
+            }
+        }
+        if (
+            !append_response_bytes(&s->aws_json, "{", 1) ||
+            !append_json_escaped_bytes(&s->aws_json, (const unsigned char *)event_key, strlen(event_key)) ||
+            !append_response_bytes(&s->aws_json, ":", 1) ||
+            !append_json_payload_value(&s->aws_json, payload_bytes, payload_len) ||
+            !append_response_bytes(&s->aws_json, "}", 1)
+        ) {
+            free_aws_eventstream_headers(&headers);
+            *error_message = "failed to allocate AWS progressive JSON item";
+            return 0;
+        }
+
+        /* Pending NDJSON line for Lean mid-transfer apply */
+        if (
+            !append_response_bytes(&s->aws_pending, "{", 1) ||
+            !append_json_escaped_bytes(&s->aws_pending, (const unsigned char *)event_key, strlen(event_key)) ||
+            !append_response_bytes(&s->aws_pending, ":", 1) ||
+            !append_json_payload_value(&s->aws_pending, payload_bytes, payload_len) ||
+            !append_response_bytes(&s->aws_pending, "}\n", 2)
+        ) {
+            free_aws_eventstream_headers(&headers);
+            *error_message = "failed to allocate AWS progressive NDJSON item";
+            return 0;
+        }
+
+        free_aws_eventstream_headers(&headers);
+        offset += total_len;
+    }
+    s->aws_frame_offset = offset;
+    return 1;
+}
+
+/*
+ * Start a progressive HTTP request. Returns an opaque session pointer as USize in Lean.
+ * abort_flag_path may be empty.
+ * aws_event_stream_mode: 0 = raw body chunks, 1 = decode AWS event-stream frames to NDJSON events.
+ */
+lean_obj_res lean_agent_http_progressive_start(
+    lean_obj_arg lean_method,
+    lean_obj_arg lean_url,
+    lean_obj_arg lean_authorization,
+    lean_obj_arg lean_body,
+    lean_obj_arg lean_no_proxy,
+    lean_obj_arg lean_user_agent,
+    lean_obj_arg lean_extra_headers,
+    lean_obj_arg lean_abort_flag_path,
+    uint32_t timeout_seconds,
+    uint32_t connect_timeout_seconds,
+    uint64_t max_response_bytes,
+    uint8_t aws_event_stream_mode
+) {
+    const char *method = lean_string_cstr(lean_method);
+    const char *url = lean_string_cstr(lean_url);
+    const char *authorization = lean_string_cstr(lean_authorization);
+    const char *body = lean_string_cstr(lean_body);
+    const char *no_proxy = lean_string_cstr(lean_no_proxy);
+    const char *user_agent = lean_string_cstr(lean_user_agent);
+    const char *extra_headers = lean_string_cstr(lean_extra_headers);
+    const char *abort_flag_path = lean_string_cstr(lean_abort_flag_path);
+
+    if (max_response_bytes == 0) {
+        return io_error("maxResponseBytes must be greater than zero");
+    }
+
+    CURLcode global_code = ensure_curl_global_init();
+    if (global_code != CURLE_OK) {
+        return io_errorf("curl_global_init failed", curl_easy_strerror(global_code));
+    }
+
+    struct progressive_session *s = calloc(1, sizeof(*s));
+    if (s == NULL) return io_error("failed to allocate progressive session");
+    s->error_buffer[0] = 0;
+    s->aws_mode = aws_event_stream_mode ? 1 : 0;
+    s->aws_first_item = 1;
+    s->response.limit = (size_t)max_response_bytes;
+    s->headers.limit = MAX_RESPONSE_HEADER_BYTES;
+    s->aws_json.limit =
+        max_response_bytes > (SIZE_MAX - 4096) / 6
+            ? SIZE_MAX
+            : (size_t)max_response_bytes * 6 + 4096;
+    s->aws_pending.limit = s->aws_json.limit;
+    s->response.data = malloc(1);
+    s->headers.data = malloc(1);
+    s->aws_json.data = malloc(1);
+    s->aws_pending.data = malloc(1);
+    if (s->response.data == NULL || s->headers.data == NULL ||
+        s->aws_json.data == NULL || s->aws_pending.data == NULL) {
+        progressive_session_free(s);
+        return io_error("failed to allocate progressive buffers");
+    }
+    s->response.data[0] = 0;
+    s->headers.data[0] = 0;
+    s->aws_json.data[0] = 0;
+    s->aws_pending.data[0] = 0;
+
+    if (abort_flag_path[0] != 0) {
+        s->abort_flag_path = strdup(abort_flag_path);
+        if (s->abort_flag_path == NULL) {
+            progressive_session_free(s);
+            return io_error("failed to allocate abort flag path");
+        }
+    }
+
+    s->easy = curl_easy_init();
+    s->multi = curl_multi_init();
+    if (s->easy == NULL || s->multi == NULL) {
+        progressive_session_free(s);
+        return io_error("curl progressive init failed");
+    }
+
+    size_t body_len = strlen(body);
+    if (!header_block_has(extra_headers, "Authorization") && authorization[0] != 0) {
+        size_t auth_prefix_len = strlen("Authorization: ");
+        size_t value_len = strlen(authorization);
+        s->auth_header = malloc(auth_prefix_len + value_len + 1);
+        if (s->auth_header == NULL) {
+            progressive_session_free(s);
+            return io_error("failed to allocate authorization header");
+        }
+        memcpy(s->auth_header, "Authorization: ", auth_prefix_len);
+        memcpy(s->auth_header + auth_prefix_len, authorization, value_len);
+        s->auth_header[auth_prefix_len + value_len] = 0;
+        if (!append_header_copy(&s->headers_list, s->auth_header, strlen(s->auth_header))) {
+            progressive_session_free(s);
+            return io_error("failed to allocate authorization header");
+        }
+    }
+    if (!append_header_block(&s->headers_list, extra_headers)) {
+        progressive_session_free(s);
+        return io_error("failed to allocate custom headers");
+    }
+
+    #define PSET(opt, val) do { \
+        CURLcode _c = curl_easy_setopt(s->easy, opt, val); \
+        if (_c != CURLE_OK) { progressive_session_free(s); return io_errorf("curl_easy_setopt failed", curl_easy_strerror(_c)); } \
+    } while (0)
+
+    PSET(CURLOPT_ERRORBUFFER, s->error_buffer);
+    PSET(CURLOPT_URL, url);
+    PSET(CURLOPT_HTTPHEADER, s->headers_list);
+    PSET(CURLOPT_CUSTOMREQUEST, method);
+    if (body_len > 0 || strcmp(method, "POST") == 0 || strcmp(method, "PUT") == 0 || strcmp(method, "PATCH") == 0) {
+        PSET(CURLOPT_POSTFIELDS, body);
+        PSET(CURLOPT_POSTFIELDSIZE, (long)body_len);
+    }
+    PSET(CURLOPT_WRITEFUNCTION, write_response);
+    PSET(CURLOPT_WRITEDATA, (void *)&s->response);
+    PSET(CURLOPT_HEADERFUNCTION, write_header);
+    PSET(CURLOPT_HEADERDATA, (void *)&s->headers);
+    PSET(CURLOPT_TIMEOUT, (long)timeout_seconds);
+    PSET(CURLOPT_CONNECTTIMEOUT, (long)connect_timeout_seconds);
+    PSET(CURLOPT_FOLLOWLOCATION, 0L);
+    PSET(CURLOPT_USERAGENT, user_agent);
+    PSET(CURLOPT_ACCEPT_ENCODING, "");
+    PSET(CURLOPT_NOSIGNAL, 1L);
+    if (no_proxy[0] != 0) {
+        PSET(CURLOPT_NOPROXY, no_proxy);
+    }
+    if (s->abort_flag_path != NULL) {
+        PSET(CURLOPT_NOPROGRESS, 0L);
+        PSET(CURLOPT_XFERINFOFUNCTION, xferinfo_abort_callback);
+        PSET(CURLOPT_XFERINFODATA, (void *)s->abort_flag_path);
+    }
+    #undef PSET
+
+    CURLMcode mc = curl_multi_add_handle(s->multi, s->easy);
+    if (mc != CURLM_OK) {
+        progressive_session_free(s);
+        return io_errorf("curl_multi_add_handle failed", curl_multi_strerror(mc));
+    }
+
+    return lean_io_result_mk_ok(lean_box_usize((size_t)s));
+}
+
+/*
+ * Pump the progressive session once.
+ * Returns a Lean string:
+ *   "P\n" + payload
+ *     - normal mode: new raw body bytes (may be empty)
+ *     - aws mode: NDJSON lines for newly completed event-stream frames (UTF-8 safe)
+ *   "D\n" + status + "\n" + header_len + "\n" + headers + body  done (full envelope tail)
+ *     - aws mode body is the normalized JSON array of all events
+ *   "E\n" + message           error
+ */
+lean_obj_res lean_agent_http_progressive_pump(size_t session_ptr) {
+    struct progressive_session *s = (struct progressive_session *)session_ptr;
+    if (s == NULL) return io_error("null progressive session");
+    if (s->failed) return io_error(s->error_buffer[0] ? s->error_buffer : "progressive session failed");
+    if (s->done) {
+        return io_error("progressive session already finished");
+    }
+    if (s->abort_flag_path != NULL && abort_flag_is_set(s->abort_flag_path)) {
+        s->failed = 1;
+        return io_error("Request was aborted");
+    }
+
+    int still_running = 0;
+    CURLMcode mc = curl_multi_perform(s->multi, &still_running);
+    if (mc != CURLM_OK) {
+        s->failed = 1;
+        return io_errorf("curl_multi_perform failed", curl_multi_strerror(mc));
+    }
+
+    if (s->aws_mode) {
+        s->aws_pending.size = 0;
+        if (s->aws_pending.data != NULL) s->aws_pending.data[0] = 0;
+        const char *aws_err = NULL;
+        if (!progressive_aws_consume_frames(s, &aws_err)) {
+            s->failed = 1;
+            return io_error(aws_err == NULL ? "AWS event-stream progressive decode failed" : aws_err);
+        }
+    }
+
+    /* Emit any new body bytes (or AWS NDJSON events) since last pump. */
+    size_t new_len = 0;
+    const char *emit_ptr = NULL;
+    if (s->aws_mode) {
+        new_len = s->aws_pending.size;
+        emit_ptr = s->aws_pending.data;
+        s->last_emitted = s->response.size;
+    } else {
+        size_t available = s->response.size;
+        size_t emit_from = s->last_emitted;
+        if (emit_from > available) emit_from = available;
+        new_len = available - emit_from;
+        emit_ptr = s->response.data + emit_from;
+        s->last_emitted = available;
+    }
+
+    if (still_running) {
+        /* Wait briefly for more socket activity without blocking long. */
+        int numfds = 0;
+        curl_multi_wait(s->multi, NULL, 0, 50, &numfds);
+        char *out = malloc(2 + new_len + 1);
+        if (out == NULL) return io_error("failed to allocate progressive chunk");
+        out[0] = 'P';
+        out[1] = '\n';
+        if (new_len > 0 && emit_ptr != NULL) memcpy(out + 2, emit_ptr, new_len);
+        out[2 + new_len] = 0;
+        lean_obj_res ok = lean_io_result_mk_ok(lean_mk_string(out));
+        free(out);
+        return ok;
+    }
+
+    /* Transfer finished — drain messages for errors (once). */
+    if (!s->aws_ready_done) {
+        int msgs_left = 0;
+        CURLMsg *msg;
+        while ((msg = curl_multi_info_read(s->multi, &msgs_left)) != NULL) {
+            if (msg->msg == CURLMSG_DONE) {
+                if (msg->data.result == CURLE_ABORTED_BY_CALLBACK ||
+                    (s->abort_flag_path != NULL && abort_flag_is_set(s->abort_flag_path))) {
+                    s->failed = 1;
+                    return io_error("Request was aborted");
+                }
+                if (msg->data.result != CURLE_OK) {
+                    s->failed = 1;
+                    const char *detail = s->error_buffer[0] == 0 ? curl_easy_strerror(msg->data.result) : s->error_buffer;
+                    return io_errorf("HTTP request failed", detail);
+                }
+            }
+        }
+        long status_code = 0;
+        curl_easy_getinfo(s->easy, CURLINFO_RESPONSE_CODE, &status_code);
+        s->status_code = status_code;
+
+        if (s->aws_mode) {
+            /* Final frame drain already done above; validate complete consumption. */
+            if (s->aws_frame_offset != s->response.size) {
+                s->failed = 1;
+                return io_error("AWS event-stream frame was truncated");
+            }
+            if (s->aws_first_item) {
+                if (!append_response_bytes(&s->aws_json, "[]", 2)) {
+                    s->failed = 1;
+                    return io_error("failed to allocate empty AWS JSON array");
+                }
+            } else if (!append_response_bytes(&s->aws_json, "]", 1)) {
+                s->failed = 1;
+                return io_error("failed to finalize AWS progressive JSON array");
+            }
+            s->aws_ready_done = 1;
+            /* Deliver any final NDJSON events before the D envelope. */
+            if (s->aws_pending.size > 0) {
+                char *out = malloc(2 + s->aws_pending.size + 1);
+                if (out == NULL) return io_error("failed to allocate progressive chunk");
+                out[0] = 'P';
+                out[1] = '\n';
+                memcpy(out + 2, s->aws_pending.data, s->aws_pending.size);
+                out[2 + s->aws_pending.size] = 0;
+                lean_obj_res ok = lean_io_result_mk_ok(lean_mk_string(out));
+                free(out);
+                return ok;
+            }
+        } else {
+            s->aws_ready_done = 1;
+        }
+    }
+
+    s->done = 1;
+
+    /* Build full envelope for finish (same format as non-progressive path). */
+    const char *magic = "LAHTTP2\n";
+    size_t magic_len = strlen(magic);
+    char status_line[32];
+    int status_len = snprintf(status_line, sizeof(status_line), "%ld\n", s->status_code);
+    if (status_len < 0 || (size_t)status_len >= sizeof(status_line)) {
+        s->failed = 1;
+        return io_error("failed to format HTTP status");
+    }
+    char header_len_line[32];
+    int header_len_len = snprintf(header_len_line, sizeof(header_len_line), "%zu\n", s->headers.size);
+    if (header_len_len < 0 || (size_t)header_len_len >= sizeof(header_len_line)) {
+        s->failed = 1;
+        return io_error("failed to format HTTP header length");
+    }
+    const char *body_ptr = s->aws_mode ? s->aws_json.data : s->response.data;
+    size_t body_size = s->aws_mode ? s->aws_json.size : s->response.size;
+    size_t envelope_size =
+        magic_len + (size_t)status_len + (size_t)header_len_len + s->headers.size + body_size;
+    char *out = malloc(2 + envelope_size + 1);
+    if (out == NULL) {
+        s->failed = 1;
+        return io_error("failed to allocate progressive done payload");
+    }
+    out[0] = 'D';
+    out[1] = '\n';
+    size_t next = 2;
+    memcpy(out + next, magic, magic_len); next += magic_len;
+    memcpy(out + next, status_line, (size_t)status_len); next += (size_t)status_len;
+    memcpy(out + next, header_len_line, (size_t)header_len_len); next += (size_t)header_len_len;
+    memcpy(out + next, s->headers.data, s->headers.size); next += s->headers.size;
+    if (body_size > 0 && body_ptr != NULL) {
+        memcpy(out + next, body_ptr, body_size);
+        next += body_size;
+    }
+    out[next] = 0;
+    lean_obj_res ok = lean_io_result_mk_ok(lean_mk_string(out));
+    free(out);
+    return ok;
+}
+
+lean_obj_res lean_agent_http_progressive_close(size_t session_ptr) {
+    struct progressive_session *s = (struct progressive_session *)session_ptr;
+    progressive_session_free(s);
+    return lean_io_result_mk_ok(lean_box(0));
 }

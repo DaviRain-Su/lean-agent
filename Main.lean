@@ -1,4 +1,5 @@
 import LeanAgent
+import LeanAgent.AI.Cli
 
 open LeanAgent
 
@@ -53,6 +54,10 @@ def usage : String :=
     , "  --api-key-env NAME      Environment variable containing the API key. Defaults to DEEPSEEK_API_KEY first, then OPENAI_API_KEY."
     , "  --max-turns N           Maximum model/tool turns. Defaults to 8."
     , "  -h, --help              Show this help."
+    , ""
+    , "AI package CLI (Pi packages/ai/src/cli.ts):"
+    , "  lean-agent ai list      List OAuth providers"
+    , "  lean-agent ai help      Show AI CLI help"
     ]
 
 def parseArgs (args : List String) (opts : CliOptions := {}) : Except String CliOptions :=
@@ -164,7 +169,8 @@ def runtimeFromOptions (opts : CliOptions) : IO (Except String Runtime) := do
   | .error err => pure (.error err)
   | .ok selection =>
     let extensions ← LeanAgent.Project.loadExtensions cwd
-    let system := LeanAgent.Project.applySystemAppendix defaultSystemPrompt extensions
+    let system ←
+      LeanAgent.Project.buildSystemPrompt defaultSystemPrompt extensions cwd
     let modelInfo := selectedModelInfo selection
     let tools := LeanAgent.CodingTools.defaultAgentTools cwd
     let options : LeanAgent.Agent.AgentOptions :=
@@ -414,14 +420,22 @@ def run (opts : CliOptions) : IO UInt32 := do
         runOneShot opts runtime
 
 def main (args : List String) : IO UInt32 := do
-  match parseArgs args with
-  | .ok opts =>
+  match args with
+  | "ai" :: rest =>
       try
-        run opts
+        LeanAgent.AI.Cli.runAi rest
       catch err =>
         IO.eprintln err.toString
         pure 1
-  | .error err =>
-      IO.eprintln err
-      IO.eprintln usage
-      pure 2
+  | _ =>
+      match parseArgs args with
+      | .ok opts =>
+          try
+            run opts
+          catch err =>
+            IO.eprintln err.toString
+            pure 1
+      | .error err =>
+          IO.eprintln err
+          IO.eprintln usage
+          pure 2

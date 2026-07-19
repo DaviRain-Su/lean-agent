@@ -38,10 +38,20 @@ def overflowPatterns : List String :=
   , "413 (no body)"
   ]
 
-def nonOverflowPatterns : List String :=
+/--
+Pi `NON_OVERFLOW_PATTERNS` start-anchored Bedrock human prefixes
+(`/^(Throttling error|Service unavailable):/i`). Matched after lowercasing
+and optional separator stripping on the *prefix only* — not via global
+compact substring match (which false-positives on `ServiceUnavailableError`
+inside LiteLLM wrappers).
+-/
+def nonOverflowPrefixPatterns : List String :=
   [ "throttling error:"
   , "service unavailable:"
-  , "rate limit"
+  ]
+
+def nonOverflowBodyPatterns : List String :=
+  [ "rate limit"
   , "too many requests"
   ]
 
@@ -58,13 +68,35 @@ def containsAnyCompact (message : String) (patterns : List String) : Bool :=
   let compactMessage := compactOverflowText message
   patterns.any fun pattern => compactMessage.contains (compactOverflowText pattern)
 
+/--
+True when the message starts with a Bedrock-style non-overflow prefix.
+Allows separators (`_`, space) between words before the first colon, e.g.
+`Throttling_error:` matches Pi's `/^(Throttling error|Service unavailable):/i`
+after compacting only the leading `word…:` token — not the whole body.
+-/
+def startsWithNonOverflowPrefix (message : String) : Bool :=
+  let lower := message.toLower
+  -- Compact only the leading label up to the first ':' (colon not included in compact form).
+  let labelCompact :=
+    match lower.splitOn ":" with
+    | [] => ""
+    | head :: _ =>
+        -- Require a colon-delimited label (Bedrock-style "Prefix: body").
+        if lower.contains ":" then compactOverflowText head else ""
+  nonOverflowPrefixPatterns.any fun pattern =>
+    let patternCompact := compactOverflowText pattern
+    (!labelCompact.isEmpty && labelCompact == patternCompact) || lower.startsWith pattern
+
 def looksLikeInputCountOverflow (message : String) : Bool :=
   let lower := message.toLower
   lower.contains "input token count" && lower.contains "exceeds the maximum"
 
+def isNonOverflowErrorMessage (message : String) : Bool :=
+  startsWithNonOverflowPrefix message ||
+    containsAny message nonOverflowBodyPatterns
+
 def isOverflowErrorMessage (message : String) : Bool :=
-  !(containsAny message nonOverflowPatterns ||
-      containsAnyCompact message nonOverflowPatterns) &&
+  !isNonOverflowErrorMessage message &&
     (containsAny message overflowPatterns ||
       containsAnyCompact message overflowPatterns ||
       looksLikeInputCountOverflow message)

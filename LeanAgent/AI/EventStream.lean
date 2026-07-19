@@ -175,4 +175,75 @@ def streamLegacyProvider
 def errorStream (message : AssistantMessage) : AssistantMessageEventStream :=
   { events := #[.error .error message], finalResult := message }
 
+/--
+Pi `EventStream` / `AssistantMessageEventStream` pushable builder.
+
+Lean does not have JS async iterators. This IO-ref backed stream supports the
+shipped offline contract: `push`, `end`, `result`, and draining queued events.
+True concurrent waiter wake-up under live transport remains partial on HTTP.
+-/
+structure MutableAssistantMessageEventStream where
+  eventsRef : IO.Ref (Array AssistantMessageEvent)
+  doneRef : IO.Ref Bool
+  finalRef : IO.Ref (Option AssistantMessage)
+
+/-- Pi `createAssistantMessageEventStream`. -/
+def createAssistantMessageEventStream : IO MutableAssistantMessageEventStream := do
+  pure
+    { eventsRef := ← IO.mkRef #[]
+      doneRef := ← IO.mkRef false
+      finalRef := ← IO.mkRef none
+    }
+
+def MutableAssistantMessageEventStream.push
+    (stream : MutableAssistantMessageEventStream)
+    (event : AssistantMessageEvent) : IO Unit := do
+  if ← stream.doneRef.get then
+    pure ()
+  else
+    stream.eventsRef.modify (·.push event)
+    match event.final? with
+    | some message =>
+        stream.doneRef.set true
+        stream.finalRef.set (some message)
+    | none => pure ()
+
+def MutableAssistantMessageEventStream.end
+    (stream : MutableAssistantMessageEventStream)
+    (result? : Option AssistantMessage := none) : IO Unit := do
+  stream.doneRef.set true
+  match result? with
+  | some message => stream.finalRef.set (some message)
+  | none => pure ()
+
+def MutableAssistantMessageEventStream.result
+    (stream : MutableAssistantMessageEventStream) : IO AssistantMessage := do
+  match ← stream.finalRef.get with
+  | some message => pure message
+  | none =>
+      let events ← stream.eventsRef.get
+      match events.back? with
+      | some event =>
+          match event.final? with
+          | some message => pure message
+          | none =>
+              throw (IO.userError "AssistantMessageEventStream.result: stream has no final result")
+      | none =>
+          throw (IO.userError "AssistantMessageEventStream.result: stream has no events")
+
+def MutableAssistantMessageEventStream.events
+    (stream : MutableAssistantMessageEventStream) : IO (Array AssistantMessageEvent) :=
+  stream.eventsRef.get
+
+def MutableAssistantMessageEventStream.isDone
+    (stream : MutableAssistantMessageEventStream) : IO Bool :=
+  stream.doneRef.get
+
+/-- Snapshot into the immutable buffered stream container used by protocol parsers. -/
+def MutableAssistantMessageEventStream.toBuffered
+    (stream : MutableAssistantMessageEventStream) : IO AssistantMessageEventStream := do
+  let events ← stream.events
+  let finalResult ← stream.result
+  pure { events := events, finalResult := finalResult }
+
 end LeanAgent.AI

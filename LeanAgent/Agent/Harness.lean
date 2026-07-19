@@ -1,5 +1,6 @@
 import LeanAgent.Agent.Harness.Uuid
 import LeanAgent.Agent.Harness.Storage
+import LeanAgent.Agent.Harness.Session
 import LeanAgent.Agent.Harness.Compaction
 import LeanAgent.Agent.Harness.SystemPrompt
 import LeanAgent.Agent.Harness.Templates

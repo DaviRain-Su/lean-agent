@@ -273,24 +273,46 @@ def modelRef
     baseUrl := some resolved.baseUrl
   }
 
+def httpJsonPostConfig
+    (config : AzureOpenAIResponsesConfig)
+    (resolved : AzureResolvedConfig)
+    (options : AzureOpenAIResponsesOptions := {}) : LeanAgent.Http.JsonPostConfig :=
+  { url := azureResponsesUrl resolved.baseUrl resolved.apiVersion
+    apiKey := ""
+    signal := options.signal
+    headers := requestHeaders config options
+    timeoutSeconds := config.timeoutSeconds
+    connectTimeoutSeconds := config.connectTimeoutSeconds
+    maxResponseBytes := config.maxResponseBytes
+    noProxy := config.noProxy
+    userAgent := config.userAgent
+  }
+
 def runHttpJson
     (config : AzureOpenAIResponsesConfig)
     (resolved : AzureResolvedConfig)
     (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
     (payload : Lean.Json)
     (options : AzureOpenAIResponsesOptions := {}) : IO String := do
-  let response ← LeanAgent.Http.postJsonResponse
-    { url := azureResponsesUrl resolved.baseUrl resolved.apiVersion
-      apiKey := ""
-      signal := options.signal
-      headers := requestHeaders config options
-      timeoutSeconds := config.timeoutSeconds
-      connectTimeoutSeconds := config.connectTimeoutSeconds
-      maxResponseBytes := config.maxResponseBytes
-      noProxy := config.noProxy
-      userAgent := config.userAgent
-    }
-    payload.compress
+  let response ←
+    LeanAgent.Http.postJsonResponse (httpJsonPostConfig config resolved options) payload.compress
+  LeanAgent.AI.Api.OpenAIResponses.callResponseHook options.toOpenAIResponsesOptions (modelRef resolved model) response
+  if response.status < 200 || response.status >= 300 then
+    throw (IO.userError (LeanAgent.AI.Util.Diagnostics.providerHttpErrorMessage response.status response.body))
+  pure response.body
+
+def runHttpJsonProgressive
+    (config : AzureOpenAIResponsesConfig)
+    (resolved : AzureResolvedConfig)
+    (model : LeanAgent.AI.Api.OpenAIResponsesShared.ResponsesModel)
+    (payload : Lean.Json)
+    (options : AzureOpenAIResponsesOptions := {})
+    (onChunk : String → IO Unit := fun _ => pure ()) : IO String := do
+  let response ←
+    LeanAgent.Http.postJsonResponseProgressive
+      (httpJsonPostConfig config resolved options)
+      payload.compress
+      onChunk
   LeanAgent.AI.Api.OpenAIResponses.callResponseHook options.toOpenAIResponsesOptions (modelRef resolved model) response
   if response.status < 200 || response.status >= 300 then
     throw (IO.userError (LeanAgent.AI.Util.Diagnostics.providerHttpErrorMessage response.status response.body))
@@ -334,14 +356,14 @@ def completeStreamWithOptions
     ref
     (requestToJsonWithOptions model context options deploymentName true)
   let retryPolicy := LeanAgent.AI.Util.Retry.Policy.fromOptions options.maxRetries options.maxRetryDelayMs
-  let raw ← LeanAgent.AI.Util.Retry.withRetries retryPolicy
-    (runHttpJson config resolved model payload options)
-    options.signal
   let timestamp ← IO.monoMsNow
-  match LeanAgent.AI.Api.OpenAIResponses.parseStreamingEventStream model.api model.provider model.id timestamp raw with
-  | .ok stream =>
-      pure (LeanAgent.AI.Api.OpenAIResponses.applyStreamUsageCost
-        model options.toOpenAIResponsesOptions stream)
-  | .error err => throw (IO.userError s!"failed to parse Azure OpenAI streaming response: {err}\n{raw}")
+  let stream ← LeanAgent.AI.Api.OpenAIResponses.streamRawProgressive
+    (fun onChunk =>
+      LeanAgent.AI.Util.Retry.withRetries retryPolicy
+        (runHttpJsonProgressive config resolved model payload options onChunk)
+        options.signal)
+    model.api model.provider model.id timestamp
+  pure (LeanAgent.AI.Api.OpenAIResponses.applyStreamUsageCost
+    model options.toOpenAIResponsesOptions stream)
 
 end LeanAgent.AI.Api.AzureOpenAIResponses
