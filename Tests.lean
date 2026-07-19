@@ -23,6 +23,7 @@ import LeanAgent.CodingAgent.Utils.Html
 import LeanAgent.CodingAgent.Utils.Ansi
 import LeanAgent.CodingAgent.Utils.OpenBrowser
 import LeanAgent.CodingAgent.Utils.ToolsManager
+import LeanAgent.CodingAgent.HttpDispatcher
 
 set_option maxRecDepth 4096
 
@@ -18130,6 +18131,70 @@ def testGetToolPathFallback : IO Unit := do
 end TestToolsManager
 
 -- ============================================================================
+-- HTTP dispatcher config (Pi `packages/coding-agent/src/core/http-dispatcher.ts`)
+-- ============================================================================
+
+namespace TestHttpDispatcher
+
+open LeanAgent.CodingAgent.HttpDispatcher
+
+def jstr (s : String) : Lean.Json := Lean.Json.str s
+
+def jnum (n : Nat) : Lean.Json := Lean.Json.num (Lean.JsonNumber.fromNat n)
+
+def testParseHttpIdleTimeoutMs : IO Unit := do
+  -- String forms.
+  assertTrue (parseHttpIdleTimeoutMsString "disabled" == some 0) "string disabled → 0"
+  assertTrue (parseHttpIdleTimeoutMsString "DISABLED" == some 0) "case-insensitive disabled"
+  assertTrue (parseHttpIdleTimeoutMsString "  300000  " == some 300000) "trimmed digits"
+  assertTrue (parseHttpIdleTimeoutMsString "" |>.isNone) "empty → none"
+  assertTrue (parseHttpIdleTimeoutMsString "abc" |>.isNone) "non-numeric → none"
+  -- Lean.Json forms.
+  assertTrue (parseHttpIdleTimeoutMs (jstr "60000") == some 60000) "json string digits"
+  assertTrue (parseHttpIdleTimeoutMs (jnum 120000) == some 120000) "json number"
+  assertTrue (parseHttpIdleTimeoutMs (jstr "disabled") == some 0) "json string disabled"
+  assertTrue (parseHttpIdleTimeoutMs (Lean.Json.arr #[]) |>.isNone) "json array → none"
+
+def testFormatHttpIdleTimeoutMs : IO Unit := do
+  assertTrue (formatHttpIdleTimeoutMs 0 == "disabled") "0 → disabled"
+  assertTrue (formatHttpIdleTimeoutMs 30000 == "30 sec") "30000 → 30 sec"
+  assertTrue (formatHttpIdleTimeoutMs 60000 == "1 min") "60000 → 1 min"
+  assertTrue (formatHttpIdleTimeoutMs 120000 == "2 min") "120000 → 2 min"
+  assertTrue (formatHttpIdleTimeoutMs 300000 == "5 min") "300000 → 5 min"
+  assertTrue (formatHttpIdleTimeoutMs 45000 == "45 sec") "45000 → 45 sec (custom)"
+
+def testApplyHttpProxySettings : IO Unit := do
+  -- Use an in-memory env map captured by a ref.
+  let envRef ← IO.mkRef ({} : Std.HashMap String String)
+  let getEnv (k : String) : IO (Option String) := do
+    let m ← envRef.get
+    pure (m.get? k)
+  let setEnv (k : String) (v : String) : IO Unit := envRef.modify (fun m => m.insert k v)
+  -- Empty/none proxy → no env changes.
+  applyHttpProxySettings none getEnv setEnv
+  assertTrue ((← getEnv "HTTP_PROXY").isNone) "none proxy → HTTP_PROXY unset"
+  -- Whitespace proxy → no env changes.
+  applyHttpProxySettings (some "   ") getEnv setEnv
+  assertTrue ((← getEnv "HTTP_PROXY").isNone) "whitespace proxy → HTTP_PROXY unset"
+  -- Real proxy sets both when unset.
+  applyHttpProxySettings (some "http://proxy.local:8080") getEnv setEnv
+  assertTrue ((← getEnv "HTTP_PROXY") == some "http://proxy.local:8080") "HTTP_PROXY set"
+  assertTrue ((← getEnv "HTTPS_PROXY") == some "http://proxy.local:8080") "HTTPS_PROXY set"
+  -- Already-set env is preserved (??= semantics).
+  envRef.modify (fun m => m.insert "HTTP_PROXY" "existing")
+  applyHttpProxySettings (some "http://new.proxy:9090") getEnv setEnv
+  assertTrue ((← getEnv "HTTP_PROXY") == some "existing") "existing HTTP_PROXY preserved"
+  assertTrue ((← getEnv "HTTPS_PROXY") == some "http://proxy.local:8080") "HTTPS_PROXY updated (was unset after first)"
+
+def testDefaultAndChoices : IO Unit := do
+  assertTrue (defaultHttpIdleTimeoutMs == 300000) "default 5 min"
+  assertTrue (httpIdleTimeoutChoices.size == 5) "5 selector choices"
+  assertTrue (httpIdleTimeoutChoices.any (fun c => c.label == "disabled" && c.timeoutMs == 0))
+    "disabled choice present"
+
+end TestHttpDispatcher
+
+-- ============================================================================
 -- Slash commands (Pi `packages/coding-agent/test/slash-commands.test.ts`)
 -- ============================================================================
 
@@ -18819,6 +18884,10 @@ def main : IO UInt32 := do
     TestToolsManager.testOfflineModeGate
     TestToolsManager.testCommandExists
     TestToolsManager.testGetToolPathFallback
+    TestHttpDispatcher.testParseHttpIdleTimeoutMs
+    TestHttpDispatcher.testFormatHttpIdleTimeoutMs
+    TestHttpDispatcher.testApplyHttpProxySettings
+    TestHttpDispatcher.testDefaultAndChoices
     IO.println "lean-agent tests passed"
     pure 0
   catch err =>

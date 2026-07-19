@@ -60,7 +60,7 @@ Full interactive TUI modes, RPC, extensions runtime still missing.
 | `src/core/extensions/types.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/core/extensions/wrapper.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/core/footer-data-provider.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
-| `src/core/http-dispatcher.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
+| `src/core/http-dispatcher.ts` | `LeanAgent.CodingAgent.HttpDispatcher` | partial | `defaultHttpIdleTimeoutMs`/`httpIdleTimeoutChoices` + `parseHttpIdleTimeoutMs` (string "disabled"/digits + `Lean.Json` str/num) + `formatHttpIdleTimeoutMs` (label or `<s> sec`) + `applyHttpProxySettings` (injectable getEnv/setEnv, `??=` semantics) (`TestHttpDispatcher.*`). Runtime `configureHttpDispatcher` (undici `EnvHttpProxyAgent` global install) deferred — Node-only; Lean uses its own `LeanAgent.Http` transport. |
 | `src/core/index.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/core/keybindings.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/core/messages.ts` | `LeanAgent.CodingAgent.Messages` | implemented | bash/compaction/branch prefixes + convertCustomToLlm subset (`testCodingAgentMessagesAndProviderNames`). |

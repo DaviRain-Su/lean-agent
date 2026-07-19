@@ -111,6 +111,7 @@ import LeanAgent.CodingAgent.Utils.Html
 import LeanAgent.CodingAgent.Utils.Ansi
 import LeanAgent.CodingAgent.Utils.OpenBrowser
 import LeanAgent.CodingAgent.Utils.ToolsManager
+import LeanAgent.CodingAgent.HttpDispatcher
 import LeanAgent.CodingAgent.ProviderAttribution
 import LeanAgent.CodingAgent.Compaction
 import LeanAgent.CodingAgent.AuthStorage
