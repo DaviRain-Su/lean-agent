@@ -6,6 +6,7 @@ import LeanAgent.CodingAgent.AuthGuidance
 import LeanAgent.CodingAgent.Exec
 import LeanAgent.CodingAgent.Telemetry
 import LeanAgent.CodingAgent.Timings
+import LeanAgent.CodingAgent.ModelResolver
 
 set_option maxRecDepth 2048
 
@@ -17018,6 +17019,248 @@ def testCodingAgentTimings : IO Unit := do
     #[{ label := "a", ms := 10 }, { label := "b", ms := -5 }]
   assertTrue (!(neg.contains "-5ms") && neg.contains "a: 10ms") "negative deltas filtered"
 
+-- ============================================================================
+-- Model resolver (Pi `packages/coding-agent/test/model-resolver.test.ts`)
+-- ============================================================================
+
+
+namespace TestModelResolver
+
+/-- Build an in-memory `ModelRegistry` for offline resolution tests. -/
+def mkRegistry (all : Array LeanAgent.Models.ModelInfo) (auth : LeanAgent.Models.ModelInfo → Bool) :
+    LeanAgent.CodingAgent.ModelResolver.ModelRegistry :=
+  { getAll := pure all
+    getAvailable := pure (all.filter auth)
+    find := fun p i => pure (all.find? (fun m => m.provider == p && m.id == i))
+    hasConfiguredAuth := fun m => pure (auth m) }
+
+-- Pi `mockModels` (same `api` for simplicity) + OpenRouter models with colons.
+def claude : LeanAgent.Models.ModelInfo :=
+  { id := "claude-sonnet-4-5", name := "Claude Sonnet 4.5", provider := "anthropic"
+    api := "anthropic-messages", baseUrl := "https://api.anthropic.com", reasoning := true }
+def gpt4o : LeanAgent.Models.ModelInfo :=
+  { id := "gpt-4o", name := "GPT-4o", provider := "openai"
+    api := "anthropic-messages", baseUrl := "https://api.openai.com" }
+def qwenExacto : LeanAgent.Models.ModelInfo :=
+  { id := "qwen/qwen3-coder:exacto", name := "Qwen3 Coder Exacto", provider := "openrouter"
+    api := "anthropic-messages", baseUrl := "https://openrouter.ai/api/v1", reasoning := true }
+def gpt4oExt : LeanAgent.Models.ModelInfo :=
+  { id := "openai/gpt-4o:extended", name := "GPT-4o Extended", provider := "openrouter"
+    api := "anthropic-messages", baseUrl := "https://openrouter.ai/api/v1" }
+
+def allModels : Array LeanAgent.Models.ModelInfo := #[claude, gpt4o, qwenExacto, gpt4oExt]
+
+def alwaysAuth (_ : LeanAgent.Models.ModelInfo) : Bool := true
+
+-- Option ModelInfo field extractors (avoid `|>.getD _ == _` parse pitfall)
+def rId (m? : Option LeanAgent.Models.ModelInfo) : String :=
+  m?.map (fun m => m.id) |>.getD ""
+def rProv (m? : Option LeanAgent.Models.ModelInfo) : String :=
+  m?.map (fun m => m.provider) |>.getD ""
+def rReason (m? : Option LeanAgent.Models.ModelInfo) : Bool :=
+  m?.map (fun m => m.reasoning) |>.getD false
+def rScopedId (sm? : Option LeanAgent.CodingAgent.ModelResolver.ScopedModel) : String :=
+  sm?.map (fun sm => sm.model.id) |>.getD ""
+
+def P (pattern : String) (models : Array LeanAgent.Models.ModelInfo) :
+    LeanAgent.CodingAgent.ModelResolver.ParsedModelResult :=
+  LeanAgent.CodingAgent.ModelResolver.parseModelPattern pattern models
+
+def testParseModelPattern : IO Unit := do
+  -- simple exact / partial / no-match
+  assertTrue (rId (P "claude-sonnet-4-5" allModels).model == "claude-sonnet-4-5") "exact match"
+  assertTrue ((P "claude-sonnet-4-5" allModels).thinkingLevel.isNone) "exact: no thinking"
+  assertTrue (rId (P "sonnet" allModels).model == "claude-sonnet-4-5") "partial match picks alias"
+  assertTrue ((P "nonexistent" allModels).model.isNone) "no match"
+  -- valid thinking levels
+  assertTrue (rId (P "sonnet:high" allModels).model == "claude-sonnet-4-5") "sonnet:high model"
+  assertTrue ((P "sonnet:high" allModels).thinkingLevel == LeanAgent.AI.ModelThinkingLevel.fromString? "high") "sonnet:high level"
+  for level in #["off", "minimal", "low", "medium", "high", "xhigh"] do
+    let r := P (s!"sonnet:{level}") allModels
+    assertTrue (rId r.model == "claude-sonnet-4-5") s!"{level} resolves sonnet"
+    assertTrue (r.thinkingLevel == LeanAgent.AI.ModelThinkingLevel.fromString? level) s!"{level} thinking level"
+  -- invalid thinking level → warning, undefined level
+  let r := P "sonnet:random" allModels
+  assertTrue (rId r.model == "claude-sonnet-4-5") "sonnet:random model"
+  assertTrue (r.thinkingLevel.isNone) "sonnet:random no level"
+  assertTrue ((r.warning.getD "").contains "Invalid thinking level") "sonnet:random warning"
+  assertTrue ((r.warning.getD "").contains "random") "sonnet:random warning mentions suffix"
+  -- OpenRouter models with colons in IDs
+  assertTrue (rId (P "qwen/qwen3-coder:exacto" allModels).model == "qwen/qwen3-coder:exacto") "colon id exact"
+  let canon := P "openrouter/qwen/qwen3-coder:exacto" allModels
+  assertTrue (rId canon.model == "qwen/qwen3-coder:exacto") "canonical provider/id"
+  assertTrue (rProv canon.model == "openrouter") "canonical provider"
+  let colHi := P "qwen/qwen3-coder:exacto:high" allModels
+  assertTrue (rId colHi.model == "qwen/qwen3-coder:exacto") "colon id + thinking"
+  assertTrue (colHi.thinkingLevel == LeanAgent.AI.ModelThinkingLevel.fromString? "high") "colon id + thinking level"
+  let canonHi := P "openrouter/qwen/qwen3-coder:exacto:high" allModels
+  assertTrue (rId canonHi.model == "qwen/qwen3-coder:exacto") "canonical + thinking"
+  assertTrue (canonHi.thinkingLevel == LeanAgent.AI.ModelThinkingLevel.fromString? "high") "canonical + thinking level"
+  assertTrue (rId (P "openai/gpt-4o:extended" allModels).model == "openai/gpt-4o:extended") "gpt-4o:extended exact"
+  -- invalid thinking with OpenRouter colon ids
+  let r2 := P "qwen/qwen3-coder:exacto:random" allModels
+  assertTrue (rId r2.model == "qwen/qwen3-coder:exacto") "colon + invalid suffix model"
+  assertTrue (r2.thinkingLevel.isNone) "colon + invalid suffix no level"
+  assertTrue ((r2.warning.getD "").contains "Invalid thinking level") "colon + invalid suffix warning"
+  let r3 := P "qwen/qwen3-coder:exacto:high:random" allModels
+  assertTrue (rId r3.model == "qwen/qwen3-coder:exacto") "double suffix model"
+  assertTrue ((r3.warning.getD "").contains "random") "double suffix warning"
+  -- edge: empty pattern matches via partial; trailing colon → invalid
+  assertTrue ((P "" allModels).model.isSome) "empty pattern matches via partial"
+  let trailing := P "sonnet:" allModels
+  assertTrue (rId trailing.model == "claude-sonnet-4-5") "trailing colon matches"
+  assertTrue ((trailing.warning.getD "").contains "Invalid thinking level") "trailing colon warning"
+
+def RC (provider? model? thinking? : Option String) (registry : LeanAgent.CodingAgent.ModelResolver.ModelRegistry) :
+    IO LeanAgent.CodingAgent.ModelResolver.ResolveCliModelResult :=
+  LeanAgent.CodingAgent.ModelResolver.resolveCliModel provider? model? thinking? registry
+
+def testResolveCliModel : IO Unit := do
+  let reg := mkRegistry allModels alwaysAuth
+  -- provider/model without --provider
+  let r ← RC none (some "openai/gpt-4o") none reg
+  assertTrue (r.error.isNone) "rc: openai/gpt-4o no error"
+  assertTrue (rProv r.model == "openai") "rc: provider inferred"
+  assertTrue (rId r.model == "gpt-4o") "rc: model id"
+  -- fuzzy within explicit provider
+  let r2 ← RC (some "openai") (some "4o") none reg
+  assertTrue (r2.error.isNone && rId r2.model == "gpt-4o") "rc: fuzzy within provider"
+  -- --model pattern:thinking
+  let r3 ← RC none (some "sonnet:high") none reg
+  assertTrue (r3.error.isNone && rId r3.model == "claude-sonnet-4-5") "rc: pattern:thinking model"
+  assertTrue (r3.thinkingLevel == LeanAgent.AI.ModelThinkingLevel.fromString? "high") "rc: pattern:thinking level"
+  -- prefer exact model id match over provider inference (OpenRouter-style)
+  let r4 ← RC none (some "openai/gpt-4o:extended") none reg
+  assertTrue (r4.error.isNone) "rc: openrouter exact no error"
+  assertTrue (rProv r4.model == "openrouter") "rc: openrouter provider"
+  assertTrue (rId r4.model == "openai/gpt-4o:extended") "rc: openrouter id"
+  -- explicit provider keeps invalid :suffix as part of id (strict)
+  let r5 ← RC (some "openai") (some "gpt-4o:extended") none reg
+  assertTrue (r5.error.isNone) "rc: strict invalid suffix no error"
+  assertTrue (rProv r5.model == "openai") "rc: strict provider"
+  assertTrue (rId r5.model == "gpt-4o:extended") "rc: strict keeps suffix in id"
+  -- custom model id without double prefixing
+  let r6 ← RC (some "openrouter") (some "openrouter/openai/ghost-model") none reg
+  assertTrue (r6.error.isNone) "rc: custom id no error"
+  assertTrue (rProv r6.model == "openrouter") "rc: custom id provider"
+  assertTrue (rId r6.model == "openai/ghost-model") "rc: custom id strips prefix"
+  -- no models → error
+  let emptyReg := mkRegistry #[] alwaysAuth
+  let r7 ← RC (some "openai") (some "gpt-4o") none emptyReg
+  assertTrue (r7.model.isNone && (r7.error.getD "").contains "No models available") "rc: no models error"
+  -- provider-prefixed fuzzy (openrouter/qwen)
+  let r8 ← RC none (some "openrouter/qwen") none reg
+  assertTrue (r8.error.isNone && rId r8.model == "qwen/qwen3-coder:exacto") "rc: provider-prefixed fuzzy"
+  -- unknown provider → error
+  let r9 ← RC (some "nope-provider") (some "x") none reg
+  assertTrue ((r9.error.getD "").contains "Unknown provider") "rc: unknown provider error"
+
+def testResolveCliModelGatewayPrecedence : IO Unit := do
+  -- prefer provider/model split over gateway model with matching id
+  let zai : LeanAgent.Models.ModelInfo :=
+    { id := "glm-5", name := "GLM-5", provider := "zai", api := "anthropic-messages", baseUrl := "x" }
+  let gateway : LeanAgent.Models.ModelInfo :=
+    { id := "zai/glm-5", name := "GLM-5", provider := "vercel-ai-gateway", api := "anthropic-messages", baseUrl := "x" }
+  let reg := mkRegistry (allModels.push zai |>.push gateway) alwaysAuth
+  let r ← RC none (some "zai/glm-5") none reg
+  assertTrue (r.error.isNone) "gateway: no error"
+  assertTrue (rProv r.model == "zai") "gateway: prefers zai provider"
+  assertTrue (rId r.model == "glm-5") "gateway: zai id"
+  -- prefer authenticated exact raw id over unauthenticated inferred provider
+  let commandcode : LeanAgent.Models.ModelInfo :=
+    { id := "xiaomi/mimo-v2.5-pro", name := "Xiaomi MiMo via Commandcode", provider := "commandcode"
+      api := "anthropic-messages", baseUrl := "x" }
+  let xiaomi : LeanAgent.Models.ModelInfo :=
+    { id := "mimo-v2.5-pro", name := "Xiaomi MiMo", provider := "xiaomi"
+      api := "anthropic-messages", baseUrl := "x" }
+  let reg2 := mkRegistry (allModels.push commandcode |>.push xiaomi) (fun m => m.provider == "commandcode")
+  let r2 ← RC none (some "xiaomi/mimo-v2.5-pro") none reg2
+  assertTrue (r2.error.isNone) "auth-raw: no error"
+  assertTrue (rProv r2.model == "commandcode") "auth-raw: prefers authenticated commandcode"
+  assertTrue (rId r2.model == "xiaomi/mimo-v2.5-pro") "auth-raw: raw id"
+
+def neuralwatt : LeanAgent.Models.ModelInfo :=
+  { id := "some-base-model", name := "Some Base Model", provider := "neuralwatt"
+    api := "anthropic-messages", baseUrl := "https://api.neuralwatt.com" }
+def modelsWithNeuralwatt : Array LeanAgent.Models.ModelInfo := allModels.push neuralwatt
+
+def testResolveCliModelFallbackThinking : IO Unit := do
+  let reg := mkRegistry modelsWithNeuralwatt alwaysAuth
+  -- strip :thinking suffix from custom model id in fallback path
+  let r ← RC none (some "neuralwatt/zai-org/GLM-5.1-FP8:high") none reg
+  assertTrue (r.error.isNone) "fb: no error"
+  assertTrue (rProv r.model == "neuralwatt") "fb: provider"
+  assertTrue (rId r.model == "zai-org/GLM-5.1-FP8") "fb: strips :high from id"
+  assertTrue (rReason r.model) "fb: reasoning enabled"
+  assertTrue (r.thinkingLevel == LeanAgent.AI.ModelThinkingLevel.fromString? "high") "fb: thinking level high"
+  -- custom model without thinking suffix
+  let r2 ← RC none (some "neuralwatt/zai-org/GLM-5.1-FP8") none reg
+  assertTrue (rId r2.model == "zai-org/GLM-5.1-FP8" && r2.thinkingLevel.isNone) "fb: no suffix"
+  -- all valid thinking levels work in fallback
+  for level in #["off", "minimal", "low", "medium", "high", "xhigh"] do
+    let r ← RC none (some (s!"neuralwatt/zai-org/GLM-5.1-FP8:{level}")) none reg
+    assertTrue (r.error.isNone && rId r.model == "zai-org/GLM-5.1-FP8") s!"fb: {level} strips suffix"
+  -- invalid suffix stays in id
+  let r3 ← RC none (some "neuralwatt/zai-org/GLM-5.1-FP8:banana") none reg
+  assertTrue (rId r3.model == "zai-org/GLM-5.1-FP8:banana" && r3.thinkingLevel.isNone) "fb: invalid suffix stays"
+  -- explicit --provider with custom model:thinking
+  let r4 ← RC (some "neuralwatt") (some "zai-org/GLM-5.1-FP8:high") none reg
+  assertTrue (rId r4.model == "zai-org/GLM-5.1-FP8" && r4.thinkingLevel == LeanAgent.AI.ModelThinkingLevel.fromString? "high") "fb: explicit provider strips suffix"
+  -- explicit --thinking keeps :suffix in id
+  let r5 ← RC none (some "neuralwatt/zai-org/GLM-5.1-FP8:high") (some "medium") reg
+  assertTrue (rId r5.model == "zai-org/GLM-5.1-FP8:high") "fb: explicit thinking keeps suffix"
+  assertTrue (r5.thinkingLevel.isNone) "fb: explicit thinking no parsed level"
+
+def testDefaultModelPerProvider : IO Unit := do
+  let D := LeanAgent.CodingAgent.ModelResolver.defaultModelId?
+  assertTrue (D "openai" == some "gpt-5.5") "default openai"
+  assertTrue (D "openai-codex" == some "gpt-5.5") "default openai-codex"
+  assertTrue (D "zai" == some "glm-5.1") "default zai"
+  assertTrue (D "minimax" == some "MiniMax-M2.7") "default minimax"
+  assertTrue (D "minimax-cn" == some "MiniMax-M2.7") "default minimax-cn"
+  assertTrue (D "cerebras" == some "zai-glm-4.7") "default cerebras"
+  assertTrue (D "ant-ling" == some "Ring-2.6-1T") "default ant-ling"
+  assertTrue (D "vercel-ai-gateway" == some "zai/glm-5.1") "default ai-gateway"
+
+def testFindInitialModel : IO Unit := do
+  -- explicit provider custom model id
+  let reg := mkRegistry allModels alwaysAuth
+  let r ← LeanAgent.CodingAgent.ModelResolver.findInitialModel
+    (some "openrouter") (some "openrouter/openai/ghost-model") #[] false none none none reg
+  assertTrue (rProv r.model == "openrouter") "fim: custom provider"
+  assertTrue (rId r.model == "openai/ghost-model") "fim: custom id"
+  -- ai-gateway default selected when available
+  let aiGateway : LeanAgent.Models.ModelInfo :=
+    { id := "anthropic/claude-opus-4-6", name := "Claude Opus 4.6", provider := "vercel-ai-gateway"
+      api := "anthropic-messages", baseUrl := "https://ai-gateway.vercel.sh", reasoning := true }
+  let reg2 : LeanAgent.CodingAgent.ModelResolver.ModelRegistry :=
+    { getAll := pure #[aiGateway], getAvailable := pure #[aiGateway]
+      find := fun _ _ => pure none, hasConfiguredAuth := fun _ => pure true }
+  let r2 ← LeanAgent.CodingAgent.ModelResolver.findInitialModel none none #[] false none none none reg2
+  assertTrue (rProv r2.model == "vercel-ai-gateway") "fim: ai-gateway default provider"
+  assertTrue (rId r2.model == "anthropic/claude-opus-4-6") "fim: ai-gateway default id"
+
+def testResolveModelScopeAndRestore : IO Unit := do
+  let reg := mkRegistry allModels alwaysAuth
+  -- resolveModelScope: exact patterns dedupe + thinking level
+  let scopedModels ← LeanAgent.CodingAgent.ModelResolver.resolveModelScope #["sonnet", "sonnet:high", "gpt-4o"] reg
+  assertTrue (scopedModels.size == 2) "scope: dedupes sonnet"
+  assertTrue (rScopedId scopedModels[0]? == "claude-sonnet-4-5") "scope: first is sonnet"
+  assertTrue (rScopedId scopedModels[1]? == "gpt-4o") "scope: second is gpt-4o"
+  -- glob scope
+  let globbed ← LeanAgent.CodingAgent.ModelResolver.resolveModelScope #["openrouter/*"] reg
+  assertTrue (globbed.size == 2 && globbed.all (fun sm => sm.model.provider == "openrouter")) "scope: glob openrouter/*"
+  -- restoreModelFromSession: restored + authed → restored, no message
+  let (m, msg) ← LeanAgent.CodingAgent.ModelResolver.restoreModelFromSession
+    "anthropic" "claude-sonnet-4-5" none false reg
+  assertTrue (rId m == "claude-sonnet-4-5" && msg.isNone) "restore: restored when authed"
+  -- restore: missing model + currentModel fallback
+  let (m2, msg2) ← LeanAgent.CodingAgent.ModelResolver.restoreModelFromSession
+    "anthropic" "missing-model" (some gpt4o) false reg
+  assertTrue (rId m2 == "gpt-4o") "restore: falls back to current"
+  assertTrue ((msg2.getD "").contains "model no longer exists") "restore: fallback message"
+
+end TestModelResolver
 def main : IO UInt32 := do
   try
     testAgentLoopReadsFile
@@ -17043,6 +17286,13 @@ def main : IO UInt32 := do
     testCodingAgentExecCommand
     testCodingAgentTelemetryFlag
     testCodingAgentTimings
+    TestModelResolver.testParseModelPattern
+    TestModelResolver.testResolveCliModel
+    TestModelResolver.testResolveCliModelGatewayPrecedence
+    TestModelResolver.testResolveCliModelFallbackThinking
+    TestModelResolver.testDefaultModelPerProvider
+    TestModelResolver.testFindInitialModel
+    TestModelResolver.testResolveModelScopeAndRestore
     testSessionJsonlRoundTrip
     testSessionResourceCleanups
     testSessionResourceCleanupAggregatesErrors

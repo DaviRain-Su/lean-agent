@@ -65,7 +65,7 @@ Full interactive TUI modes, RPC, extensions runtime still missing.
 | `src/core/keybindings.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/core/messages.ts` | `LeanAgent.CodingAgent.Messages` | implemented | bash/compaction/branch prefixes + convertCustomToLlm subset (`testCodingAgentMessagesAndProviderNames`). |
 | `src/core/model-registry.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
-| `src/core/model-resolver.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
+| `src/core/model-resolver.ts` | `LeanAgent.CodingAgent.ModelResolver` | implemented | `defaultModelPerProvider`/`isAlias`/`findExactModelReferenceMatch`/`tryMatchModel`/`parseModelPattern` (colon-suffix + thinking-level)/`buildFallbackModel`/`resolveModelScope` (glob+exact)/`resolveCliModel` (provider inference + auth-precedence + custom-id fallback)/`findInitialModel`/`restoreModelFromSession` over injectable `ModelRegistry` (`TestModelResolver.testParseModelPattern`/`testResolveCliModel`/`testResolveCliModelGatewayPrecedence`/`testResolveCliModelFallbackThinking`/`testDefaultModelPerProvider`/`testFindInitialModel`/`testResolveModelScopeAndRestore`). Console side-effects returned as warning/error strings. |
 | `src/core/output-guard.ts` | — | deferred | Exclusion: Node `process.stdout.write` takeover / raw stdout queue — not portable to Lean IO. |
 | `src/core/package-manager.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/core/project-trust.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
