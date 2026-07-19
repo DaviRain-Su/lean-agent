@@ -82,12 +82,12 @@ def fuzzyMatch (query : String) (options : Array String) : Array String :=
 
 /-- Real box drawing (Pi box.ts subset). -/
 def box (text : String) (width : Nat) : String :=
-  let top := "┌" ++ String.mk (List.replicate (width - 2) '─') ++ "┐"
-  let bottom := "└" ++ String.mk (List.replicate (width - 2) '─') ++ "┘"
+  let top := "┌" ++ String.ofList (List.replicate (width - 2) '─') ++ "┐"
+  let bottom := "└" ++ String.ofList (List.replicate (width - 2) '─') ++ "┘"
   let lines := text.splitOn "\n"
   let padded := lines.map fun line =>
     let padding := width - 2 - line.length
-    "│ " ++ line ++ String.mk (List.replicate padding ' ') ++ " │"
+    "│ " ++ line ++ String.ofList (List.replicate padding ' ') ++ " │"
   String.intercalate "\n" ([top] ++ padded ++ [bottom])
 /-- Real cancellable loader (Pi cancellable-loader.ts subset). -/
 def cancellableLoader (text : String) : String :=

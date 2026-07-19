@@ -10,7 +10,7 @@ Charter: [`goals/FULL_PI_PORT_PROMPT.md`](goals/FULL_PI_PORT_PROMPT.md), [`goals
 | AI | 147 | [`AI_PARITY.md`](AI_PARITY.md) | **159 implemented / 0 partial / 0 missing** (offline inventory CLOSED; milestones M1–M6 offline done) |
 | Agent | 25 | [`AGENT_PARITY.md`](AGENT_PARITY.md) | **partial** — core offline loop usable; harness thin vs Pi |
 | Coding-agent | 160 | [`CODING_AGENT_PARITY.md`](CODING_AGENT_PARITY.md) | **MVP partial** — tools + EventBus/Defaults + Config/SessionManager/AgentSession façades; most `src` rows still missing |
-| TUI | 28 | [`TUI_PARITY.md`](TUI_PARITY.md) | **missing** (inventory only) |
+| TUI | 28 | [`TUI_PARITY.md`](TUI_PARITY.md) | **components started** — Component/Spacer/Text/Box/SelectList/Loader/Input/Markdown ported; TUI class + differential rendering still missing |
 | Orchestrator | 13 | [`ORCHESTRATOR_PARITY.md`](ORCHESTRATOR_PARITY.md) | **missing** (inventory only) |
 
 **Inventory file count source:** `vendor/pi/packages/*/src/**/*.ts` at pin `54113731`.
