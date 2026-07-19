@@ -41,7 +41,7 @@ Full interactive TUI modes, RPC, extensions runtime still missing.
 | `src/core/agent-session.ts` | `LeanAgent.CodingAgent.AgentSession` | partial | Thin create/prompt/compact/setModel/thinking + EventBus + optional durable SessionManager (`testCodingAgentSessionManagerAndAgentSession`); executeBash added. << Pi ~3k LOC. |
 | `src/core/auth-guidance.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/core/auth-storage.ts` | `LeanAgent.CodingAgent.AuthStorage` | partial | JSON auth.json map set/get/erase/reload (`testCodingAgentAuthStorage`); reload added. OAuth refresh + proper-lockfile concurrent lock open. |
-| `src/core/bash-executor.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
+| `src/core/bash-executor.ts` | `LeanAgent.CodingTools.makeBashTool` + `Agent.Harness.Truncate` | partial | Real subprocess bash execution via `makeBashTool`; output truncation (`DEFAULT_MAX_BYTES`/`truncateTail`) resolves to `Harness.Truncate`. Node WriteStream temp-file spillover + rolling-buffer streaming is Exclusion-adjacent (Node streams). |
 | `src/core/compaction/branch-summarization.ts` | `LeanAgent.CodingAgent.Compaction` | partial | branchSummary via harness + coding-agent message format. |
 | `src/core/compaction/compaction.ts` | `LeanAgent.CodingAgent.Compaction` | partial | offline compact/shouldCompact façade (`testCodingAgentCompactionFacade`); compact added. |
 | `src/core/compaction/index.ts` | `LeanAgent.CodingAgent.Compaction` | partial | barrel via Compaction module. |
@@ -81,7 +81,6 @@ Full interactive TUI modes, RPC, extensions runtime still missing.
 | `src/core/skills.ts` | `LeanAgent.CodingAgent.Skills` | partial | SKILL.md frontmatter parse + project skill infos (`testCodingAgentSkillsParse`); skillCollides helper added; ignore/collision matrix open; loadProjectSkill added. |
 | `src/core/slash-commands.ts` | `LeanAgent.CodingTools / Main / Project` | partial | slashCommands stub added. |
 | `src/core/source-info.ts` | `LeanAgent.CodingAgent.PromptTemplates.SourceInfo` | partial | `SourceInfo` (path/source/scope/origin/baseDir) + `SourceScope`/`SourceOrigin` modeled in PromptTemplates; `createSyntheticSourceInfo` used by `loadPromptTemplates`. Not full `PathMetadata`/package-manager integration. |
-| `src/core/bash-executor.ts` | `LeanAgent.CodingTools / Main / Project` | partial | bashExecutor stub added; executeBash in AgentSession now delegates to the bash tool and appends a custom "bashExecution" message (real behavior, not pure stub). |
 | `src/core/telemetry.ts` | `LeanAgent.CodingTools / Main / Project` | partial | telemetry stub added. |
 | `src/core/timings.ts` | `LeanAgent.CodingTools / Main / Project` | partial | timings stub added. |
 | `src/core/tools/bash.ts` | `LeanAgent.CodingTools.makeBashTool` | partial |  |
@@ -97,7 +96,7 @@ Full interactive TUI modes, RPC, extensions runtime still missing.
 | `src/core/tools/read.ts` | `LeanAgent.CodingTools.makeReadTool` | partial | cwd-sandbox read; readTool stub added. |
 | `src/core/tools/render-utils.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/core/tools/tool-definition-wrapper.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
-| `src/core/tools/truncate.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
+| `src/core/tools/truncate.ts` | `LeanAgent.Agent.Harness.Truncate` | implemented | Shared dual-limit (lines+bytes) truncation `truncateHead`/`truncateTail`/`truncateLine` + `TruncationResult` (`truncatedBy`/`firstLineExceedsLimit`/`lastLinePartial`) + `formatSize`/`utf8ByteLength`; constants `DEFAULT_MAX_LINES`/`DEFAULT_MAX_BYTES`/`GREP_MAX_LINE_LENGTH`. Covered by `testHarnessTruncate`. |
 | `src/core/tools/write.ts` | `LeanAgent.CodingTools.makeWriteTool` | partial | writeTool stub added. |
 | `src/index.ts` | `LeanAgent.CodingTools / Main / Project` | partial | toolsIndex stub added. |
 | `src/main.ts` | `Main.lean` | partial | MVP CLI flags only |
