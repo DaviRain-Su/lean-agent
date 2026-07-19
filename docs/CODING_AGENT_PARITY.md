@@ -163,7 +163,7 @@ Full interactive TUI modes, RPC, extensions runtime still missing.
 | `src/utils/exif-orientation.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/utils/frontmatter.ts` | `LeanAgent.CodingAgent.Utils.Frontmatter` | partial | strip/extract + simple key:value parse offline (no full YAML). |
 | `src/utils/fs-watch.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
-| `src/utils/git.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
+| `src/utils/git.ts` | `LeanAgent.CodingAgent.Utils.Git` | implemented | `parseGitUrl` (protocol gate: `https?`/`ssh`/`git://` without prefix, all shorthand with `git:` prefix) + `splitRef` (scp-like/protocol/shorthand `@ref`) + `parseGenericGitUrl` + `buildGitSource` + `hasUnsafeGitInstallPart` (NUL/backslash/absolute/`..`/malformed `%`) + minimal `parseUrl`/`decodeURIComponent?` (`TestGit.testProtocolUrls`/`testShorthandWithGitPrefix`/`testUnsafeInputsRejected`/`testRejectShorthandWithoutGitPrefix`/`testStripsDotGitSuffix`/`testPinnedFlag`). `hosted-git-info` npm dep not ported (generic parser covers the matrix). |
 | `src/utils/highlight-js-lib-index.d.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/utils/html.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/utils/image-convert.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |

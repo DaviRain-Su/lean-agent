@@ -15,6 +15,7 @@ import LeanAgent.CodingAgent.SystemPrompt
 import LeanAgent.CodingAgent.Utils.Frontmatter
 import LeanAgent.CodingAgent.Utils.Mime
 import LeanAgent.CodingAgent.Utils.Paths
+import LeanAgent.CodingAgent.Utils.Git
 
 set_option maxRecDepth 2048
 
@@ -17566,6 +17567,85 @@ def testCanonicalizePathMissing : IO Unit := do
 end TestPaths
 
 -- ============================================================================
+-- Git URL parsing (Pi `packages/coding-agent/test/git-ssh-url.test.ts`)
+-- ============================================================================
+
+namespace TestGit
+
+open LeanAgent.CodingAgent.Utils.Git
+
+/-- Unpack and assert a parse produces the expected fields. -/
+def checkParse (label : String) (source : String)
+    (host path repo : String) (ref : Option String) : IO Unit := do
+  match parseGitUrl source with
+  | some g =>
+    assertTrue (g.host == host) s!"{label}: host"
+    assertTrue (g.path == path) s!"{label}: path"
+    assertTrue (g.repo == repo) s!"{label}: repo"
+    assertTrue (g.ref == ref) s!"{label}: ref"
+    assertTrue (g.pinned == ref.isSome) s!"{label}: pinned"
+  | none => fail s!"{label}: expected parse, got none"
+
+def checkNone (label : String) (source : String) : IO Unit := do
+  match parseGitUrl source with
+  | some _ => fail s!"{label}: expected none, got some"
+  | none => pure ()
+
+def testProtocolUrls : IO Unit := do
+  checkParse "https" "https://github.com/user/repo"
+    "github.com" "user/repo" "https://github.com/user/repo" none
+  checkParse "ssh" "ssh://git@github.com/user/repo"
+    "github.com" "user/repo" "ssh://git@github.com/user/repo" none
+  checkParse "https+ref" "https://github.com/user/repo@v1.0.0"
+    "github.com" "user/repo" "https://github.com/user/repo" (some "v1.0.0")
+  -- Note: `git://...` is NOT a valid form here: Pi treats the leading `git:` as
+  -- the shorthand prefix and the remaining `//host/path` is rejected. Both the
+  -- Pi and Lean ports return none for `git://` URLs (verified against Pi).
+
+def testShorthandWithGitPrefix : IO Unit := do
+  checkParse "scp-like" "git:git@github.com:user/repo"
+    "github.com" "user/repo" "git@github.com:user/repo" none
+  checkParse "host/path" "git:github.com/user/repo"
+    "github.com" "user/repo" "https://github.com/user/repo" none
+  checkParse "shorthand+ref" "git:git@github.com:user/repo@v1.0.0"
+    "github.com" "user/repo" "git@github.com:user/repo" (some "v1.0.0")
+  checkParse "scp-like+port" "git:git@github.com:org/repo"
+    "github.com" "org/repo" "git@github.com:org/repo" none
+
+def testUnsafeInputsRejected : IO Unit := do
+  -- parent traversal in scp-like shorthand
+  checkNone "traversal-scp" "git:git@evil.example:../../victim/repo"
+  -- percent-encoded traversal
+  checkNone "traversal-encoded" "https://evil.example/..%2F..%2Fvictim/repo"
+  -- malformed percent-encoding (trailing %)
+  checkNone "trailing-percent" "https://evil.example/..%2F..%2Fvictim/repo%"
+  -- absolute path after host
+  checkNone "absolute-path" "git:git@evil.example:/absolute/repo"
+  -- backslash in path
+  checkNone "backslash" "git:git@evil.example:user\\repo/name"
+  -- NUL byte in path
+  checkNone "nul-byte" s!"git:git@evil.example:user/repo{Char.ofNat 0}name"
+
+def testRejectShorthandWithoutGitPrefix : IO Unit := do
+  checkNone "scp-no-prefix" "git@github.com:user/repo"
+  checkNone "host/path-no-prefix" "github.com/user/repo"
+  checkNone "user/repo-no-prefix" "user/repo"
+
+def testStripsDotGitSuffix : IO Unit := do
+  checkParse "https-dotgit" "https://github.com/user/repo.git"
+    "github.com" "user/repo" "https://github.com/user/repo.git" none
+
+def testPinnedFlag : IO Unit := do
+  match parseGitUrl "https://github.com/user/repo@main" with
+  | some g => assertTrue (g.pinned == true) "ref → pinned"
+  | none => fail "expected parse"
+  match parseGitUrl "https://github.com/user/repo" with
+  | some g => assertTrue (g.pinned == false) "no ref → not pinned"
+  | none => fail "expected parse"
+
+end TestGit
+
+-- ============================================================================
 -- Slash commands (Pi `packages/coding-agent/test/slash-commands.test.ts`)
 -- ============================================================================
 
@@ -18211,6 +18291,12 @@ def main : IO UInt32 := do
     TestSystemPrompt.testBuildSystemPromptWithSkills
     TestSystemPrompt.testBuildSystemPromptWithGuidelines
     TestSystemPrompt.testFormatSkillsForPrompt
+    TestGit.testProtocolUrls
+    TestGit.testShorthandWithGitPrefix
+    TestGit.testUnsafeInputsRejected
+    TestGit.testRejectShorthandWithoutGitPrefix
+    TestGit.testStripsDotGitSuffix
+    TestGit.testPinnedFlag
     IO.println "lean-agent tests passed"
     pure 0
   catch err =>

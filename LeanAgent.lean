@@ -103,6 +103,7 @@ import LeanAgent.CodingAgent.Experimental
 import LeanAgent.CodingAgent.Utils.Sleep
 import LeanAgent.CodingAgent.Utils.JsonComments
 import LeanAgent.CodingAgent.Utils.Paths
+import LeanAgent.CodingAgent.Utils.Git
 import LeanAgent.CodingAgent.ProviderAttribution
 import LeanAgent.CodingAgent.Compaction
 import LeanAgent.CodingAgent.AuthStorage
