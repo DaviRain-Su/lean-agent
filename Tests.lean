@@ -17564,9 +17564,13 @@ open LeanAgent.CodingAgent.Utils.Paths
 def testIsLocalPath : IO Unit := do
   assertTrue (isLocalPath "./file.txt") "local: relative"
   assertTrue (isLocalPath "/abs/path") "local: absolute"
+  assertTrue (isLocalPath "my-package") "local: bare name"
+  assertTrue (isLocalPath "file:///tmp/foo") "local: file URL"
   assertTrue (!(isLocalPath "npm:package")) "non-local: npm:"
   assertTrue (!(isLocalPath "git://repo")) "non-local: git:"
   assertTrue (!(isLocalPath "https://url")) "non-local: https:"
+  assertTrue (!(isLocalPath "github:user/repo")) "non-local: github:"
+  assertTrue (!(isLocalPath "ssh://host")) "non-local: ssh:"
 
 def testNormalizePathTrim : IO Unit := do
   let result ← normalizePath "  ~/test  " {trim := true}
@@ -17579,9 +17583,137 @@ def testNormalizePathStripAt : IO Unit := do
   let result ← normalizePath "@file.txt" {stripAtPrefix := true}
   assertTrue (result == "file.txt") "stripped @"
 
+def testNormalizePathUnicodeSpaces : IO Unit := do
+  -- U+3000 IDEOGRAPHIC SPACE → regular space
+  let result ← normalizePath "a\u3000b" {normalizeUnicodeSpaces := true}
+  assertTrue (result == "a b") "ideographic space normalized"
+  let raw ← normalizePath "a\u3000b" {}
+  assertTrue (raw == "a\u3000b") "unicode space preserved without option"
+
+def testNormalizePathTildeOnly : IO Unit := do
+  let home ← IO.getEnv "HOME"
+  match home with
+  | some h =>
+      let r0 ← normalizePath "~"
+      assertTrue (r0 == h) "~ → home"
+      let r1 ← normalizePath "~/file.txt"
+      assertTrue (r1 == s!"{h}/file.txt") "~/file → home/file"
+  | none => pure ()
+
+def testNormalizePathNotTildeWord : IO Unit := do
+  -- `~draft.md` must NOT expand (only `~` and `~/` / `~\`).
+  let r ← normalizePath "~draft.md"
+  assertTrue (r == "~draft.md") "~draft.md kept literal"
+
 def testCanonicalizePathMissing : IO Unit := do
   let result ← canonicalizePath "/nonexistent/path/file"
   assertTrue (result == "/nonexistent/path/file") "missing: unchanged"
+
+def testCanonicalizePathExisting : IO Unit := do
+  let dir ← IO.FS.createTempDir
+  let file := dir / "file.txt"
+  IO.FS.withFile file .write (fun h => h.putStr "hello")
+  let real ← canonicalizePath file.toString
+  -- canonicalizePath delegates to realpath for existing entries.
+  let expected := (← IO.FS.realPath file).toString
+  assertTrue (real == expected) s!"canonicalized existing file: {real} vs {expected}"
+  IO.FS.removeDirAll dir
+
+def testResolvePathRelativeAgainstBase : IO Unit := do
+  let cwd := "/tmp/pi-paths-cwd"
+  let r ← resolvePath "subdir/file.txt" cwd
+  assertTrue (r == "/tmp/pi-paths-cwd/subdir/file.txt") s!"relative join: {r}"
+
+def testResolvePathAbsoluteIgnoresBase : IO Unit := do
+  let r ← resolvePath "/abs/path" "/some/base"
+  assertTrue (r == "/abs/path") s!"absolute ignores base: {r}"
+
+def testResolvePathDotSegments : IO Unit := do
+  let r ← resolvePath "sub/../other" "/base"
+  assertTrue (r == "/base/other") s!"dot-segments collapse: {r}"
+  let r2 ← resolvePath "../sibling" "/base/dir"
+  assertTrue (r2 == "/base/sibling") s!"parent traversal: {r2}"
+
+def testResolvePathLiteralPercentNotDecoded : IO Unit := do
+  -- POSIX paths with literal % are NOT percent-decoded (only file:// URLs are).
+  let r ← resolvePath "report%2026.md" "/dir"
+  assertTrue (r == "/dir/report%2026.md") s!"literal percent preserved: {r}"
+
+def testResolvePathFileUrlDecodesSpaces : IO Unit := do
+  let dir ← IO.FS.createTempDir
+  let filePath := dir / "file with spaces.txt"
+  IO.FS.withFile filePath .write (fun h => h.putStr "x")
+  let url := s!"file://{filePath.toString}"
+  let r ← resolvePath url (dir / "base").toString
+  assertTrue (r == filePath.toString) s!"file URL decoded: {r}"
+  IO.FS.removeDirAll dir
+
+def testResolvePathFileUrlBase : IO Unit := do
+  -- baseDir given as a file:// URL is itself normalized.
+  let dir ← IO.FS.createTempDir
+  let base := s!"file://{dir.toString}"
+  let r ← resolvePath "subdir/file.txt" base
+  assertTrue (r == (dir / "subdir" / "file.txt").toString) s!"file URL base: {r}"
+  IO.FS.removeDirAll dir
+
+def testResolvePathFileUrlMalformedThrows : IO Unit := do
+  let threw ← try
+    let _ ← resolvePath "file:///%E0%A4%A" "/base"
+    pure false
+  catch _ => pure true
+  assertTrue threw "malformed file URL throws"
+
+def testGetCwdRelativePathInside : IO Unit := do
+  let cwd := "/tmp/pi-paths-cwd"
+  -- `..config` is a literal directory name (starts with two dots, not `..`).
+  let r ← getCwdRelativePath "/tmp/pi-paths-cwd/..config/AGENTS.md" cwd
+  match r with
+  | some rel =>
+      let expected := "..config/AGENTS.md"
+      assertTrue (rel == expected) s!"inside cwd with dot-name: {rel}"
+  | none => fail "expected some for ..config"
+
+def testGetCwdRelativePathRejectsParent : IO Unit := do
+  let cwd := "/tmp/pi-paths-cwd"
+  let r ← getCwdRelativePath "/tmp/pi-paths-cwd/../AGENTS.md" cwd
+  match r with
+  | some _ => fail "expected none for parent traversal"
+  | none => assertTrue true "parent traversal rejected"
+
+def testGetCwdRelativePathSameIsDot : IO Unit := do
+  let cwd := "/tmp/pi-paths-cwd"
+  let r ← getCwdRelativePath cwd cwd
+  match r with
+  | some rel => assertTrue (rel == ".") s!"same cwd → '.': {rel}"
+  | none => fail "expected some '.' for same cwd"
+
+def testFormatPathRelativeToCwdOrAbsoluteInside : IO Unit := do
+  let cwd := "/tmp/pi-paths-cwd"
+  let r ← formatPathRelativeToCwdOrAbsolute "sub/file.txt" cwd
+  assertTrue (r == "sub/file.txt") s!"inside formatted relative: {r}"
+
+def testFormatPathRelativeToCwdOrAbsoluteOutside : IO Unit := do
+  let cwd := "/tmp/pi-paths-cwd"
+  let r ← formatPathRelativeToCwdOrAbsolute "/other/path/file.txt" cwd
+  -- Outside cwd → absolute path, forward-slashed.
+  assertTrue (r == "/other/path/file.txt") s!"outside formatted absolute: {r}"
+
+def testCloudSyncAttributes : IO Unit := do
+  -- darwin exposes both Dropbox + iCloud provider attrs; linux the user attr.
+  if System.Platform.isOSX then
+    assertTrue (cloudSyncAttributes.contains "com.dropbox.ignored") "darwin: dropbox attr"
+    assertTrue (cloudSyncAttributes.contains "com.apple.fileprovider.ignore#P") "darwin: icloud attr"
+  else if !System.Platform.isWindows then
+    assertTrue (cloudSyncAttributes.contains "user.com.dropbox.ignored") "linux: user attr"
+  else
+    assertTrue (cloudSyncAttributes.isEmpty) "windows: none"
+
+def testMarkPathIgnoredByCloudSyncNoThrow : IO Unit := do
+  -- Best-effort: must not throw even if xattr/setfattr is absent.
+  let dir ← IO.FS.createTempDir
+  markPathIgnoredByCloudSync dir.toString
+  IO.FS.removeDirAll dir
+  assertTrue true "markPathIgnoredByCloudSync did not throw"
 
 end TestPaths
 
@@ -19107,6 +19239,28 @@ def main : IO UInt32 := do
     TestExifOrientation.testJpegWithoutExifDefaultsToOne
     TestExifOrientation.testNonImageDefaultsToOne
     TestExifOrientation.testOrientationTransformMapping
+    TestPaths.testIsLocalPath
+    TestPaths.testNormalizePathTrim
+    TestPaths.testNormalizePathStripAt
+    TestPaths.testNormalizePathUnicodeSpaces
+    TestPaths.testNormalizePathTildeOnly
+    TestPaths.testNormalizePathNotTildeWord
+    TestPaths.testCanonicalizePathMissing
+    TestPaths.testCanonicalizePathExisting
+    TestPaths.testResolvePathRelativeAgainstBase
+    TestPaths.testResolvePathAbsoluteIgnoresBase
+    TestPaths.testResolvePathDotSegments
+    TestPaths.testResolvePathLiteralPercentNotDecoded
+    TestPaths.testResolvePathFileUrlDecodesSpaces
+    TestPaths.testResolvePathFileUrlBase
+    TestPaths.testResolvePathFileUrlMalformedThrows
+    TestPaths.testGetCwdRelativePathInside
+    TestPaths.testGetCwdRelativePathRejectsParent
+    TestPaths.testGetCwdRelativePathSameIsDot
+    TestPaths.testFormatPathRelativeToCwdOrAbsoluteInside
+    TestPaths.testFormatPathRelativeToCwdOrAbsoluteOutside
+    TestPaths.testCloudSyncAttributes
+    TestPaths.testMarkPathIgnoredByCloudSyncNoThrow
     IO.println "lean-agent tests passed"
     pure 0
   catch err =>
