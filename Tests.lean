@@ -24,6 +24,7 @@ import LeanAgent.CodingAgent.Utils.Ansi
 import LeanAgent.CodingAgent.Utils.OpenBrowser
 import LeanAgent.CodingAgent.Utils.ToolsManager
 import LeanAgent.CodingAgent.HttpDispatcher
+import LeanAgent.CodingAgent.Keybindings
 
 set_option maxRecDepth 4096
 
@@ -18195,6 +18196,85 @@ def testDefaultAndChoices : IO Unit := do
 end TestHttpDispatcher
 
 -- ============================================================================
+-- Keybindings migration (Pi `packages/coding-agent/test/keybindings-migration.test.ts`)
+-- ============================================================================
+
+namespace TestKeybindings
+
+open LeanAgent.CodingAgent.Keybindings
+
+def parseJson? (s : String) : Lean.Json :=
+  match Lean.Json.parse s with | .ok j => j | .error _ => Lean.Json.null
+
+/-- Compare a `KeybindingsConfig` to a JSON object by key/value equality (order-agnostic). -/
+def configMatchesJson (config : KeybindingsConfig) (expected : Lean.Json) : Bool :=
+  match expected.getObj? with
+  | .ok obj =>
+    let expPairs := obj.toArray
+    if expPairs.size != config.size then false
+    else
+      expPairs.all fun (k, v) =>
+        match config.find? (fun (kk, _) => kk == k) with
+        | some (_, cv) =>
+          match KeyBindingValue.fromJson? v with
+          | some ev => cv == ev
+          | none => false
+        | none => false
+  | .error _ => false
+
+def testRewritesLegacyNames : IO Unit := do
+  let raw := parseJson? "{\"cursorUp\":[\"up\",\"ctrl+p\"],\"expandTools\":\"ctrl+x\"}"
+  let (cfg, migrated) := migrateKeybindingsConfig raw
+  assertTrue migrated "migration flagged"
+  let expected := parseJson? "{\"tui.editor.cursorUp\":[\"up\",\"ctrl+p\"],\"app.tools.expand\":\"ctrl+x\"}"
+  assertTrue (configMatchesJson cfg expected) s!"rewrites legacy names (got {cfg})"
+
+def testNamespacedWinsWhenBothExist : IO Unit := do
+  let raw := parseJson? "{\"expandTools\":\"ctrl+x\",\"app.tools.expand\":\"ctrl+y\"}"
+  let (cfg, migrated) := migrateKeybindingsConfig raw
+  assertTrue migrated "migration flagged"
+  let expected := parseJson? "{\"app.tools.expand\":\"ctrl+y\"}"
+  assertTrue (configMatchesJson cfg expected) s!"namespaced value wins (got {cfg})"
+
+def testLoadsLegacyNamesInMemory : IO Unit := do
+  let cwd ← IO.currentDir
+  let dir := cwd / ".lake" / "keybindings-test"
+  try IO.FS.removeDirAll dir catch _ => pure ()
+  IO.FS.createDirAll dir
+  IO.FS.writeFile (dir / "keybindings.json")
+    "{\"selectConfirm\":\"enter\",\"interrupt\":\"ctrl+x\"}"
+  let mgr ← KeybindingsManager.create dir
+  let user := mgr.getUserBindings
+  let expected := parseJson? "{\"tui.select.confirm\":\"enter\",\"app.interrupt\":\"ctrl+x\"}"
+  assertTrue (configMatchesJson user expected) s!"legacy names loaded migrated in memory (got {user})"
+  let eff := mgr.getEffectiveConfig
+  -- Effective config merges defaults + user; user values win.
+  match lookupBinding eff "tui.select.confirm" with
+  | some v => assertTrue (v == .single "enter") "effective tui.select.confirm = enter"
+  | none => fail "tui.select.confirm missing from effective"
+  match lookupBinding eff "app.interrupt" with
+  | some v => assertTrue (v == .single "ctrl+x") "effective app.interrupt = ctrl+x (user overrides default)"
+  | none => fail "app.interrupt missing from effective"
+
+def testNonLegacyKeysPreserved : IO Unit := do
+  let raw := parseJson? "{\"app.interrupt\":\"ctrl+\\\\\",\"app.clear\":\"ctrl+l\"}"
+  let (cfg, migrated) := migrateKeybindingsConfig raw
+  assertTrue (!migrated) "no migration for already-namespaced keys"
+  let expected := parseJson? "{\"app.interrupt\":\"ctrl+\\\\\",\"app.clear\":\"ctrl+l\"}"
+  assertTrue (configMatchesJson cfg expected) s!"namespaced keys preserved (got {cfg})"
+
+def testInvalidValuesDropped : IO Unit := do
+  -- `toKeybindingsConfig` drops non-string/non-string-array values.
+  let raw := parseJson? "{\"app.interrupt\":123,\"app.clear\":[1,2],\"app.exit\":\"ctrl+d\"}"
+  let cfg := toKeybindingsConfig raw
+  assertTrue (cfg.size == 1) s!"only the valid string entry kept (got {cfg.size})"
+  match cfg.find? (fun (k, _) => k == "app.exit") with
+  | some (_, v) => assertTrue (v == .single "ctrl+d") "app.exit kept"
+  | none => fail "app.exit dropped"
+
+end TestKeybindings
+
+-- ============================================================================
 -- Slash commands (Pi `packages/coding-agent/test/slash-commands.test.ts`)
 -- ============================================================================
 
@@ -18888,6 +18968,11 @@ def main : IO UInt32 := do
     TestHttpDispatcher.testFormatHttpIdleTimeoutMs
     TestHttpDispatcher.testApplyHttpProxySettings
     TestHttpDispatcher.testDefaultAndChoices
+    TestKeybindings.testRewritesLegacyNames
+    TestKeybindings.testNamespacedWinsWhenBothExist
+    TestKeybindings.testLoadsLegacyNamesInMemory
+    TestKeybindings.testNonLegacyKeysPreserved
+    TestKeybindings.testInvalidValuesDropped
     IO.println "lean-agent tests passed"
     pure 0
   catch err =>
