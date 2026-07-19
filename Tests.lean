@@ -26,6 +26,7 @@ import LeanAgent.CodingAgent.Utils.ToolsManager
 import LeanAgent.CodingAgent.HttpDispatcher
 import LeanAgent.CodingAgent.Keybindings
 import LeanAgent.CodingAgent.Utils.SyntaxHighlight
+import LeanAgent.CodingAgent.Utils.ExifOrientation
 
 set_option maxRecDepth 4096
 
@@ -18329,6 +18330,74 @@ def testPlainTextUnchanged : IO Unit := do
 end TestSyntaxHighlight
 
 -- ============================================================================
+-- EXIF orientation (Pi `packages/coding-agent/src/utils/exif-orientation.ts`)
+-- ============================================================================
+
+namespace TestExifOrientation
+
+open LeanAgent.CodingAgent.Utils.ExifOrientation
+
+/-- Build a minimal JPEG (FF D8) with an APP1 EXIF segment carrying the given
+orientation tag value, terminated by EOI (FF D9). The EXIF segment is
+little-endian with a single IFD entry for tag 0x0112. -/
+def mkJpegWithOrientation (orientation : Nat) : ByteArray := Id.run do
+  let mut bytes : Array UInt8 := #[0xFF, 0xD8]  -- SOI
+  -- APP1 marker
+  bytes := bytes ++ #[0xFF, 0xE1]
+  -- TIFF header: "II" (LE), 0x2A00 (magic LE), 0x08000000 (IFD offset = 8)
+  -- Then IFD at tiff+8: count=1, entry (tag 0x0112, type 3=SHORT, count 1, value orientation)
+  -- Each IFD entry is 12 bytes.
+  let tiff : Array UInt8 :=
+    #[ 0x49, 0x49  -- byte order = little-endian (II)
+     , 0x2A, 0x00  -- magic 42 (LE)
+     , 0x08, 0x00, 0x00, 0x00  -- IFD offset = 8 (LE)
+       -- IFD at offset 8
+     , 0x01, 0x00  -- entry count = 1 (LE)
+       -- entry: tag=0x0112, type=3 (SHORT), count=1, value=orientation
+     , 0x12, 0x01  -- tag 0x0112 (LE)
+     , 0x03, 0x00  -- type SHORT (LE)
+     , 0x01, 0x00, 0x00, 0x00  -- count 1 (LE)
+     , (orientation.toUInt8), 0x00, 0x00, 0x00  -- value (LE, padded)
+     ]
+  -- APP1 segment length = (segment content bytes) + 2; content = "Exif\0\0" + tiff.
+  let content : Array UInt8 := #[0x45, 0x78, 0x69, 0x66, 0x00, 0x00] ++ tiff
+  let segLen : Nat := content.size + 2
+  bytes := bytes ++ #[(segLen >>> 8).toUInt8, segLen.toUInt8.land 0xFF]
+  bytes := bytes ++ content
+  -- EOI
+  bytes := bytes ++ #[0xFF, 0xD9]
+  pure (ByteArray.mk bytes)
+
+def testReadsJpegOrientation : IO Unit := do
+  for o in #[1, 2, 3, 4, 5, 6, 7, 8] do
+    let bytes := mkJpegWithOrientation o
+    let got := getExifOrientation bytes
+    assertTrue (got == o) s!"JPEG orientation {o} → {got}"
+
+def testJpegWithoutExifDefaultsToOne : IO Unit := do
+  -- A bare SOI + EOI JPEG with no APP1.
+  let bytes := ByteArray.mk #[0xFF, 0xD8, 0xFF, 0xD9]
+  assertTrue (getExifOrientation bytes == 1) "no-EXIF JPEG → 1"
+
+def testNonImageDefaultsToOne : IO Unit := do
+  let bytes := ByteArray.mk #[0x00, 0x01, 0x02, 0x03]
+  assertTrue (getExifOrientation bytes == 1) "non-image bytes → 1"
+  assertTrue (getExifOrientation (ByteArray.mk #[]) == 1) "empty → 1"
+
+def testOrientationTransformMapping : IO Unit := do
+  assertTrue (orientationTransform 1 == .identity) "1 → identity"
+  assertTrue (orientationTransform 2 == .flipH) "2 → flipH"
+  assertTrue (orientationTransform 3 == .rotate180) "3 → rotate180"
+  assertTrue (orientationTransform 4 == .flipV) "4 → flipV"
+  assertTrue (orientationTransform 5 == .transpose) "5 → transpose"
+  assertTrue (orientationTransform 6 == .rotate90) "6 → rotate90"
+  assertTrue (orientationTransform 7 == .transverse) "7 → transverse"
+  assertTrue (orientationTransform 8 == .rotate270) "8 → rotate270"
+  assertTrue (orientationTransform 99 == .identity) "out-of-range → identity"
+
+end TestExifOrientation
+
+-- ============================================================================
 -- Slash commands (Pi `packages/coding-agent/test/slash-commands.test.ts`)
 -- ============================================================================
 
@@ -19034,6 +19103,10 @@ def main : IO UInt32 := do
     TestSyntaxHighlight.testScopeFormatterPrefixFallbacks
     TestSyntaxHighlight.testDefaultFormatterFallback
     TestSyntaxHighlight.testPlainTextUnchanged
+    TestExifOrientation.testReadsJpegOrientation
+    TestExifOrientation.testJpegWithoutExifDefaultsToOne
+    TestExifOrientation.testNonImageDefaultsToOne
+    TestExifOrientation.testOrientationTransformMapping
     IO.println "lean-agent tests passed"
     pure 0
   catch err =>

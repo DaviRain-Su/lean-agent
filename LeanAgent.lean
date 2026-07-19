@@ -114,6 +114,7 @@ import LeanAgent.CodingAgent.Utils.ToolsManager
 import LeanAgent.CodingAgent.HttpDispatcher
 import LeanAgent.CodingAgent.Keybindings
 import LeanAgent.CodingAgent.Utils.SyntaxHighlight
+import LeanAgent.CodingAgent.Utils.ExifOrientation
 import LeanAgent.CodingAgent.ProviderAttribution
 import LeanAgent.CodingAgent.Compaction
 import LeanAgent.CodingAgent.AuthStorage
