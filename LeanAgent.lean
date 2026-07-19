@@ -118,6 +118,8 @@ import LeanAgent.CodingAgent.Telemetry
 import LeanAgent.CodingAgent.Timings
 import LeanAgent.CodingAgent.ModelResolver
 import LeanAgent.CodingAgent.ModelRegistry
+import LeanAgent.CodingAgent.SlashCommands
+import LeanAgent.CodingAgent.SystemPrompt
 import LeanAgent.Agent
 import LeanAgent.Agent.Harness
 import LeanAgent.Core

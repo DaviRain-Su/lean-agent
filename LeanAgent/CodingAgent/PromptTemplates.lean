@@ -52,6 +52,37 @@ structure SourceInfo where
   baseDir : Option String := none
 deriving Inhabited, Repr
 
+/-- Pi `PathMetadata` subset (full type lives in `core/package-manager.ts`,
+not yet ported). Carries the fields `createSourceInfo` consumes. -/
+structure PathMetadata where
+  source : String := "local"
+  scope : SourceScope := .temporary
+  origin : SourceOrigin := .topLevel
+  baseDir : Option String := none
+deriving Inhabited
+
+/-- Pi `createSourceInfo`: lift resolved path metadata into a `SourceInfo`. -/
+def createSourceInfo (path : String) (metadata : PathMetadata) : SourceInfo :=
+  { path := path
+    source := metadata.source
+    scope := metadata.scope
+    origin := metadata.origin
+    baseDir := metadata.baseDir }
+
+/-- Pi `createSyntheticSourceInfo`: build a `SourceInfo` for a non-filesystem
+source (defaults: `temporary` scope, `top-level` origin). -/
+def createSyntheticSourceInfo
+    (path : String)
+    (source : String)
+    (scope : Option SourceScope := none)
+    (origin : Option SourceOrigin := none)
+    (baseDir : Option String := none) : SourceInfo :=
+  { path := path
+    source := source
+    scope := scope.getD .temporary
+    origin := origin.getD .topLevel
+    baseDir := baseDir }
+
 /-- Pi `PromptTemplate`. -/
 structure PromptTemplate where
   name : String

@@ -10,6 +10,8 @@ import LeanAgent.CodingAgent.ModelResolver
 import LeanAgent.CodingAgent.ModelRegistry
 import LeanAgent.CodingAgent.TrustManager
 import LeanAgent.CodingAgent.ProjectTrust
+import LeanAgent.CodingAgent.SlashCommands
+import LeanAgent.CodingAgent.SystemPrompt
 import LeanAgent.CodingAgent.Utils.Frontmatter
 import LeanAgent.CodingAgent.Utils.Mime
 import LeanAgent.CodingAgent.Utils.Paths
@@ -17563,6 +17565,170 @@ def testCanonicalizePathMissing : IO Unit := do
 
 end TestPaths
 
+-- ============================================================================
+-- Slash commands (Pi `packages/coding-agent/test/slash-commands.test.ts`)
+-- ============================================================================
+
+namespace TestSlashCommands
+
+open LeanAgent.CodingAgent.SlashCommands
+
+def testBuiltinSlashCommands : IO Unit := do
+  let cmds := builtinSlashCommands
+  assertTrue (cmds.size ≥ 20) "builtin: at least 20 commands"
+  -- Check key commands exist.
+  assertTrue ((findBuiltin? "new").isSome) "builtin: /new exists"
+  assertTrue ((findBuiltin? "compact").isSome) "builtin: /compact exists"
+  assertTrue ((findBuiltin? "quit").isSome) "builtin: /quit exists"
+  assertTrue ((findBuiltin? "settings").isSome) "builtin: /settings exists"
+  assertTrue ((findBuiltin? "model").isSome) "builtin: /model exists"
+  assertTrue ((findBuiltin? "fork").isSome) "builtin: /fork exists"
+  assertTrue ((findBuiltin? "resume").isSome) "builtin: /resume exists"
+  assertTrue ((findBuiltin? "login").isSome) "builtin: /login exists"
+  assertTrue ((findBuiltin? "logout").isSome) "builtin: /logout exists"
+  -- Check descriptions are non-empty.
+  for cmd in cmds do
+    assertTrue (!cmd.description.isEmpty) s!"builtin: '{cmd.name}' has description"
+
+def testFindBuiltin : IO Unit := do
+  assertTrue ((findBuiltin? "nonexistent").isNone) "findBuiltin: nonexistent returns none"
+  assertTrue (isBuiltin "new") "isBuiltin: /new is builtin"
+  assertTrue (!isBuiltin "nonexistent") "isBuiltin: nonexistent is not builtin"
+  let names := builtinNames
+  assertTrue (names.contains "new") "builtinNames: contains /new"
+  assertTrue (names.contains "quit") "builtinNames: contains /quit"
+
+end TestSlashCommands
+
+-- ============================================================================
+-- System prompt (Pi `packages/coding-agent/test/system-prompt.test.ts`)
+-- ============================================================================
+
+namespace TestSystemPrompt
+
+open LeanAgent.CodingAgent.SystemPrompt
+
+def testBuildSystemPromptDefault : IO Unit := do
+  let opts : BuildSystemPromptOptions := {
+    cwd := "/home/user/project"
+    toolSnippets :=
+      let m := ({} : Std.HashMap String String)
+      let m := m.insert "read" "Read file contents"
+      let m := m.insert "bash" "Execute bash commands"
+      let m := m.insert "edit" "Make precise file edits"
+      let m := m.insert "write" "Create or overwrite files"
+      m
+  }
+  let prompt ← buildSystemPrompt opts
+  -- Default prompt should contain key sections.
+  assertTrue (prompt.contains "You are an expert coding assistant") "default: preamble"
+  assertTrue (prompt.contains "Available tools:") "default: tools header"
+  assertTrue (prompt.contains "- read: Read file contents") "default: read tool"
+  assertTrue (prompt.contains "- bash: Execute bash commands") "default: bash tool"
+  assertTrue (prompt.contains "- edit: Make precise file edits") "default: edit tool"
+  assertTrue (prompt.contains "- write: Create or overwrite files") "default: write tool"
+  assertTrue (prompt.contains "Guidelines:") "default: guidelines header"
+  assertTrue (prompt.contains "Be concise in your responses") "default: concise guideline"
+  assertTrue (prompt.contains "Show file paths clearly") "default: file paths guideline"
+  assertTrue (prompt.contains "Pi documentation") "default: pi docs section"
+  assertTrue (prompt.contains "Current date:") "default: date"
+  assertTrue (prompt.contains "/home/user/project") "default: cwd"
+
+def testBuildSystemPromptCustom : IO Unit := do
+  let opts : BuildSystemPromptOptions := {
+    cwd := "/tmp/test"
+    customPrompt := some "You are a helpful assistant."
+  }
+  let prompt ← buildSystemPrompt opts
+  -- Custom prompt replaces default preamble.
+  assertTrue (prompt.contains "You are a helpful assistant.") "custom: custom text"
+  assertTrue (!prompt.contains "You are an expert coding assistant") "custom: no default preamble"
+  -- But still has date and cwd.
+  assertTrue (prompt.contains "Current date:") "custom: has date"
+  assertTrue (prompt.contains "/tmp/test") "custom: has cwd"
+
+def testBuildSystemPromptWithContextFiles : IO Unit := do
+  let opts : BuildSystemPromptOptions := {
+    cwd := "/tmp/test"
+    contextFiles := #[
+      ("AGENTS.md", "# Project Rules\n\nBe careful."),
+      (".claude/RTK.md", "# RTK\n\nUse RTK pattern.")
+    ]
+  }
+  let prompt ← buildSystemPrompt opts
+  assertTrue (prompt.contains "<project_context>") "context: project_context tag"
+  assertTrue (prompt.contains "AGENTS.md") "context: AGENTS.md path"
+  assertTrue (prompt.contains "# Project Rules") "context: AGENTS.md content"
+  assertTrue (prompt.contains ".claude/RTK.md") "context: RTK.md path"
+  assertTrue (prompt.contains "# RTK") "context: RTK.md content"
+  assertTrue (prompt.contains "</project_context>") "context: closing tag"
+
+def testBuildSystemPromptWithSkills : IO Unit := do
+  let skills : Array Skill := #[
+    { name := "cloudflare-deploy"
+      description := "Deploy applications to Cloudflare"
+      filePath := "/home/user/.agents/skills/cloudflare-deploy/SKILL.md" },
+    { name := "zig-memory"
+      description := "Zig memory management guidance"
+      filePath := "/home/user/.agents/skills/zig-memory/SKILL.md"
+      disableModelInvocation := true }
+  ]
+  let opts : BuildSystemPromptOptions := {
+    cwd := "/tmp/test"
+    skills := skills
+    toolSnippets :=
+      let m := ({} : Std.HashMap String String)
+      let m := m.insert "read" "Read file contents"
+      let m := m.insert "bash" "Execute bash commands"
+      let m := m.insert "edit" "Make precise file edits"
+      let m := m.insert "write" "Create or overwrite files"
+      m
+  }
+  let prompt ← buildSystemPrompt opts
+  -- Skills section should appear (read tool is available).
+  assertTrue (prompt.contains "<available_skills>") "skills: available_skills tag"
+  assertTrue (prompt.contains "cloudflare-deploy") "skills: cloudflare-deploy name"
+  assertTrue (prompt.contains "Deploy applications to Cloudflare") "skills: cloudflare-deploy description"
+  -- Disabled skill should not appear.
+  assertTrue (!prompt.contains "zig-memory") "skills: zig-memory excluded (disabled)"
+
+def testBuildSystemPromptWithGuidelines : IO Unit := do
+  let opts : BuildSystemPromptOptions := {
+    cwd := "/tmp/test"
+    promptGuidelines := #["Use functional programming", "Write tests first"]
+  }
+  let prompt ← buildSystemPrompt opts
+  assertTrue (prompt.contains "Use functional programming") "guidelines: custom 1"
+  assertTrue (prompt.contains "Write tests first") "guidelines: custom 2"
+  -- Default guidelines still present.
+  assertTrue (prompt.contains "Be concise in your responses") "guidelines: default concise"
+
+def testFormatSkillsForPrompt : IO Unit := do
+  let skills : Array Skill := #[
+    { name := "deploy"
+      description := "Deploy to production"
+      filePath := "/home/user/.agents/skills/deploy/SKILL.md" }
+  ]
+  let result := formatSkillsForPrompt skills
+  assertTrue (result.contains "<available_skills>") "formatSkills: opening tag"
+  assertTrue (result.contains "<name>deploy</name>") "formatSkills: skill name"
+  assertTrue (result.contains "Deploy to production") "formatSkills: skill description"
+  assertTrue (result.contains "</available_skills>") "formatSkills: closing tag"
+  -- Empty skills → empty string.
+  let empty := formatSkillsForPrompt #[]
+  assertTrue (empty.isEmpty) "formatSkills: empty array returns empty"
+  -- All disabled → empty string.
+  let disabled : Array Skill := #[
+    { name := "hidden"
+      description := "Should not appear"
+      filePath := "/tmp/SKILL.md"
+      disableModelInvocation := true }
+  ]
+  let result2 := formatSkillsForPrompt disabled
+  assertTrue (result2.isEmpty) "formatSkills: all disabled returns empty"
+
+end TestSystemPrompt
+
 def main : IO UInt32 := do
   try
     testAgentLoopReadsFile
@@ -18037,6 +18203,14 @@ def main : IO UInt32 := do
     TestMime.testCodingAgentMimePng
     TestMime.testCodingAgentMimeGif
     TestMime.testCodingAgentMimeWebp
+    TestSlashCommands.testBuiltinSlashCommands
+    TestSlashCommands.testFindBuiltin
+    TestSystemPrompt.testBuildSystemPromptDefault
+    TestSystemPrompt.testBuildSystemPromptCustom
+    TestSystemPrompt.testBuildSystemPromptWithContextFiles
+    TestSystemPrompt.testBuildSystemPromptWithSkills
+    TestSystemPrompt.testBuildSystemPromptWithGuidelines
+    TestSystemPrompt.testFormatSkillsForPrompt
     IO.println "lean-agent tests passed"
     pure 0
   catch err =>
