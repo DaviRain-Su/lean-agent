@@ -117,6 +117,7 @@ import LeanAgent.CodingAgent.Exec
 import LeanAgent.CodingAgent.Telemetry
 import LeanAgent.CodingAgent.Timings
 import LeanAgent.CodingAgent.ModelResolver
+import LeanAgent.CodingAgent.ModelRegistry
 import LeanAgent.Agent
 import LeanAgent.Agent.Harness
 import LeanAgent.Core
