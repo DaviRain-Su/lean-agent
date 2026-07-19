@@ -81,8 +81,8 @@ Full interactive TUI modes, RPC, extensions runtime still missing.
 | `src/core/skills.ts` | `LeanAgent.CodingAgent.Skills` | partial | SKILL.md frontmatter parse + project skill infos (`testCodingAgentSkillsParse`); skillCollides helper added; ignore/collision matrix open; loadProjectSkill added. |
 | `src/core/slash-commands.ts` | `LeanAgent.CodingTools / Main / Project` | partial | slashCommands stub added. |
 | `src/core/source-info.ts` | `LeanAgent.CodingAgent.PromptTemplates.SourceInfo` | partial | `SourceInfo` (path/source/scope/origin/baseDir) + `SourceScope`/`SourceOrigin` modeled in PromptTemplates; `createSyntheticSourceInfo` used by `loadPromptTemplates`. Not full `PathMetadata`/package-manager integration. |
-| `src/core/telemetry.ts` | `LeanAgent.CodingTools / Main / Project` | partial | telemetry stub added. |
-| `src/core/timings.ts` | `LeanAgent.CodingTools / Main / Project` | partial | timings stub added. |
+| `src/core/telemetry.ts` | `LeanAgent.CodingAgent.Telemetry` | implemented | `isTruthyEnvFlag` (1/true/yes, case-insensitive) + `isInstallTelemetryEnabled` (env override over settings default) (`testCodingAgentTelemetryFlag`). |
+| `src/core/timings.ts` | `LeanAgent.CodingAgent.Timings` | implemented | `PI_TIMING=1`-gated profiler: `TimingRegistry`, `resetTimings`, `time` (per-namespace delta with injectable clock), `printTimings`/`formatTimingGroup` (negative-delta filter + total) (`testCodingAgentTimings`). |
 | `src/core/tools/bash.ts` | `LeanAgent.CodingTools.makeBashTool` | partial |  |
 | `src/core/tools/edit-diff.ts` | `LeanAgent.CodingTools / Main / Project` | partial | editDiff stub added. |
 | `src/core/tools/edit.ts` | `LeanAgent.CodingTools.makeEditTool` | partial |  |

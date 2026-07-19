@@ -4,6 +4,8 @@ import LeanAgent.CodingAgent.PromptTemplates
 import LeanAgent.CodingAgent.Migrations
 import LeanAgent.CodingAgent.AuthGuidance
 import LeanAgent.CodingAgent.Exec
+import LeanAgent.CodingAgent.Telemetry
+import LeanAgent.CodingAgent.Timings
 
 set_option maxRecDepth 2048
 
@@ -16962,6 +16964,60 @@ def testCodingAgentExecCommand : IO Unit := do
   let r4 ← LeanAgent.CodingAgent.Exec.execCommand "/bin/sh" #["-c", "sleep 5"] cwd { cancel := some cancel }
   assertTrue r4.killed "exec cancel ref kills child"
 
+-- ============================================================================
+-- Telemetry gating (Pi `packages/coding-agent/src/core/telemetry.ts`)
+-- ============================================================================
+
+def testCodingAgentTelemetryFlag : IO Unit := do
+  let f := LeanAgent.CodingAgent.Telemetry.isTruthyEnvFlag
+  assertTrue (f none == false) "missing env flag is false"
+  assertTrue (f (some "1") == true) "'1' is truthy"
+  assertTrue (f (some "true") == true) "'true' is truthy"
+  assertTrue (f (some "TRUE") == true) "truthy is case-insensitive"
+  assertTrue (f (some "yes") == true) "'yes' is truthy"
+  assertTrue (f (some "Yes") == true) "'Yes' is truthy"
+  assertTrue (f (some "0") == false) "'0' is not truthy"
+  assertTrue (f (some "false") == false) "'false' is not truthy"
+  -- env override wins over settings default
+  let enabled := LeanAgent.CodingAgent.Telemetry.isInstallTelemetryEnabled
+  assertTrue (enabled false none == false) "no env, settings off -> off"
+  assertTrue (enabled true none == true) "no env, settings on -> on"
+  assertTrue (enabled false (some "1") == true) "env=1 overrides settings off"
+  assertTrue (enabled true (some "0") == false) "env=0 overrides settings on"
+
+-- ============================================================================
+-- Startup timings (Pi `packages/coding-agent/src/core/timings.ts`)
+-- ============================================================================
+
+def testCodingAgentTimings : IO Unit := do
+  -- disabled registry records nothing
+  let disabled ← LeanAgent.CodingAgent.Timings.createTimingRegistry false
+  LeanAgent.CodingAgent.Timings.resetTimings disabled 100
+  LeanAgent.CodingAgent.Timings.time disabled "a" 150
+  assertTrue ((← LeanAgent.CodingAgent.Timings.printTimings disabled) == "") "disabled registry is silent"
+  -- enabled registry records deltas per namespace
+  let reg ← LeanAgent.CodingAgent.Timings.createTimingRegistry true
+  LeanAgent.CodingAgent.Timings.resetTimings reg 1000
+  LeanAgent.CodingAgent.Timings.time reg "startup" 1050
+  LeanAgent.CodingAgent.Timings.time reg "extensions" 1100
+  LeanAgent.CodingAgent.Timings.time reg "ready" 1150 "main"
+  let report ← LeanAgent.CodingAgent.Timings.printTimings reg
+  assertTrue (report.contains "startup: 50ms") "recorded startup delta"
+  assertTrue (report.contains "extensions: 50ms") "recorded extensions delta"
+  assertTrue (report.contains "ready: 50ms") "recorded ready delta"
+  assertTrue (report.contains "TOTAL: 150ms") "total is sum of printable deltas"
+  assertTrue (report.contains "Startup Timings: main") "group labelled by namespace"
+  -- separate namespace is isolated
+  LeanAgent.CodingAgent.Timings.resetTimings reg 2000 "extensions"
+  LeanAgent.CodingAgent.Timings.time reg "ext-load" 2010 "extensions"
+  let r2 ← LeanAgent.CodingAgent.Timings.printTimings reg
+  assertTrue (r2.contains "Startup Timings: extensions") "separate namespace group"
+  assertTrue (r2.contains "ext-load: 10ms") "separate namespace delta"
+  -- formatTimingGroup drops negative deltas
+  let neg := LeanAgent.CodingAgent.Timings.formatTimingGroup "T"
+    #[{ label := "a", ms := 10 }, { label := "b", ms := -5 }]
+  assertTrue (!(neg.contains "-5ms") && neg.contains "a: 10ms") "negative deltas filtered"
+
 def main : IO UInt32 := do
   try
     testAgentLoopReadsFile
@@ -16985,6 +17041,8 @@ def main : IO UInt32 := do
     testCodingAgentCheckDeprecatedExtensionDirs
     testCodingAgentAuthGuidanceMessages
     testCodingAgentExecCommand
+    testCodingAgentTelemetryFlag
+    testCodingAgentTimings
     testSessionJsonlRoundTrip
     testSessionResourceCleanups
     testSessionResourceCleanupAggregatesErrors
