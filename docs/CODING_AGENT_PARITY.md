@@ -39,7 +39,7 @@ Full interactive TUI modes, RPC, extensions runtime still missing.
 | `src/core/agent-session-runtime.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/core/agent-session-services.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/core/agent-session.ts` | `LeanAgent.CodingAgent.AgentSession` | partial | Thin create/prompt/compact/setModel/thinking + EventBus + optional durable SessionManager (`testCodingAgentSessionManagerAndAgentSession`); executeBash added. << Pi ~3k LOC. |
-| `src/core/auth-guidance.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
+| `src/core/auth-guidance.ts` | `LeanAgent.CodingAgent.AuthGuidance` | implemented | `getProviderLoginHelp`/`formatNoModelsAvailableMessage`/`formatNoModelSelectedMessage`/`formatNoApiKeyFoundMessage` (unknown-provider substitution) (`testCodingAgentAuthGuidanceMessages`); docs path injectable. |
 | `src/core/auth-storage.ts` | `LeanAgent.CodingAgent.AuthStorage` | partial | JSON auth.json map set/get/erase/reload (`testCodingAgentAuthStorage`); reload added. OAuth refresh + proper-lockfile concurrent lock open. |
 | `src/core/bash-executor.ts` | `LeanAgent.CodingTools.makeBashTool` + `Agent.Harness.Truncate` | partial | Real subprocess bash execution via `makeBashTool`; output truncation (`DEFAULT_MAX_BYTES`/`truncateTail`) resolves to `Harness.Truncate`. Node WriteStream temp-file spillover + rolling-buffer streaming is Exclusion-adjacent (Node streams). |
 | `src/core/compaction/branch-summarization.ts` | `LeanAgent.CodingAgent.Compaction` | partial | branchSummary via harness + coding-agent message format. |
@@ -49,7 +49,7 @@ Full interactive TUI modes, RPC, extensions runtime still missing.
 | `src/core/defaults.ts` | `LeanAgent.CodingAgent.Defaults` | implemented | `DEFAULT_THINKING_LEVEL = medium` (`testCodingAgentDefaultThinkingLevel`). |
 | `src/core/diagnostics.ts` | `LeanAgent.CodingAgent.Diagnostics` | implemented | ResourceDiagnostic + formatDiagnostic (`testCodingAgentUtilsDiagnosticsPaths`). |
 | `src/core/event-bus.ts` | `LeanAgent.CodingAgent.EventBus` | implemented | `createEventBus` / emit / on+unsubscribe / clear with handler error isolation (`testCodingAgentEventBusEmitOnClear`). |
-| `src/core/exec.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
+| `src/core/exec.ts` | `LeanAgent.CodingAgent.Exec` | implemented | `execCommand` (no-shell spawn, piped stdout/stderr, exit code, timeout kill, cooperative cancel ref) returning `ExecResult` (`testCodingAgentExecCommand`); JS `AbortSignal` → cooperative `IO.Ref Bool` (subset; polling-based). |
 | `src/core/experimental.ts` | `LeanAgent.CodingAgent.Experimental` | implemented | `PI_EXPERIMENTAL=1` flag (`testCodingAgentUtilsDiagnosticsPaths`). |
 | `src/core/export-html/ansi-to-html.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/core/export-html/index.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |

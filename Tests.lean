@@ -2,6 +2,8 @@ import LeanAgent
 import LeanAgent.AI
 import LeanAgent.CodingAgent.PromptTemplates
 import LeanAgent.CodingAgent.Migrations
+import LeanAgent.CodingAgent.AuthGuidance
+import LeanAgent.CodingAgent.Exec
 
 set_option maxRecDepth 2048
 
@@ -16920,6 +16922,46 @@ def testCodingAgentCheckDeprecatedExtensionDirs : IO Unit := do
       let w3 ← LeanAgent.CodingAgent.Migrations.checkDeprecatedExtensionDirs base2 "Project"
       assertTrue (w3.all (fun s => !(s.contains "custom tools"))) "managed binary only → no custom warning"
 
+-- ============================================================================
+-- Auth guidance messages (Pi `packages/coding-agent/src/core/auth-guidance.ts`)
+-- ============================================================================
+
+def testCodingAgentAuthGuidanceMessages : IO Unit := do
+  let docs := System.FilePath.mk "/opt/docs"
+  let help := LeanAgent.CodingAgent.AuthGuidance.getProviderLoginHelp docs
+  assertTrue (help.startsWith "Use /login to log into a provider") "help header"
+  assertTrue (help.contains "/opt/docs/providers.md") "help references providers.md"
+  assertTrue (help.contains "/opt/docs/models.md") "help references models.md"
+  let noModels := LeanAgent.CodingAgent.AuthGuidance.formatNoModelsAvailableMessage docs
+  assertTrue (noModels.startsWith "No models available. " && noModels.contains "/login") "no models message"
+  let noSel := LeanAgent.CodingAgent.AuthGuidance.formatNoModelSelectedMessage docs
+  assertTrue (noSel.startsWith "No model selected." && noSel.contains "/model to select a model") "no model selected message"
+  let noKey := LeanAgent.CodingAgent.AuthGuidance.formatNoApiKeyFoundMessage docs "anthropic"
+  assertTrue (noKey.startsWith "No API key found for anthropic.") "api key message for known provider"
+  let noKeyUnknown := LeanAgent.CodingAgent.AuthGuidance.formatNoApiKeyFoundMessage docs "unknown"
+  assertTrue (noKeyUnknown.contains "No API key found for the selected model.") "api key message substitutes for unknown provider"
+
+-- ============================================================================
+-- Shared command execution (Pi `packages/coding-agent/src/core/exec.ts`)
+-- ============================================================================
+
+def testCodingAgentExecCommand : IO Unit := do
+  let cwd ← IO.currentDir
+  let r1 ← LeanAgent.CodingAgent.Exec.execCommand "/bin/sh" #["-c", "echo hello out; echo oops err >&2"] cwd
+  assertTrue (r1.stdout.trimAscii.toString == "hello out") "exec captures stdout"
+  assertTrue (r1.stderr.trimAscii.toString == "oops err") "exec captures stderr"
+  assertTrue (r1.code == 0 && !r1.killed) "exec reports clean exit"
+  -- nonzero exit code propagates
+  let r2 ← LeanAgent.CodingAgent.Exec.execCommand "/bin/sh" #["-c", "exit 3"] cwd
+  assertTrue (r2.code == 3 && !r2.killed) "exec propagates nonzero exit code"
+  -- timeout kills the process and sets killed
+  let r3 ← LeanAgent.CodingAgent.Exec.execCommand "/bin/sh" #["-c", "sleep 5"] cwd { timeoutMs := some 250 }
+  assertTrue r3.killed "exec timeout sets killed"
+  -- cooperative cancel ref (pre-set so the loop kills on first poll)
+  let cancel ← IO.mkRef true
+  let r4 ← LeanAgent.CodingAgent.Exec.execCommand "/bin/sh" #["-c", "sleep 5"] cwd { cancel := some cancel }
+  assertTrue r4.killed "exec cancel ref kills child"
+
 def main : IO UInt32 := do
   try
     testAgentLoopReadsFile
@@ -16941,6 +16983,8 @@ def main : IO UInt32 := do
     testCodingAgentMigrateSessionsFromAgentRoot
     testCodingAgentMigrateCommandsToPrompts
     testCodingAgentCheckDeprecatedExtensionDirs
+    testCodingAgentAuthGuidanceMessages
+    testCodingAgentExecCommand
     testSessionJsonlRoundTrip
     testSessionResourceCleanups
     testSessionResourceCleanupAggregatesErrors

@@ -70,4 +70,27 @@ def getDefaultSessionDir (_cwd : System.FilePath) : IO System.FilePath :=
 /-- Pi getConfigDir (subset). -/
 def getConfigDir (overrideDir : Option String := none) : IO System.FilePath := getAgentDir overrideDir
 
+/-- Pi `getBinDir`: managed binaries directory (`<agentDir>/bin`). -/
+def getBinDir (overrideDir : Option String := none) : IO System.FilePath := do
+  pure ((← getAgentDir overrideDir) / "bin")
+
+/-- Pi `getToolsDir`: legacy managed binaries directory (`<agentDir>/tools`). -/
+def getToolsDir (overrideDir : Option String := none) : IO System.FilePath := do
+  pure ((← getAgentDir overrideDir) / "tools")
+
+/-- Pi `getPromptsDir`: prompt templates directory (`<agentDir>/prompts`). -/
+def getPromptsDir (overrideDir : Option String := none) : IO System.FilePath := do
+  pure ((← getAgentDir overrideDir) / "prompts")
+
+/-- Pi `getDocsPath`: docs directory.
+`overridePath` allows offline tests / message formatting without the runtime
+package dir (Pi resolves `<packageDir>/docs`; Lean has no runtime package dir). -/
+def getDocsPath (overridePath : Option String := none) : IO System.FilePath := do
+  match overridePath with
+  | some p => pure (System.FilePath.mk p)
+  | none =>
+      match ← IO.getEnv (appName.toUpper ++ "_DOCS_DIR") with
+      | some p => pure (System.FilePath.mk p)
+      | none => pure (System.FilePath.mk "docs")
+
 end LeanAgent.CodingAgent.Config
