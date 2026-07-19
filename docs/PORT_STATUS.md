@@ -21,6 +21,7 @@ See `FULL_PI_PORT_PROMPT.md` §8. Product remains **IN PROGRESS** until all five
 
 ## Recent slice notes
 
+- Coding-agent: `Migrations` module — startup fs migrations (`migrateAuthToAuthJson` oauth.json/settings.json apiKeys→auth.json, `migrateSessionsFromAgentRoot` stray .jsonl→sessions/<encoded-cwd>/, `migrateCommandsToPrompts`, `migrateToolsToBin`, `checkDeprecatedExtensionDirs`, `runMigrations`) + `encodeSessionDir`; offline tests (`testCodingAgentMigrations*`).
 - Coding-agent: `PromptTemplates` module — `parseCommandArgs`/`substituteArgs` (bash-style `$1`/`$@`/`${N:-default}`/`${@:N[:L]}`)/`expandPromptTemplate`/`loadPromptTemplates` with argument-hint frontmatter; full Pi `prompt-templates.test.ts` matrix ported (`testCodingAgentPromptTemplates*`); `SourceInfo` modeled.
 - Coding-agent: Mime/Frontmatter/Deprecation utils; AuthStorage; Compaction; ProviderAttribution; Config/SessionManager/AgentSession; many core/tools rows still missing.
 - Agent: force-sequential when tool.executionMode=sequential under parallel config (`testAgentLoopForceSequentialToolMode`).

@@ -1,6 +1,7 @@
 import LeanAgent
 import LeanAgent.AI
 import LeanAgent.CodingAgent.PromptTemplates
+import LeanAgent.CodingAgent.Migrations
 
 set_option maxRecDepth 2048
 
@@ -16829,6 +16830,96 @@ def testCodingAgentPromptTemplatesLoadArgumentHint : IO Unit := do
     | some t => assertTrue (t.argumentHint.isNone) "empty argument-hint ignored"
     | none => fail "expected empty-hint template"
 
+-- ============================================================================
+-- Startup migrations (Pi `packages/coding-agent/src/migrations.ts`)
+-- ============================================================================
+
+def testCodingAgentMigrationsEncodeSessionDir : IO Unit := do
+  let enc := LeanAgent.CodingAgent.Migrations.encodeSessionDir
+  assertTrue (enc "/foo/bar" == "--foo-bar--") "encode leading slash + separators"
+  assertTrue (enc "/Users/me/proj" == "--Users-me-proj--") "encode multi-segment"
+  assertTrue (enc "C:\\dev\\proj" == "--C--dev-proj--") "encode backslashes + colon"
+  assertTrue (enc "relative/path" == "--relative-path--") "encode no leading slash"
+
+def testCodingAgentMigrateAuthToAuthJson : IO Unit := do
+  IO.FS.withTempDir fun agentDir => do
+    -- legacy oauth.json
+    IO.FS.writeFile (agentDir / "oauth.json")
+      "{\"anthropic\":{\"access_token\":\"a\",\"refresh_token\":\"r\"}}"
+    -- legacy settings.json with apiKeys + unrelated field
+    IO.FS.writeFile (agentDir / "settings.json")
+      "{\"apiKeys\":{\"openai\":\"sk-xxx\"},\"theme\":\"dark\"}"
+    let providers ← LeanAgent.CodingAgent.Migrations.migrateAuthToAuthJson agentDir
+    assertTrue (providers == #["anthropic", "openai"]) "migrated providers order"
+    let authPath := agentDir / "auth.json"
+    assertTrue (← authPath.pathExists) "auth.json created"
+    let authContent ← IO.FS.readFile authPath
+    assertTrue (authContent.contains "\"anthropic\"") "auth has anthropic"
+    assertTrue (authContent.contains "\"type\": \"oauth\"") "oauth type tagged"
+    assertTrue (authContent.contains "\"access_token\": \"a\"") "oauth fields preserved"
+    assertTrue (authContent.contains "\"openai\"") "auth has openai"
+    assertTrue (authContent.contains "\"type\": \"api_key\"") "api_key type tagged"
+    assertTrue (authContent.contains "\"key\": \"sk-xxx\"") "api key preserved"
+    -- oauth.json renamed
+    assertTrue (← (agentDir / "oauth.json.migrated").pathExists) "oauth.json renamed to .migrated"
+    assertTrue (!(← (agentDir / "oauth.json").pathExists)) "oauth.json gone"
+    -- settings.json rewritten without apiKeys but keeps theme
+    let settingsContent ← IO.FS.readFile (agentDir / "settings.json")
+    assertTrue (settingsContent.contains "\"theme\": \"dark\"") "settings keeps unrelated field"
+    assertTrue (!(settingsContent.contains "apiKeys")) "settings apiKeys removed"
+    -- idempotent: second run is a no-op
+    let again ← LeanAgent.CodingAgent.Migrations.migrateAuthToAuthJson agentDir
+    assertTrue (again.isEmpty) "migrate is idempotent when auth.json exists"
+
+def testCodingAgentMigrateSessionsFromAgentRoot : IO Unit := do
+  IO.FS.withTempDir fun agentDir => do
+    IO.FS.createDirAll (agentDir / "sessions")
+    -- stray session file with a header pointing at /foo/bar
+    IO.FS.writeFile (agentDir / "abc.jsonl")
+      (String.intercalate "\n"
+        [ "{\"type\":\"session\",\"cwd\":\"/foo/bar\"}"
+        , "{\"type\":\"message\"}"
+        ])
+    -- non-session file (no header) should be left in place
+    IO.FS.writeFile (agentDir / "notes.txt") "ignore me"
+    LeanAgent.CodingAgent.Migrations.migrateSessionsFromAgentRoot agentDir
+    let expectedDir := agentDir / "sessions" / LeanAgent.CodingAgent.Migrations.encodeSessionDir "/foo/bar"
+    assertTrue (← (expectedDir / "abc.jsonl").pathExists) "session moved to encoded dir"
+    assertTrue (!(← (agentDir / "abc.jsonl").pathExists)) "session no longer in agent root"
+    assertTrue (← (agentDir / "notes.txt").pathExists) "non-jsonl file untouched"
+
+def testCodingAgentMigrateCommandsToPrompts : IO Unit := do
+  IO.FS.withTempDir fun base => do
+    IO.FS.createDirAll (base / "commands")
+    IO.FS.writeFile (base / "commands" / "ship.md") "body"
+    let migrated ← LeanAgent.CodingAgent.Migrations.migrateCommandsToPrompts base
+    assertTrue migrated "commands renamed to prompts"
+    assertTrue (← (base / "prompts").pathExists) "prompts dir exists"
+    assertTrue (← (base / "prompts" / "ship.md").pathExists) "prompt file moved"
+    assertTrue (!(← (base / "commands").pathExists) ) "commands dir gone"
+    -- idempotent: no commands left, prompts exists → false
+    let again ← LeanAgent.CodingAgent.Migrations.migrateCommandsToPrompts base
+    assertTrue (!again) "no second rename when prompts exists"
+
+def testCodingAgentCheckDeprecatedExtensionDirs : IO Unit := do
+  IO.FS.withTempDir fun base => do
+    -- hooks/ present → warning
+    IO.FS.createDirAll (base / "hooks")
+    let w1 ← LeanAgent.CodingAgent.Migrations.checkDeprecatedExtensionDirs base "Global"
+    assertTrue (w1.any (fun s => s.contains "hooks/")) "hooks/ warning"
+    -- tools/ with custom file → warning; tools/ with only managed binary → no custom warning
+    IO.FS.createDirAll (base / "tools")
+    IO.FS.writeFile (base / "tools" / "fd") "binary"
+    IO.FS.writeFile (base / "tools" / "my-tool.sh") "custom"
+    let w2 ← LeanAgent.CodingAgent.Migrations.checkDeprecatedExtensionDirs base "Global"
+    assertTrue (w2.any (fun s => s.contains "custom tools")) "custom tools warning"
+    -- tools/ with only fd → no custom warning
+    IO.FS.withTempDir fun base2 => do
+      IO.FS.createDirAll (base2 / "tools")
+      IO.FS.writeFile (base2 / "tools" / "fd") "binary"
+      let w3 ← LeanAgent.CodingAgent.Migrations.checkDeprecatedExtensionDirs base2 "Project"
+      assertTrue (w3.all (fun s => !(s.contains "custom tools"))) "managed binary only → no custom warning"
+
 def main : IO UInt32 := do
   try
     testAgentLoopReadsFile
@@ -16845,6 +16936,11 @@ def main : IO UInt32 := do
     testCodingAgentPromptTemplatesParseCommandArgs
     testCodingAgentPromptTemplatesExpand
     testCodingAgentPromptTemplatesLoadArgumentHint
+    testCodingAgentMigrationsEncodeSessionDir
+    testCodingAgentMigrateAuthToAuthJson
+    testCodingAgentMigrateSessionsFromAgentRoot
+    testCodingAgentMigrateCommandsToPrompts
+    testCodingAgentCheckDeprecatedExtensionDirs
     testSessionJsonlRoundTrip
     testSessionResourceCleanups
     testSessionResourceCleanupAggregatesErrors

@@ -101,7 +101,7 @@ Full interactive TUI modes, RPC, extensions runtime still missing.
 | `src/core/tools/write.ts` | `LeanAgent.CodingTools.makeWriteTool` | partial | writeTool stub added. |
 | `src/index.ts` | `LeanAgent.CodingTools / Main / Project` | partial | toolsIndex stub added. |
 | `src/main.ts` | `Main.lean` | partial | MVP CLI flags only |
-| `src/migrations.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
+| `src/migrations.ts` | `LeanAgent.CodingAgent.Migrations` | implemented | `migrateAuthToAuthJson`/`migrateSessionsFromAgentRoot`/`migrateCommandsToPrompts`/`migrateToolsToBin`/`checkDeprecatedExtensionDirs`/`runMigrations` + `encodeSessionDir` (`testCodingAgentMigrations*`); interactive keypress wait + POSIX 0o600 mode + keybindings.json migration (needs `core/keybindings.ts`) documented as subset. |
 | `src/modes/index.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/modes/interactive/components/armin.ts` | `LeanAgent.CodingTools / Main / Project` | partial | armin stub added. |
 | `src/modes/interactive/components/assistant-message.ts` | `LeanAgent.CodingTools / Main / Project` | partial | assistantMessage stub added. |
