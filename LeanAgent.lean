@@ -113,6 +113,7 @@ import LeanAgent.CodingAgent.Utils.OpenBrowser
 import LeanAgent.CodingAgent.Utils.ToolsManager
 import LeanAgent.CodingAgent.HttpDispatcher
 import LeanAgent.CodingAgent.Keybindings
+import LeanAgent.CodingAgent.Utils.SyntaxHighlight
 import LeanAgent.CodingAgent.ProviderAttribution
 import LeanAgent.CodingAgent.Compaction
 import LeanAgent.CodingAgent.AuthStorage

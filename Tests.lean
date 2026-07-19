@@ -25,6 +25,7 @@ import LeanAgent.CodingAgent.Utils.OpenBrowser
 import LeanAgent.CodingAgent.Utils.ToolsManager
 import LeanAgent.CodingAgent.HttpDispatcher
 import LeanAgent.CodingAgent.Keybindings
+import LeanAgent.CodingAgent.Utils.SyntaxHighlight
 
 set_option maxRecDepth 4096
 
@@ -18275,6 +18276,59 @@ def testInvalidValuesDropped : IO Unit := do
 end TestKeybindings
 
 -- ============================================================================
+-- Syntax highlight renderer (Pi `packages/coding-agent/test/syntax-highlight.test.ts`)
+-- ============================================================================
+
+namespace TestSyntaxHighlight
+
+open LeanAgent.CodingAgent.Utils.SyntaxHighlight
+
+def testRendersWithTheme : IO Unit := do
+  let html := "<span class=\"hljs-keyword\">const</span> value"
+  let out := renderHighlightedHtml html #[("keyword", fun t => s!"[keyword:{t}]")]
+  assertTrue (out == "[keyword:const] value") s!"renders spans with theme (got {out})"
+
+def testDecodesHtmlEntities : IO Unit := do
+  -- highlight.js escapes `<`/`>`/`"`/`&` as entities; numeric/hex are decoded too.
+  let html := "&lt;tag attr=&quot;value&quot;&gt;&amp;#x41;&#65;&lt;/tag&gt;"
+  let out := renderHighlightedHtml html #[]
+  assertTrue (out == "<tag attr=\"value\">&#x41;A</tag>") s!"decodes entities (got {out})"
+
+def testInheritsParentFormattingForNestedScopes : IO Unit := do
+  let interp := "$" ++ "{x}"
+  let html := s!"<span class=\"hljs-string\">a<span class=\"hljs-subst\">{interp}</span>b</span>"
+  let out := renderHighlightedHtml html #[("string", fun t => s!"[string:{t}]")]
+  let expected := s!"[string:a][string:{interp}][string:b]"
+  assertTrue (out == expected) s!"nested scope inherits parent formatter (got {out})"
+
+def testKeepsParentAcrossUnscopedSpans : IO Unit := do
+  -- A nested span with no hljs-* class keeps the parent formatter.
+  let html := "<span class=\"hljs-string\">a<span>b</span>c</span>"
+  let out := renderHighlightedHtml html #[("string", fun t => s!"[string:{t}]")]
+  assertTrue (out == "[string:a][string:b][string:c]") s!"unscoped nested span keeps parent (got {out})"
+
+def testScopeFormatterPrefixFallbacks : IO Unit := do
+  -- dot-prefix fallback: `title.function` → `title`.
+  let html := "<span class=\"hljs-title.function\">fn</span>"
+  let out := renderHighlightedHtml html #[("title", fun t => s!"[t:{t}]")]
+  assertTrue (out == "[t:fn]") s!"dot-prefix fallback (got {out})"
+  -- dash-prefix fallback: `meta-attr` → `meta`.
+  let html2 := "<span class=\"hljs-meta-attr\">x</span>"
+  let out2 := renderHighlightedHtml html2 #[("meta", fun t => s!"[m:{t}]")]
+  assertTrue (out2 == "[m:x]") s!"dash-prefix fallback (got {out2})"
+
+def testDefaultFormatterFallback : IO Unit := do
+  let html := "<span class=\"hljs-unknown\">txt</span>"
+  let out := renderHighlightedHtml html #[("default", fun t => s!"[d:{t}]")]
+  assertTrue (out == "[d:txt]") s!"default formatter applies to unmapped scope (got {out})"
+
+def testPlainTextUnchanged : IO Unit := do
+  let out := renderHighlightedHtml "plain text" #[]
+  assertTrue (out == "plain text") "no-spans text unchanged"
+
+end TestSyntaxHighlight
+
+-- ============================================================================
 -- Slash commands (Pi `packages/coding-agent/test/slash-commands.test.ts`)
 -- ============================================================================
 
@@ -18973,6 +19027,13 @@ def main : IO UInt32 := do
     TestKeybindings.testLoadsLegacyNamesInMemory
     TestKeybindings.testNonLegacyKeysPreserved
     TestKeybindings.testInvalidValuesDropped
+    TestSyntaxHighlight.testRendersWithTheme
+    TestSyntaxHighlight.testDecodesHtmlEntities
+    TestSyntaxHighlight.testInheritsParentFormattingForNestedScopes
+    TestSyntaxHighlight.testKeepsParentAcrossUnscopedSpans
+    TestSyntaxHighlight.testScopeFormatterPrefixFallbacks
+    TestSyntaxHighlight.testDefaultFormatterFallback
+    TestSyntaxHighlight.testPlainTextUnchanged
     IO.println "lean-agent tests passed"
     pure 0
   catch err =>
