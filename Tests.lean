@@ -1,5 +1,6 @@
 import LeanAgent
 import LeanAgent.AI
+import LeanAgent.CodingAgent.PromptTemplates
 
 set_option maxRecDepth 2048
 
@@ -16635,6 +16636,199 @@ def testModelsCollectionProviderErrorDiagnosticsPreserveResponseHeadersWhenOnRes
           "expected throwing-hook diagnostic response headers"
     | none => fail "expected throwing-hook diagnostic entry"
 
+-- ============================================================================
+-- Prompt templates (Pi `packages/coding-agent/test/prompt-templates.test.ts`)
+-- ============================================================================
+
+def testCodingAgentPromptTemplatesSubstituteArgs : IO Unit := do
+  let sa := LeanAgent.CodingAgent.PromptTemplates.substituteArgs
+  -- basic $ARGUMENTS / $@
+  assertTrue (sa "Test: $ARGUMENTS" #["a", "b", "c"] == "Test: a b c") "$ARGUMENTS join"
+  assertTrue (sa "Test: $@" #["a", "b", "c"] == "Test: a b c") "$@ join"
+  assertTrue (sa "$@" #["foo", "bar", "baz"] == sa "$ARGUMENTS" #["foo", "bar", "baz"]) "$@ == $ARGUMENTS"
+  -- CRITICAL: argument values are inserted literally (no recursive substitution)
+  assertTrue (sa "$ARGUMENTS" #["$1", "$ARGUMENTS"] == "$1 $ARGUMENTS") "no recursive substitution"
+  assertTrue (sa "$@" #["$100", "$1"] == "$100 $1") "no partial recursive substitution"
+  -- mixed positional + aggregate
+  assertTrue (sa "$1: $ARGUMENTS" #["prefix", "a", "b"] == "prefix: prefix a b") "mixed positional+aggregate"
+  -- empty args
+  assertTrue (sa "Test: $ARGUMENTS" #[] == "Test: ") "empty $ARGUMENTS"
+  assertTrue (sa "Test: $1" #[] == "Test: ") "empty $1"
+  -- multiple occurrences
+  assertTrue (sa "$ARGUMENTS and $ARGUMENTS" #["a", "b"] == "a b and a b") "multiple $ARGUMENTS"
+  -- out-of-range numbered → empty (spaces preserved)
+  assertTrue (sa "$1 $2 $3 $4 $5" #["a", "b"] == "a b   ") "out-of-range numbered"
+  -- unicode
+  assertTrue (sa "$ARGUMENTS" #["日本語", "🎉", "café"] == "日本語 🎉 café") "unicode args"
+  -- preserve newlines/tabs in values
+  assertTrue (sa "$1 $2" #["line1\nline2", "tab\tthere"] == "line1\nline2 tab\tthere") "newlines/tabs preserved"
+  -- consecutive patterns
+  assertTrue (sa "$1$2" #["a", "b"] == "ab") "consecutive $1$2"
+  -- $0 is empty
+  assertTrue (sa "$0" #["a", "b"] == "") "$0 empty"
+  -- decimal: only integer part matches
+  assertTrue (sa "$1.5" #["a"] == "a.5") "decimal only integer part"
+  -- part of word
+  assertTrue (sa "pre$ARGUMENTS" #["a", "b"] == "prea b") "$ARGUMENTS part of word"
+  assertTrue (sa "pre$@" #["a", "b"] == "prea b") "$@ part of word"
+  -- case-sensitive
+  assertTrue (sa "$arguments $Arguments $ARGUMENTS" #["a", "b"] == "$arguments $Arguments a b") "case-sensitive"
+  -- multi-digit positional
+  let bigArgs := (List.range 15).toArray.map (fun i => s!"val{i}")
+  assertTrue (sa "$10 $12 $15" bigArgs == "val9 val11 val14") "multi-digit positional"
+  -- non-matching patterns left alone
+  assertTrue (sa "$A $$ $ $ARGS" #["a"] == "$A $$ $ $ARGS") "non-matching patterns"
+  -- no placeholders
+  assertTrue (sa "Just plain text" #["a", "b"] == "Just plain text") "no placeholders"
+  assertTrue (sa "$1 $2 $@" #["a", "b", "c"] == "a b a b c") "only placeholders"
+
+def testCodingAgentPromptTemplatesPositionalDefaults : IO Unit := do
+  let sa := LeanAgent.CodingAgent.PromptTemplates.substituteArgs
+  assertTrue (sa "List exactly ${1:-7} next steps" #[] == "List exactly 7 next steps") "default when missing"
+  assertTrue (sa "List exactly ${1:-7} next steps" #["3"] == "List exactly 3 next steps") "positional when present"
+  assertTrue (sa "Mode: ${1:-brief}" #[""] == "Mode: brief") "default when empty"
+  assertTrue (sa "${1:-7} ${2:-brief}" #[] == "7 brief") "multiple defaults empty"
+  assertTrue (sa "${1:-7} ${2:-brief}" #["3"] == "3 brief") "multiple defaults one"
+  assertTrue (sa "${1:-7} ${2:-brief}" #["3", "verbose"] == "3 verbose") "multiple defaults both"
+  -- no recursive substitution in arg/default values
+  assertTrue (sa "${1:-7}" #["$ARGUMENTS"] == "$ARGUMENTS") "no recursive in arg"
+  assertTrue (sa "${1:-7}" #["$1"] == "$1") "no recursive in arg2"
+  assertTrue (sa "${1:-$ARGUMENTS}" #["a", "b"] == "a") "no recursive in default when present"
+  assertTrue (sa "${3:-$ARGUMENTS}" #["a", "b"] == "$ARGUMENTS") "no recursive in default when missing"
+  -- default with spaces + out-of-range
+  assertTrue (sa "${1:-seven steps}" #[] == "seven steps") "default with spaces"
+  assertTrue (sa "${3:-fallback}" #["a", "b"] == "fallback") "out-of-range default"
+  -- mix with existing placeholders
+  assertTrue (sa "$1 ${2:-x} $ARGUMENTS" #["a"] == "a x a") "mix defaults with placeholders"
+
+def testCodingAgentPromptTemplatesArraySlicing : IO Unit := do
+  let sa := LeanAgent.CodingAgent.PromptTemplates.substituteArgs
+  -- slice from index
+  assertTrue (sa "${@:2}" #["a", "b", "c", "d"] == "b c d") "${@:2}"
+  assertTrue (sa "${@:1}" #["a", "b", "c"] == "a b c") "${@:1}"
+  assertTrue (sa "${@:3}" #["a", "b", "c", "d"] == "c d") "${@:3}"
+  -- slice with length
+  assertTrue (sa "${@:2:2}" #["a", "b", "c", "d"] == "b c") "${@:2:2}"
+  assertTrue (sa "${@:1:1}" #["a", "b", "c"] == "a") "${@:1:1}"
+  assertTrue (sa "${@:2:3}" #["a", "b", "c", "d", "e"] == "b c d") "${@:2:3}"
+  -- out of range
+  assertTrue (sa "${@:99}" #["a", "b"] == "") "${@:99}"
+  assertTrue (sa "${@:10:5}" #["a", "b"] == "") "${@:10:5}"
+  -- zero-length
+  assertTrue (sa "${@:2:0}" #["a", "b", "c"] == "") "${@:2:0}"
+  -- length exceeding array
+  assertTrue (sa "${@:2:99}" #["a", "b", "c"] == "b c") "${@:2:99}"
+  -- process slice before simple $@
+  assertTrue (sa "${@:2} vs $@" #["a", "b", "c"] == "b c vs a b c") "slice before $@"
+  -- ${@:0} is all args
+  assertTrue (sa "${@:0}" #["a", "b", "c"] == "a b c") "${@:0} all"
+  -- empty / single
+  assertTrue (sa "${@:2}" #[] == "") "${@:2} empty"
+  assertTrue (sa "${@:1}" #["only"] == "only") "${@:1} single"
+  assertTrue (sa "${@:2}" #["only"] == "") "${@:2} single"
+  -- slice in middle of text
+  assertTrue (sa "Process ${@:2} with $1" #["tool", "file1", "file2"] == "Process file1 file2 with tool") "slice mid-text"
+  -- combine all forms
+  let template := "Run $1 on ${@:2:2}, then process $@"
+  let args := #["eslint", "file1.ts", "file2.ts", "file3.ts"]
+  assertTrue (sa template args == "Run eslint on file1.ts file2.ts, then process eslint file1.ts file2.ts file3.ts")
+    "combine positional/slice/wildcard"
+  -- slice with no spacing
+  assertTrue (sa "prefix${@:2}suffix" #["a", "b", "c"] == "prefixb csuffix") "slice no spacing"
+
+def testCodingAgentPromptTemplatesParseCommandArgs : IO Unit := do
+  let pa := LeanAgent.CodingAgent.PromptTemplates.parseCommandArgs
+  assertTrue (pa "a b c" == #["a", "b", "c"]) "simple"
+  assertTrue (pa "\"first arg\" second" == #["first arg", "second"]) "double-quoted with spaces"
+  assertTrue (pa "'first arg' second" == #["first arg", "second"]) "single-quoted"
+  assertTrue (pa "\"double\" 'single' \"double again\"" == #["double", "single", "double again"]) "mixed quotes"
+  assertTrue (pa "" == #[]) "empty string"
+  assertTrue (pa "a  b   c" == #["a", "b", "c"]) "extra spaces"
+  assertTrue (pa "a\tb\tc" == #["a", "b", "c"]) "tabs as separators"
+  assertTrue (pa "\"\" \" \"" == #[" "]) "empty quotes skipped, space kept"
+  assertTrue (pa "$100 @user #tag" == #["$100", "@user", "#tag"]) "special characters"
+  assertTrue (pa "日本語 🎉 café" == #["日本語", "🎉", "café"]) "unicode"
+  assertTrue (pa "\"line1\nline2\" second" == #["line1\nline2", "second"]) "newlines in quoted"
+  assertTrue (pa "label-2\n\nHere is some description #2." == #["label-2", "Here", "is", "some", "description", "#2."])
+    "unquoted newlines as separators"
+  assertTrue (pa "a\n\n\tb  c" == #["a", "b", "c"]) "collapse mixed whitespace"
+  assertTrue (pa "a b c   " == #["a", "b", "c"]) "trailing spaces"
+  assertTrue (pa "   a b c" == #["a", "b", "c"]) "leading spaces"
+
+def testCodingAgentPromptTemplatesExpand : IO Unit := do
+  let exp := LeanAgent.CodingAgent.PromptTemplates.expandPromptTemplate
+  let mk (name content : String) : LeanAgent.CodingAgent.PromptTemplates.PromptTemplate :=
+    { name := name, description := "test", content := content, filePath := s!"/tmp/{name}.md" }
+  -- split args on unquoted newlines
+  let r1 := exp "/arg-test label-2\n\nHere is some description #2."
+    #[mk "arg-test" "- arg1: $1\n- rest: ${@:2}"]
+  assertTrue (r1 == "- arg1: label-2\n- rest: Here is some description #2.") "split args on newlines"
+  -- command separated from args by newline
+  let r2 := exp "/arg-test\nlabel-2" #[mk "arg-test" "arg1: $1"]
+  assertTrue (r2 == "arg1: label-2") "command + newline + arg"
+  -- non-template text returned unchanged
+  assertTrue (exp "plain text" #[] == "plain text") "non-slash unchanged"
+  assertTrue (exp "/unknown cmd" #[] == "/unknown cmd") "unknown template unchanged"
+
+def testCodingAgentPromptTemplatesLoadArgumentHint : IO Unit := do
+  IO.FS.withTempDir fun dir => do
+    -- required argument-hint with quotes
+    IO.FS.writeFile (dir / "pr.md")
+      (String.intercalate "\n"
+        [ "---"
+        , "description: Review PRs from URLs with structured issue and code analysis"
+        , "argument-hint: \"<PR-URL>\""
+        , "---"
+        , "You are given one or more GitHub PR URLs: $@"
+        ])
+    -- optional argument-hint with brackets
+    IO.FS.writeFile (dir / "wr.md")
+      (String.intercalate "\n"
+        [ "---"
+        , "description: Finish the current task end-to-end with changelog, commit, and push"
+        , "argument-hint: \"[instructions]\""
+        , "---"
+        , "Wrap it. Additional instructions: $ARGUMENTS"
+        ])
+    -- no argument-hint
+    IO.FS.writeFile (dir / "cl.md")
+      (String.intercalate "\n"
+        [ "---"
+        , "description: Audit changelog entries before release"
+        , "---"
+        , "Audit changelog entries for all commits since the last release."
+        ])
+    -- empty argument-hint
+    IO.FS.writeFile (dir / "empty-hint.md")
+      (String.intercalate "\n"
+        [ "---"
+        , "description: A command with empty hint"
+        , "argument-hint: \"\""
+        , "---"
+        , "Do something"
+        ])
+    let templates ← LeanAgent.CodingAgent.PromptTemplates.loadPromptTemplates
+      { cwd := dir, agentDir := dir, promptPaths := #[dir], includeDefaults := false }
+    let pr := templates.find? (fun t => t.name == "pr")
+    match pr with
+    | some t =>
+        assertTrue (t.argumentHint == some "<PR-URL>") "required argument-hint"
+        assertTrue (t.description == "Review PRs from URLs with structured issue and code analysis") "pr description"
+    | none => fail "expected pr template"
+    let wr := templates.find? (fun t => t.name == "wr")
+    match wr with
+    | some t =>
+        assertTrue (t.argumentHint == some "[instructions]") "optional argument-hint"
+    | none => fail "expected wr template"
+    let cl := templates.find? (fun t => t.name == "cl")
+    match cl with
+    | some t => assertTrue (t.argumentHint.isNone) "no argument-hint"
+    | none => fail "expected cl template"
+    let eh := templates.find? (fun t => t.name == "empty-hint")
+    match eh with
+    | some t => assertTrue (t.argumentHint.isNone) "empty argument-hint ignored"
+    | none => fail "expected empty-hint template"
+
 def main : IO UInt32 := do
   try
     testAgentLoopReadsFile
@@ -16645,6 +16839,12 @@ def main : IO UInt32 := do
     testBashToolTimeout
     testProjectCommandExpansion
     testProjectSkillExpansion
+    testCodingAgentPromptTemplatesSubstituteArgs
+    testCodingAgentPromptTemplatesPositionalDefaults
+    testCodingAgentPromptTemplatesArraySlicing
+    testCodingAgentPromptTemplatesParseCommandArgs
+    testCodingAgentPromptTemplatesExpand
+    testCodingAgentPromptTemplatesLoadArgumentHint
     testSessionJsonlRoundTrip
     testSessionResourceCleanups
     testSessionResourceCleanupAggregatesErrors

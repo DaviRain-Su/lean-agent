@@ -21,6 +21,7 @@ See `FULL_PI_PORT_PROMPT.md` §8. Product remains **IN PROGRESS** until all five
 
 ## Recent slice notes
 
+- Coding-agent: `PromptTemplates` module — `parseCommandArgs`/`substituteArgs` (bash-style `$1`/`$@`/`${N:-default}`/`${@:N[:L]}`)/`expandPromptTemplate`/`loadPromptTemplates` with argument-hint frontmatter; full Pi `prompt-templates.test.ts` matrix ported (`testCodingAgentPromptTemplates*`); `SourceInfo` modeled.
 - Coding-agent: Mime/Frontmatter/Deprecation utils; AuthStorage; Compaction; ProviderAttribution; Config/SessionManager/AgentSession; many core/tools rows still missing.
 - Agent: force-sequential when tool.executionMode=sequential under parallel config (`testAgentLoopForceSequentialToolMode`).
 - Agent: session entry types model_change/thinking_level_change/compaction in buildContext (`testHarnessSessionContextEntryTypes`).

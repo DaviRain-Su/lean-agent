@@ -69,7 +69,7 @@ Full interactive TUI modes, RPC, extensions runtime still missing.
 | `src/core/output-guard.ts` | — | deferred | Exclusion: Node `process.stdout.write` takeover / raw stdout queue — not portable to Lean IO. |
 | `src/core/package-manager.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/core/project-trust.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
-| `src/core/prompt-templates.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
+| `src/core/prompt-templates.ts` | `LeanAgent.CodingAgent.PromptTemplates` | implemented | `parseCommandArgs`/`substituteArgs`/`expandPromptTemplate` + `loadPromptTemplates` (global/project/explicit) with argument-hint frontmatter (`testCodingAgentPromptTemplates*`); ported full Pi `prompt-templates.test.ts` matrix. |
 | `src/core/provider-attribution.ts` | `LeanAgent.CodingAgent.ProviderAttribution` | partial | Host match + OpenRouter/NVIDIA/Cloudflare/Vercel headers (`testCodingAgentProviderAttribution`); hostMatch added; isOpenCode added. OpenCode host path open. |
 | `src/core/provider-display-names.ts` | `LeanAgent.CodingAgent.ProviderDisplayNames` | implemented | BUILT_IN map + getProviderDisplayName (`testCodingAgentMessagesAndProviderNames`). |
 | `src/core/resolve-config-value.ts` | `LeanAgent.CodingAgent.ResolveConfigValue` | partial | `$VAR`/`${VAR}` template + env resolve offline; `!command` detected but not executed (`testCodingAgentResolveConfigValue`); resolve added. |
@@ -80,7 +80,7 @@ Full interactive TUI modes, RPC, extensions runtime still missing.
 | `src/core/settings-manager.ts` | `LeanAgent.CodingTools / Main / Project` | partial | settingsManager stub added. |
 | `src/core/skills.ts` | `LeanAgent.CodingAgent.Skills` | partial | SKILL.md frontmatter parse + project skill infos (`testCodingAgentSkillsParse`); skillCollides helper added; ignore/collision matrix open; loadProjectSkill added. |
 | `src/core/slash-commands.ts` | `LeanAgent.CodingTools / Main / Project` | partial | slashCommands stub added. |
-| `src/core/source-info.ts` | `LeanAgent.CodingTools / Main / Project` | partial | sourceInfo stub added. |
+| `src/core/source-info.ts` | `LeanAgent.CodingAgent.PromptTemplates.SourceInfo` | partial | `SourceInfo` (path/source/scope/origin/baseDir) + `SourceScope`/`SourceOrigin` modeled in PromptTemplates; `createSyntheticSourceInfo` used by `loadPromptTemplates`. Not full `PathMetadata`/package-manager integration. |
 | `src/core/bash-executor.ts` | `LeanAgent.CodingTools / Main / Project` | partial | bashExecutor stub added; executeBash in AgentSession now delegates to the bash tool and appends a custom "bashExecution" message (real behavior, not pure stub). |
 | `src/core/telemetry.ts` | `LeanAgent.CodingTools / Main / Project` | partial | telemetry stub added. |
 | `src/core/timings.ts` | `LeanAgent.CodingTools / Main / Project` | partial | timings stub added. |
@@ -99,7 +99,6 @@ Full interactive TUI modes, RPC, extensions runtime still missing.
 | `src/core/tools/tool-definition-wrapper.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/core/tools/truncate.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/core/tools/write.ts` | `LeanAgent.CodingTools.makeWriteTool` | partial | writeTool stub added. |
-| `src/core/tools/truncate.ts` | `LeanAgent.CodingTools / Main / Project` | partial | truncate stub added. |
 | `src/index.ts` | `LeanAgent.CodingTools / Main / Project` | partial | toolsIndex stub added. |
 | `src/main.ts` | `Main.lean` | partial | MVP CLI flags only |
 | `src/migrations.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |

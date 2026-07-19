@@ -110,6 +110,7 @@ import LeanAgent.CodingAgent.Utils.Deprecation
 import LeanAgent.CodingAgent.Utils.Frontmatter
 import LeanAgent.CodingAgent.Utils.Mime
 import LeanAgent.CodingAgent.Skills
+import LeanAgent.CodingAgent.PromptTemplates
 import LeanAgent.Agent
 import LeanAgent.Agent.Harness
 import LeanAgent.Core
