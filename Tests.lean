@@ -21,6 +21,8 @@ import LeanAgent.CodingAgent.Utils.Changelog
 import LeanAgent.CodingAgent.Utils.PiUserAgent
 import LeanAgent.CodingAgent.Utils.Html
 import LeanAgent.CodingAgent.Utils.Ansi
+import LeanAgent.CodingAgent.Utils.OpenBrowser
+import LeanAgent.CodingAgent.Utils.ToolsManager
 
 set_option maxRecDepth 4096
 
@@ -18020,6 +18022,114 @@ def testDigitAsFinalByte : IO Unit := do
 end TestAnsi
 
 -- ============================================================================
+-- Open browser (Pi `packages/coding-agent/src/utils/open-browser.ts`)
+-- ============================================================================
+
+namespace TestOpenBrowser
+
+open LeanAgent.CodingAgent.Utils.OpenBrowser
+
+def testLauncherFor : IO Unit := do
+  -- The launcher depends on host platform; just verify it returns a non-empty
+  -- command and the target is passed through as an arg.
+  let (cmd, args) := launcherFor "https://example.com"
+  assertTrue (!cmd.isEmpty) "launcher command non-empty"
+  assertTrue (args.contains "https://example.com") "target appears in args"
+
+def testOpenBrowserBestEffort : IO Unit := do
+  -- Best-effort: a bogus target must not throw (errors swallowed).
+  openBrowser "https://example.com"
+  -- Reaching here means no exception.
+  assertTrue true "openBrowser does not throw on a normal target"
+
+end TestOpenBrowser
+
+-- ============================================================================
+-- Tools manager (Pi `packages/coding-agent/src/utils/tools-manager.ts`)
+-- ============================================================================
+
+namespace TestToolsManager
+
+open LeanAgent.CodingAgent.Utils.ToolsManager
+
+def testFdAssetNames : IO Unit := do
+  assertTrue (fdAssetName "10.0.0" "darwin" "arm64" == some "fd-v10.0.0-aarch64-apple-darwin.tar.gz")
+    "fd darwin arm64"
+  assertTrue (fdAssetName "10.0.0" "darwin" "x64" == some "fd-v10.0.0-x86_64-apple-darwin.tar.gz")
+    "fd darwin x64"
+  assertTrue (fdAssetName "10.0.0" "linux" "arm64" == some "fd-v10.0.0-aarch64-unknown-linux-gnu.tar.gz")
+    "fd linux arm64"
+  assertTrue (fdAssetName "10.0.0" "win32" "x64" == some "fd-v10.0.0-x86_64-pc-windows-msvc.zip")
+    "fd win32 x64 (zip)"
+  assertTrue (fdAssetName "10.0.0" "bsd" "x64" |>.isNone) "fd unknown platform → none"
+
+def testRgAssetNames : IO Unit := do
+  assertTrue (rgAssetName "14.0.0" "darwin" "arm64" == some "ripgrep-14.0.0-aarch64-apple-darwin.tar.gz")
+    "rg darwin arm64"
+  assertTrue (rgAssetName "14.0.0" "linux" "arm64" == some "ripgrep-14.0.0-aarch64-unknown-linux-gnu.tar.gz")
+    "rg linux arm64 (gnu)"
+  assertTrue (rgAssetName "14.0.0" "linux" "x64" == some "ripgrep-14.0.0-x86_64-unknown-linux-musl.tar.gz")
+    "rg linux x64 (musl)"
+  assertTrue (rgAssetName "14.0.0" "win32" "x64" == some "ripgrep-14.0.0-x86_64-pc-windows-msvc.zip")
+    "rg win32 x64 (zip)"
+
+def testToolRegistry : IO Unit := do
+  match toolConfig? "fd" with
+  | some c =>
+    assertTrue (c.repo == "sharkdp/fd") "fd repo"
+    assertTrue (c.binaryName == "fd") "fd binary name"
+    assertTrue (c.tagPrefix == "v") "fd tag prefix v"
+    assertTrue (c.systemBinaryNames.contains "fdfind") "fd system names include fdfind"
+  | none => fail "fd config missing"
+  match toolConfig? "rg" with
+  | some c =>
+    assertTrue (c.repo == "BurntSushi/ripgrep") "rg repo"
+    assertTrue (c.binaryName == "rg") "rg binary name"
+    assertTrue (c.tagPrefix == "") "rg tag prefix empty"
+  | none => fail "rg config missing"
+  assertTrue (toolConfig? "nonexistent" |>.isNone) "unknown tool → none"
+
+def testOfflineModeGate : IO Unit := do
+  unsetEnvVar "PI_OFFLINE"
+  let off0 ← isOfflineModeEnabled
+  assertTrue (!off0) "PI_OFFLINE unset → false"
+  setEnvVar "PI_OFFLINE" "1"
+  let off1 ← isOfflineModeEnabled
+  assertTrue off1 "PI_OFFLINE=1 → true"
+  setEnvVar "PI_OFFLINE" "true"
+  let off2 ← isOfflineModeEnabled
+  assertTrue off2 "PI_OFFLINE=true → true"
+  setEnvVar "PI_OFFLINE" "YES"
+  let off3 ← isOfflineModeEnabled
+  assertTrue off3 "PI_OFFLINE=YES (case-insensitive) → true"
+  setEnvVar "PI_OFFLINE" "0"
+  let off4 ← isOfflineModeEnabled
+  assertTrue (!off4) "PI_OFFLINE=0 → false"
+  unsetEnvVar "PI_OFFLINE"
+
+def testCommandExists : IO Unit := do
+  -- `/bin/echo` exists on POSIX hosts.
+  let ok ← commandExists "/bin/echo"
+  assertTrue ok "/bin/echo --version succeeds"
+  -- A guaranteed-missing command should fail.
+  let ok2 ← commandExists "nonexistent-command-12345-xyz"
+  assertTrue (!ok2) "missing command → false"
+
+def testGetToolPathFallback : IO Unit := do
+  -- `rg`: either resolved from the local tools dir, a system PATH name, or none.
+  let path? ← getToolPath "rg"
+  let onPath ← commandExists "rg"
+  if onPath then
+    assertTrue (path?.isSome) "rg on PATH → getToolPath returns a name"
+  else
+    assertTrue (path?.isNone) "rg not on PATH → getToolPath returns none"
+  -- Unknown tool key → none.
+  let unknown? ← getToolPath "nonexistent"
+  assertTrue (unknown?.isNone) "getToolPath unknown tool → none"
+
+end TestToolsManager
+
+-- ============================================================================
 -- Slash commands (Pi `packages/coding-agent/test/slash-commands.test.ts`)
 -- ============================================================================
 
@@ -18701,6 +18811,14 @@ def main : IO UInt32 := do
     TestAnsi.testC1CsiByte
     TestAnsi.testStripsMixedToolOutput
     TestAnsi.testDigitAsFinalByte
+    TestOpenBrowser.testLauncherFor
+    TestOpenBrowser.testOpenBrowserBestEffort
+    TestToolsManager.testFdAssetNames
+    TestToolsManager.testRgAssetNames
+    TestToolsManager.testToolRegistry
+    TestToolsManager.testOfflineModeGate
+    TestToolsManager.testCommandExists
+    TestToolsManager.testGetToolPathFallback
     IO.println "lean-agent tests passed"
     pure 0
   catch err =>

@@ -173,14 +173,14 @@ Full interactive TUI modes, RPC, extensions runtime still missing.
 | `src/utils/image-resize.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/utils/json.ts` | `LeanAgent.CodingAgent.Utils.JsonComments` | implemented | stripJsonComments offline (`testCodingAgentUtilsDiagnosticsPaths`). |
 | `src/utils/mime.ts` | `LeanAgent.CodingAgent.Utils.Mime` | partial | JPEG/PNG/GIF/WEBP magic sniff offline (`testCodingAgentMimeSniff`); BMP/APNG edge cases open. |
-| `src/utils/open-browser.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
+| `src/utils/open-browser.ts` | `LeanAgent.CodingAgent.Utils.OpenBrowser` | implemented | `openBrowser` (platform launcher: `open`/`xdg-open`/`rundll32 url.dll,FileProtocolHandler`), no-shell, detached, best-effort error swallowing; `launcherFor` exposed for tests (`TestOpenBrowser.testLauncherFor`/`testOpenBrowserBestEffort`). |
 | `src/utils/paths.ts` | `LeanAgent.CodingAgent.Utils.Paths` | partial | isLocalPath/normalizePath/canonicalizePath offline subset. |
 | `src/utils/photon.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/utils/pi-user-agent.ts` | `LeanAgent.CodingAgent.Utils.PiUserAgent` | implemented | `getPiUserAgent` (`pi/<version> (<platform>; <runtime>; <arch>)`) with injectable segments; runtime reports Lean toolchain instead of node/bun (`TestPiUserAgent.testGetPiUserAgentFormat`/`testInjectableSegments`/`testVersionWithPreRelease`). |
 | `src/utils/shell.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/utils/sleep.ts` | `LeanAgent.CodingAgent.Utils.Sleep` | implemented | abort-aware sleep (`testCodingAgentUtilsDiagnosticsPaths`). |
 | `src/utils/syntax-highlight.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
-| `src/utils/tools-manager.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
+| `src/utils/tools-manager.ts` | `LeanAgent.CodingAgent.Utils.ToolsManager` | partial | `ToolConfig` registry (fd/rg) + `fdAssetName`/`rgAssetName` per-platform release-asset computation + `isOfflineModeEnabled` (`PI_OFFLINE`) + `commandExists` (no-shell `--version` probe) + `getToolPath` (local tools-dir → system-PATH fallback) (`TestToolsManager.*`). GitHub-release download + tar/zip extraction (`getLatestVersion`/`downloadTool`/`ensureTool`) deferred (HTTP transport + Node streams + tar/unzip — Exclusion List §7-adjacent). |
 | `src/utils/version-check.ts` | `LeanAgent.CodingAgent.Utils.VersionCheck` | implemented | Self-contained semver `parseSemver?`/`compareSemver` (major.minor.patch + prerelease precedence: numeric<alphanumeric, numeric-by-value, fewer-fields-lower) + `comparePackageVersions`/`isNewerPackageVersion`; network entry points (`getLatestPiRelease`/`getLatestPiVersion`/`checkForNewPiVersion`) honor `PI_SKIP_VERSION_CHECK`/`PI_OFFLINE` env gates and take an injectable `LatestVersionTransport` (`TestVersionCheck.testComparePackageVersions`/`testIsNewerPackageVersion`/`testParseSemverValidity`/`testPrereleasePrecedence`/`testVersionCheckDisabledGate`/`testGetLatestPiReleaseParsesJson`/`testGetLatestPiReleaseRejectsMissingVersion`/`testCheckForNewPiVersionOnlyReturnsNewer`). npm `semver` dep replaced by the in-tree parser; runtime HTTP wiring deferred. |
 | `src/utils/windows-self-update.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 
