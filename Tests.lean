@@ -17860,6 +17860,104 @@ def testTryNFDVariantPassThrough : IO Unit := do
 end TestPathUtils
 
 -- ============================================================================
+-- File mutation queue (Pi `core/tools/file-mutation-queue.ts`)
+-- ============================================================================
+
+namespace TestFileMutationQueue
+
+open LeanAgent.CodingAgent.Tools.FileMutationQueue
+
+/-- Validate a `*-start`/`*-end` log has no overlapping critical sections. -/
+partial def checkNonOverlapping (es : List String) (openLabel : Option String) : Bool :=
+  match es with
+  | [] => openLabel.isNone
+  | s :: rest =>
+      if s.endsWith "-start" then
+        match openLabel with
+        | some _ => false  -- nested start: overlap
+        | none => checkNonOverlapping rest (some (s.dropRight 6))
+      else if s.endsWith "-end" then
+        match openLabel with
+        | some lbl => if s == lbl ++ "-end" then checkNonOverlapping rest none else false
+        | none => false
+      else checkNonOverlapping rest openLabel
+
+def testGetMutationQueueKeyExisting : IO Unit := do
+  let dir ← IO.FS.createTempDir
+  let f := dir / "a.txt"
+  IO.FS.withFile f .write (fun h => h.putStr "x")
+  let key ← getMutationQueueKey f.toString
+  let real := (← IO.FS.realPath f).toString
+  assertTrue (key == real) s!"existing key == realpath: {key} vs {real}"
+  IO.FS.removeDirAll dir
+
+def testGetMutationQueueKeyMissing : IO Unit := do
+  let key ← getMutationQueueKey "/nonexistent/dir/file.txt"
+ -- Missing entry falls back to the lexically-resolved path (no throw).
+  assertTrue (key == "/nonexistent/dir/file.txt") s!"missing key fallback: {key}"
+
+def testWithFileMutationQueueReturnsResult : IO Unit := do
+  resetForTests
+  let n ← withFileMutationQueue "/tmp/x.txt" (pure 42)
+  assertTrue (n == 42) "returns fn result"
+
+def testGetOrCreateQueueReuses : IO Unit := do
+  resetForTests
+  let _ ← getOrCreateQueue "/tmp/reuse.txt"
+  let _ ← getOrCreateQueue "/tmp/reuse.txt"
+  let n ← queueCount
+  assertTrue (n == 1) s!"same key reuses one queue entry: count={n}"
+  let _ ← getOrCreateQueue "/tmp/other.txt"
+  let n2 ← queueCount
+  assertTrue (n2 == 2) s!"different key adds an entry: count={n2}"
+
+def testWithFileMutationQueueSerializesSameFile : IO Unit := do
+  resetForTests
+  let dir ← IO.FS.createTempDir
+  let f := (dir / "ser.txt").toString
+  IO.FS.withFile (dir / "ser.txt") .write (fun h => h.putStr "")
+  let log ← IO.mkRef (#[] : Array String)
+  let work (label : String) : IO Unit := do
+    withFileMutationQueue f do
+      log.modify (·.push (label ++ "-start"))
+      IO.sleep 5
+      log.modify (·.push (label ++ "-end"))
+  let t1 ← IO.asTask (work "A")
+  let t2 ← IO.asTask (work "B")
+  match ← IO.wait t1 with
+  | .ok _ => pure ()
+  | .error e => throw e
+  match ← IO.wait t2 with
+  | .ok _ => pure ()
+  | .error e => throw e
+  let entries ← log.get
+  let ok := checkNonOverlapping entries.toList none
+  assertTrue ok s!"serialized (non-overlapping): {entries}"
+  IO.FS.removeDirAll dir
+
+def testWithFileMutationQueueParallelDifferentFiles : IO Unit := do
+  resetForTests
+  let dir ← IO.FS.createTempDir
+  let fA := (dir / "a.txt").toString
+  let fB := (dir / "b.txt").toString
+  IO.FS.withFile (dir / "a.txt") .write (fun h => h.putStr "")
+  IO.FS.withFile (dir / "b.txt") .write (fun h => h.putStr "")
+  -- Different files use distinct mutexes; both mutations complete successfully.
+  let work (f : String) : IO String := do
+    withFileMutationQueue f (pure f)
+  let t1 ← IO.asTask (work fA)
+  let t2 ← IO.asTask (work fB)
+  match ← IO.wait t1 with
+  | .ok r => assertTrue (r == fA) "file A result"
+  | .error e => throw e
+  match ← IO.wait t2 with
+  | .ok r => assertTrue (r == fB) "file B result"
+  | .error e => throw e
+  IO.FS.removeDirAll dir
+
+end TestFileMutationQueue
+
+-- ============================================================================
 -- Git URL parsing (Pi `packages/coding-agent/test/git-ssh-url.test.ts`)
 -- ============================================================================
 
@@ -19419,6 +19517,12 @@ def main : IO UInt32 := do
     TestPathUtils.testTryMacOSScreenshotPathPure
     TestPathUtils.testTryCurlyQuoteVariantPure
     TestPathUtils.testTryNFDVariantPassThrough
+    TestFileMutationQueue.testGetMutationQueueKeyExisting
+    TestFileMutationQueue.testGetMutationQueueKeyMissing
+    TestFileMutationQueue.testWithFileMutationQueueReturnsResult
+    TestFileMutationQueue.testGetOrCreateQueueReuses
+    TestFileMutationQueue.testWithFileMutationQueueSerializesSameFile
+    TestFileMutationQueue.testWithFileMutationQueueParallelDifferentFiles
     IO.println "lean-agent tests passed"
     pure 0
   catch err =>

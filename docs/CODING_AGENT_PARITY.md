@@ -88,7 +88,7 @@ Full interactive TUI modes, RPC, extensions runtime still missing.
 | `src/core/tools/bash.ts` | `LeanAgent.CodingTools.makeBashTool` | partial |  |
 | `src/core/tools/edit-diff.ts` | `LeanAgent.CodingTools / Main / Project` | partial | editDiff stub added. |
 | `src/core/tools/edit.ts` | `LeanAgent.CodingTools.makeEditTool` | partial |  |
-| `src/core/tools/file-mutation-queue.ts` | `LeanAgent.CodingTools / Main / Project` | partial | fileMutationQueue stub added. |
+| `src/core/tools/file-mutation-queue.ts` | `LeanAgent.CodingAgent.Tools.FileMutationQueue` | implemented | `withFileMutationQueue` (per-file serialization via `Std.Mutex Unit` keyed on canonical path; distinct files run in parallel) + `getMutationQueueKey` (resolvePath then canonicalizePath for symlink collapse; missing → resolved fallback) + `getOrCreateQueue` (atomic get-or-create under a registration mutex) + `resetForTests`/`queueCount` (`TestFileMutationQueue.*`, incl. `IO.asTask` concurrency serialization + parallel-different-files). Divergence: per-file mutexes retained for process lifetime (Pi cleans up via chained-queue identity; bounded by distinct files mutated). |
 | `src/core/tools/find.ts` | `LeanAgent.CodingTools.makeFindTool` | partial | fd/find-backed; findTool stub added. |
 | `src/core/tools/grep.ts` | `LeanAgent.CodingTools.makeGrepTool` | partial | rg-backed |
 | `src/core/tools/index.ts` | `LeanAgent.CodingTools.defaultTools` | partial | subset of allToolNames |
