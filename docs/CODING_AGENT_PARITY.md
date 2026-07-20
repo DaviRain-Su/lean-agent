@@ -94,7 +94,7 @@ Full interactive TUI modes, RPC, extensions runtime still missing.
 | `src/core/tools/index.ts` | `LeanAgent.CodingTools.defaultTools` | partial | subset of allToolNames |
 | `src/core/tools/ls.ts` | `LeanAgent.CodingTools.makeListTool` | partial | list tool |
 | `src/core/tools/output-accumulator.ts` | `LeanAgent.CodingTools / Main / Project` | partial | outputAccumulator stub added. |
-| `src/core/tools/path-utils.ts` | `LeanAgent.CodingTools / Main / Project` | partial | pathUtils stub added. |
+| `src/core/tools/path-utils.ts` | `LeanAgent.CodingAgent.Tools.PathUtils` | implemented | `expandPath`/`resolveToCwd` (normalizePath/resolvePath with Unicode-spaces + `@`-strip) + `pathExists` + `resolveReadPath`/`resolveReadPathAsync` (collapsed to one IO fn) trying macOS filename fallbacks: `tryMacOSScreenshotPath` (` AM.`/` PM.` case-insensitive → `<U+202F>AM.` via Char-list scanner), `tryNFDVariant` (pass-through; full NFD decomposition deferred — host FS normalizes on macOS), `tryCurlyQuoteVariant` (`U+0027`→`U+2019`), combined NFD+curly (`TestPathUtils.*`); covers Pi `path-utils.test.ts` matrix. |
 | `src/core/tools/read.ts` | `LeanAgent.CodingTools.makeReadTool` | partial | cwd-sandbox read; readTool stub added. |
 | `src/core/tools/render-utils.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |
 | `src/core/tools/tool-definition-wrapper.ts` | `LeanAgent.CodingTools / Main / Project` | missing |  |

@@ -17718,6 +17718,148 @@ def testMarkPathIgnoredByCloudSyncNoThrow : IO Unit := do
 end TestPaths
 
 -- ============================================================================
+-- Tool path utils (Pi `packages/coding-agent/test/path-utils.test.ts`)
+-- ============================================================================
+
+namespace TestPathUtils
+
+open LeanAgent.CodingAgent.Tools.PathUtils
+open LeanAgent.CodingAgent.Utils.Paths
+
+def writeTempFile (dir : System.FilePath) (name : String) (content : String) : IO Unit := do
+  IO.FS.withFile (dir / name) .write (fun h => h.putStr content)
+
+def testExpandPathTilde : IO Unit := do
+  let home ← IO.getEnv "HOME"
+  match home with
+  | some h =>
+      let r ← expandPath "~"
+      assertTrue (!r.contains "~") s!"expandPath ~ removed tilde: {r}"
+      let _ := h
+  | none => pure ()
+
+def testExpandPathTildePath : IO Unit := do
+  let r ← expandPath "~/Documents/file.txt"
+  assertTrue (!r.contains "~/") s!"expandPath ~/ removed ~/: {r}"
+
+def testExpandPathTildeLiteral : IO Unit := do
+  let r1 ← expandPath "~draft.md"
+  assertTrue (r1 == "~draft.md") s!"expandPath ~draft.md kept: {r1}"
+  -- `@~draft.md` → strip leading `@` only.
+  let r2 ← expandPath "@~draft.md"
+  assertTrue (r2 == "~draft.md") s!"expandPath @~draft.md stripped @: {r2}"
+
+def testExpandPathUnicodeSpaces : IO Unit := do
+  -- U+00A0 non-breaking space → regular space.
+  let r ← expandPath "file\u00A0name.txt"
+  assertTrue (r == "file name.txt") s!"expandPath U+00A0 normalized: {r}"
+
+def testResolveToCwdAbsolute : IO Unit := do
+  let abs := "/abs/path/file.txt"
+  let r ← resolveToCwd abs "/some/cwd"
+  assertTrue (r == abs) s!"resolveToCwd absolute: {r}"
+
+def testResolveToCwdRelative : IO Unit := do
+  let r ← resolveToCwd "relative/file.txt" "/some/cwd"
+  assertTrue (r == "/some/cwd/relative/file.txt") s!"resolveToCwd relative: {r}"
+
+def testResolveToCwdTildeLiteral : IO Unit := do
+  let cwd := "/cwd"
+  let r1 ← resolveToCwd "~draft.md" cwd
+  assertTrue (r1 == "/cwd/~draft.md") s!"resolveToCwd ~draft.md: {r1}"
+  let r2 ← resolveToCwd "@~draft.md" cwd
+  assertTrue (r2 == "/cwd/~draft.md") s!"resolveToCwd @~draft.md: {r2}"
+
+def testResolveReadPathExisting : IO Unit := do
+  let dir ← IO.FS.createTempDir
+  writeTempFile dir "test-file.txt" "content"
+  let r ← resolveReadPath "test-file.txt" dir.toString
+  assertTrue (r == (dir / "test-file.txt").toString) s!"resolveReadPath existing: {r}"
+  IO.FS.removeDirAll dir
+
+def testResolveReadPathCurlyQuote : IO Unit := do
+  let dir ← IO.FS.createTempDir
+  let curlyName := "Capture d\u2019cran.txt"  -- U+2019 right single quote
+  let straightName := "Capture d'cran.txt"   -- U+0027 straight apostrophe
+  writeTempFile dir curlyName "content"
+  let r ← resolveReadPath straightName dir.toString
+  assertTrue (r == (dir / curlyName).toString) s!"resolveReadPath curly quote: {r}"
+  IO.FS.removeDirAll dir
+
+def testResolveReadPathAmPmNarrowSpace : IO Unit := do
+  let dir ← IO.FS.createTempDir
+  let macosName := "Screenshot 2024-01-01 at 10.00.00\u202FAM.png"  -- U+202F
+  let userName := "Screenshot 2024-01-01 at 10.00.00 AM.png"        -- regular space
+  writeTempFile dir macosName "content"
+  let r ← resolveReadPath userName dir.toString
+  assertTrue (r == (dir / macosName).toString) s!"resolveReadPath AM narrow-space: {r}"
+  IO.FS.removeDirAll dir
+
+def testResolveReadPathAmPmLowercase : IO Unit := do
+  let dir ← IO.FS.createTempDir
+  let macosName := "Screenshot 2024-01-01 at 10.00.00\u202Fam.png"  -- U+202F + lowercase
+  let userName := "Screenshot 2024-01-01 at 10.00.00 am.png"        -- regular + lowercase
+  writeTempFile dir macosName "content"
+  let r ← resolveReadPath userName dir.toString
+  assertTrue (r == (dir / macosName).toString) s!"resolveReadPath am narrow-space: {r}"
+  IO.FS.removeDirAll dir
+
+def testResolveReadPathNfcNfd : IO Unit := do
+  -- NFD: e (U+0065) + combining acute (U+0301); NFC: é (U+00E9).
+  -- On macOS the host FS normalizes, so the NFC user input resolves to the
+  -- NFD-named file; on other platforms the NFD fallback (pass-through here)
+  -- would need a decomposition table (deferred). Loose assertion, mirroring Pi.
+  let dir ← IO.FS.createTempDir
+  let nfdName := "file\u0065\u0301.txt"
+  let nfcName := "file\u00E9.txt"
+  writeTempFile dir nfdName "content"
+  let r ← resolveReadPath nfcName dir.toString
+  assertTrue (r.contains dir.toString) s!"resolveReadPath NFD contains dir: {r}"
+  assertTrue (r.contains "file") s!"resolveReadPath NFD contains 'file': {r}"
+  assertTrue (r.endsWith ".txt") s!"resolveReadPath NFD ends .txt: {r}"
+  IO.FS.removeDirAll dir
+
+def testResolveReadPathCombinedNfcCurly : IO Unit := do
+  -- Combined NFC + curly quote (French macOS screenshot).
+  let dir ← IO.FS.createTempDir
+  let macosName := "Capture d\u2019\u00E9cran.txt"  -- curly + NFC é
+  let userName := "Capture d'\u00E9cran.txt"       -- straight + NFC é
+  writeTempFile dir macosName "content"
+  let r ← resolveReadPath userName dir.toString
+  assertTrue (r == (dir / macosName).toString) s!"resolveReadPath combined: {r}"
+  IO.FS.removeDirAll dir
+
+def testTryMacOSScreenshotPathPure : IO Unit := do
+  -- Pure transform: regular space before AM. → U+202F.
+  let r := tryMacOSScreenshotPath "Screenshot 10.00.00 AM.png"
+  assertTrue (r == "Screenshot 10.00.00\u202FAM.png") s!"AM variant: {r}"
+  let r2 := tryMacOSScreenshotPath "Screenshot 10.00.00 PM.png"
+  assertTrue (r2 == "Screenshot 10.00.00\u202FPM.png") s!"PM variant: {r2}"
+  -- Case-insensitive: am → U+202Fam (case preserved).
+  let r3 := tryMacOSScreenshotPath "Screenshot 10.00.00 am.png"
+  assertTrue (r3 == "Screenshot 10.00.00\u202Fam.png") s!"am lowercase: {r3}"
+  -- No AM/PM → unchanged.
+  let r4 := tryMacOSScreenshotPath "Screenshot 10.00.00.png"
+  assertTrue (r4 == "Screenshot 10.00.00.png") s!"no AM/PM unchanged: {r4}"
+  -- Multiple matches (the leading space before AM/PM is consumed by the replacement).
+  let r5 := tryMacOSScreenshotPath "a AM.png b PM.txt"
+  assertTrue (r5 == "a\u202FAM.png b\u202FPM.txt") s!"multiple matches: {r5}"
+
+def testTryCurlyQuoteVariantPure : IO Unit := do
+  let r := tryCurlyQuoteVariant "Capture d'cran.txt"
+  assertTrue (r == "Capture d\u2019cran.txt") s!"curly variant: {r}"
+  -- No straight quote → unchanged.
+  let r2 := tryCurlyQuoteVariant "Capture d\u2019cran.txt"
+  assertTrue (r2 == "Capture d\u2019cran.txt") s!"curly idempotent: {r2}"
+
+def testTryNFDVariantPassThrough : IO Unit := do
+  -- Pass-through (NFD decomposition deferred).
+  let r := tryNFDVariant "file\u00E9.txt"
+  assertTrue (r == "file\u00E9.txt") s!"NFD pass-through: {r}"
+
+end TestPathUtils
+
+-- ============================================================================
 -- Git URL parsing (Pi `packages/coding-agent/test/git-ssh-url.test.ts`)
 -- ============================================================================
 
@@ -19261,6 +19403,22 @@ def main : IO UInt32 := do
     TestPaths.testFormatPathRelativeToCwdOrAbsoluteOutside
     TestPaths.testCloudSyncAttributes
     TestPaths.testMarkPathIgnoredByCloudSyncNoThrow
+    TestPathUtils.testExpandPathTilde
+    TestPathUtils.testExpandPathTildePath
+    TestPathUtils.testExpandPathTildeLiteral
+    TestPathUtils.testExpandPathUnicodeSpaces
+    TestPathUtils.testResolveToCwdAbsolute
+    TestPathUtils.testResolveToCwdRelative
+    TestPathUtils.testResolveToCwdTildeLiteral
+    TestPathUtils.testResolveReadPathExisting
+    TestPathUtils.testResolveReadPathCurlyQuote
+    TestPathUtils.testResolveReadPathAmPmNarrowSpace
+    TestPathUtils.testResolveReadPathAmPmLowercase
+    TestPathUtils.testResolveReadPathNfcNfd
+    TestPathUtils.testResolveReadPathCombinedNfcCurly
+    TestPathUtils.testTryMacOSScreenshotPathPure
+    TestPathUtils.testTryCurlyQuoteVariantPure
+    TestPathUtils.testTryNFDVariantPassThrough
     IO.println "lean-agent tests passed"
     pure 0
   catch err =>
