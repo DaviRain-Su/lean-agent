@@ -17958,6 +17958,165 @@ def testWithFileMutationQueueParallelDifferentFiles : IO Unit := do
 end TestFileMutationQueue
 
 -- ============================================================================
+-- Shell helpers (Pi `utils/shell.ts`)
+-- ============================================================================
+
+namespace TestShell
+
+open LeanAgent.CodingAgent.Utils.Shell
+
+/-- Build ShellDeps from explicit env/exists/spawn maps. -/
+def mkDepsFull (isWindows : Bool) (env : List (String × String))
+    (existsFn : String → Bool) (spawnFn : String → Array String → Option String) : ShellDeps :=
+  { isWindows := isWindows
+    getEnv := fun k => pure (env.lookup k)
+    existsSync := fun p => pure (existsFn p)
+    spawnSync := fun cmd args => pure (spawnFn cmd args) }
+
+def testIsLegacyWslBashPath : IO Unit := do
+  assertTrue (isLegacyWslBashPath "C:\\Windows\\System32\\bash.exe") "system32 WSL path"
+  assertTrue (isLegacyWslBashPath "c:\\windows\\sysnative\\bash.exe") "sysnative lower-case"
+  -- Forward-slash form normalizes to backslashes.
+  assertTrue (isLegacyWslBashPath "C:/Windows/System32/bash.exe") "forward-slash form"
+  assertTrue (!(isLegacyWslBashPath "/bin/bash")) "unix path not WSL"
+  assertTrue (!(isLegacyWslBashPath "C:\\Program Files\\Git\\bin\\bash.exe")) "git bash not WSL"
+  assertTrue (!(isLegacyWslBashPath "D:\\Windows\\System32\\sh.exe")) "wrong exe name"
+
+def testGetBashShellConfig : IO Unit := do
+  let wsl := getBashShellConfig "C:\\Windows\\System32\\bash.exe"
+  assertTrue (wsl.args == #["-s"]) "WSL args -s"
+  assertTrue (wsl.commandTransport == some .stdin) "WSL stdin transport"
+  let normal := getBashShellConfig "/bin/bash"
+  assertTrue (normal.args == #["-c"]) "normal args -c"
+  assertTrue (normal.commandTransport == none) "normal no transport"
+
+def testGetShellConfigUnixFallbackSh : IO Unit := do
+  let deps := mkDepsFull false [] (fun _ => false) (fun _ _ => none)
+  let cfg ← getShellConfig deps none
+  assertTrue (cfg.shell == "sh") s!"fallback sh: {cfg.shell}"
+  assertTrue (cfg.args == #["-c"]) "fallback sh args"
+
+def testGetShellConfigUnixBinBash : IO Unit := do
+  let deps := mkDepsFull false [] (fun p => p == "/bin/bash") (fun _ _ => none)
+  let cfg ← getShellConfig deps none
+  assertTrue (cfg.shell == "/bin/bash") s!"/bin/bash: {cfg.shell}"
+  assertTrue (cfg.args == #["-c"]) "/bin/bash args -c"
+
+def testGetShellConfigUnixBashOnPath : IO Unit := do
+  let deps := mkDepsFull false [] (fun _ => false) (fun cmd args =>
+    if cmd == "which" && args == #["bash"] then some "/usr/local/bin/bash" else none)
+  let cfg ← getShellConfig deps none
+  assertTrue (cfg.shell == "/usr/local/bin/bash") s!"bash on PATH: {cfg.shell}"
+
+def testGetShellConfigCustomExists : IO Unit := do
+  let deps := mkDepsFull false [] (fun p => p == "/my/bash") (fun _ _ => none)
+  let cfg ← getShellConfig deps (some "/my/bash")
+  assertTrue (cfg.shell == "/my/bash") "custom exists"
+  assertTrue (cfg.args == #["-c"]) "custom normal args"
+
+def testGetShellConfigCustomMissingThrows : IO Unit := do
+  let deps := mkDepsFull false [] (fun _ => false) (fun _ _ => none)
+  let threw ← try
+    let _ ← getShellConfig deps (some "/missing/bash")
+    pure false
+  catch _ => pure true
+  assertTrue threw "custom missing throws"
+
+def testGetShellConfigCustomWslTransport : IO Unit := do
+  let wslPath := "C:\\Windows\\System32\\bash.exe"
+  let deps := mkDepsFull false [] (fun p => p == wslPath) (fun _ _ => none)
+  let cfg ← getShellConfig deps (some wslPath)
+  assertTrue (cfg.args == #["-s"]) "custom WSL uses -s"
+  assertTrue (cfg.commandTransport == some .stdin) "custom WSL stdin"
+
+def testGetShellConfigWindowsGitBash : IO Unit := do
+  let env := [("ProgramFiles", "C:\\Program Files")]
+  let gitPath := "C:\\Program Files\\Git\\bin\\bash.exe"
+  let deps := mkDepsFull true env (fun p => p == gitPath) (fun _ _ => none)
+  let cfg ← getShellConfig deps none
+  assertTrue (cfg.shell == gitPath) s!"windows git bash: {cfg.shell}"
+
+def testGetShellConfigWindowsFallbackThrows : IO Unit := do
+  let deps := mkDepsFull true [] (fun _ => false) (fun _ _ => none)
+  let threw ← try
+    let _ ← getShellConfig deps none
+    pure false
+  catch _ => pure true
+  assertTrue threw "windows no bash throws"
+
+def testGetShellConfigWindowsBashOnPath : IO Unit := do
+  let deps := mkDepsFull true [] (fun p => p == "C:\\bash\\bash.exe")
+    (fun cmd args => if cmd == "where" && args == #["bash.exe"] then some "C:\\bash\\bash.exe" else none)
+  let cfg ← getShellConfig deps none
+  assertTrue (cfg.shell == "C:\\bash\\bash.exe") s!"windows bash on PATH: {cfg.shell}"
+
+def testFindBashOnPathUnixEmpty : IO Unit := do
+  let deps := mkDepsFull false [] (fun _ => false) (fun _ _ => none)
+  let r ← findBashOnPath deps
+  assertTrue (r.isNone) "unix which empty → none"
+
+def testFindBashOnPathWindowsVerifiesExists : IO Unit := do
+  -- where returns a path that does NOT exist → none (Pi verifies on Windows).
+  let deps := mkDepsFull true [] (fun _ => false)
+    (fun cmd _ => if cmd == "where" then some "C:\\missing\\bash.exe" else none)
+  let r ← findBashOnPath deps
+  assertTrue (r.isNone) "windows where non-existent → none"
+
+def testGetShellEnvUnixAugment : IO Unit := do
+  let env := [("PATH", "a:b")]
+  let deps := mkDepsFull false env (fun _ => True) (fun _ _ => none)
+  let (key, val) ← getShellEnv deps "/x"
+  assertTrue (key == "PATH") "unix key PATH"
+  assertTrue (val == "/x:a:b") s!"unix augment prepends: {val}"
+
+def testGetShellEnvUnixAlreadyPresent : IO Unit := do
+  let env := [("PATH", "/x:a:b")]
+  let deps := mkDepsFull false env (fun _ => True) (fun _ _ => none)
+  let (_key, val) ← getShellEnv deps "/x"
+  assertTrue (val == "/x:a:b") s!"already-present unchanged: {val}"
+
+def testGetShellEnvUnixEmpty : IO Unit := do
+  let env := [("PATH", "")]
+  let deps := mkDepsFull false env (fun _ => True) (fun _ _ => none)
+  let (_key, val) ← getShellEnv deps "/x"
+  assertTrue (val == "/x") s!"empty PATH → just binDir: {val}"
+
+def testGetShellEnvWindowsKeyCaseInsensitive : IO Unit := do
+  let env := [("Path", "a;b")]
+  let deps := mkDepsFull true env (fun _ => True) (fun _ _ => none)
+  let (key, val) ← getShellEnv deps "C:\\bin"
+  assertTrue (key == "Path") s!"windows key 'Path' preserved: {key}"
+  assertTrue (val == "C:\\bin;a;b") s!"windows augment: {val}"
+
+def testSanitizeBinaryOutputReexport : IO Unit := do
+  -- Control chars (except \t \n \r) are filtered.
+  let r := sanitizeBinaryOutput "a\x01b\tc"
+  assertTrue (r == "ab\tc") s!"control stripped: {r}"
+  let r2 := sanitizeBinaryOutput "keep\nme\r"
+  assertTrue (r2 == "keep\nme\r") "tab/LF/CR kept"
+
+def testTrackedPidsRoundtrip : IO Unit := do
+  trackDetachedChildPid 12345
+  let s ← trackedPids.get
+  assertTrue (s.contains 12345) "tracked pid present"
+  untrackDetachedChildPid 12345
+  let s2 ← trackedPids.get
+  assertTrue (!(s2.contains 12345)) "untracked pid gone"
+
+def testKillProcessTreeNoThrow : IO Unit := do
+  -- Killing a non-existent pid must not throw (best-effort).
+  killProcessTree 999999999
+  assertTrue true "killProcessTree did not throw on missing pid"
+
+def testKillTrackedDetachedChildrenNoThrow : IO Unit := do
+  trackDetachedChildPid 999999999
+  killTrackedDetachedChildren
+  let s ← trackedPids.get
+  assertTrue (s.isEmpty) "tracked pids cleared after killTrackedDetachedChildren"
+
+end TestShell
+
+-- ============================================================================
 -- Git URL parsing (Pi `packages/coding-agent/test/git-ssh-url.test.ts`)
 -- ============================================================================
 
@@ -19523,6 +19682,27 @@ def main : IO UInt32 := do
     TestFileMutationQueue.testGetOrCreateQueueReuses
     TestFileMutationQueue.testWithFileMutationQueueSerializesSameFile
     TestFileMutationQueue.testWithFileMutationQueueParallelDifferentFiles
+    TestShell.testIsLegacyWslBashPath
+    TestShell.testGetBashShellConfig
+    TestShell.testGetShellConfigUnixFallbackSh
+    TestShell.testGetShellConfigUnixBinBash
+    TestShell.testGetShellConfigUnixBashOnPath
+    TestShell.testGetShellConfigCustomExists
+    TestShell.testGetShellConfigCustomMissingThrows
+    TestShell.testGetShellConfigCustomWslTransport
+    TestShell.testGetShellConfigWindowsGitBash
+    TestShell.testGetShellConfigWindowsFallbackThrows
+    TestShell.testGetShellConfigWindowsBashOnPath
+    TestShell.testFindBashOnPathUnixEmpty
+    TestShell.testFindBashOnPathWindowsVerifiesExists
+    TestShell.testGetShellEnvUnixAugment
+    TestShell.testGetShellEnvUnixAlreadyPresent
+    TestShell.testGetShellEnvUnixEmpty
+    TestShell.testGetShellEnvWindowsKeyCaseInsensitive
+    TestShell.testSanitizeBinaryOutputReexport
+    TestShell.testTrackedPidsRoundtrip
+    TestShell.testKillProcessTreeNoThrow
+    TestShell.testKillTrackedDetachedChildrenNoThrow
     IO.println "lean-agent tests passed"
     pure 0
   catch err =>

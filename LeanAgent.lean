@@ -105,6 +105,7 @@ import LeanAgent.CodingAgent.Utils.JsonComments
 import LeanAgent.CodingAgent.Utils.Paths
 import LeanAgent.CodingAgent.Tools.PathUtils
 import LeanAgent.CodingAgent.Tools.FileMutationQueue
+import LeanAgent.CodingAgent.Utils.Shell
 import LeanAgent.CodingAgent.Utils.Git
 import LeanAgent.CodingAgent.Utils.VersionCheck
 import LeanAgent.CodingAgent.Utils.Changelog
