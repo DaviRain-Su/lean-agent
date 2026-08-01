@@ -11388,13 +11388,13 @@ def testHarnessCompactionPrepareAndCompact : IO Unit := do
      ]
   let prep :=
     LeanAgent.Agent.Harness.Compaction.prepareCompaction messages
-      { keepLastMessages := 2, contextTokenBudget := 1 }
+      { maxMessages := 2, maxTokens := 1 }
   assertTrue (prep.keptMessages.size == 2) s!"kept {prep.keptMessages.size}"
   assertTrue (prep.compactedMessages.size == 4) s!"compacted {prep.compactedMessages.size}"
-  assertTrue (LeanAgent.Agent.Harness.Compaction.shouldCompact messages { contextTokenBudget := 1 })
+  assertTrue (LeanAgent.Agent.Harness.Compaction.shouldCompact messages { maxTokens := 1, compactionThreshold := 1 })
     "shouldCompact when over budget"
-  let compacted ← LeanAgent.Agent.Harness.Compaction.compact messages "SUM"
-    { keepLastMessages := 2 }
+  let compacted ← LeanAgent.Agent.Harness.Compaction.compactWithSummary messages "SUM"
+    { maxMessages := 2 }
   assertTrue (compacted.size == 3) "summary + 2 kept"
   match compacted[0]! with
   | .custom "compactionSummary" content _ _ =>
@@ -11450,22 +11450,22 @@ def testHarnessTruncate : IO Unit := do
 /-- AgentHarness façade: nextTurn + prompt + queue updates. -/
 def testAgentHarnessPromptAndQueues : IO Unit := do
   let queues ← IO.mkRef (#[ ] : Array Nat)
-  let mut h :=
+  let h :=
     LeanAgent.Agent.Harness.AgentHarness.create
       { initialState := { systemPrompt := "sys", model := fakeAgentModelInfo }
         streamFn := mockStopStreamFn "done"
       }
-  h := h.subscribe fun event => do
+  let h := (h.subscribe fun event => do
     match event with
     | .queueUpdate q => queues.modify (·.push (q.steering.size + q.followUp.size + q.nextTurn.size))
-    | _ => pure ()
-  h ← h.nextTurn (agentUserMessage "queued-next" 1)
-  h ← h.steer (agentUserMessage "steer-me" 2)
+    | _ => pure ()).1
+  let h ← h.nextTurn (agentUserMessage "queued-next" 1)
+  let h ← h.steer (agentUserMessage "steer-me" 2)
   assertTrue ((← queues.get).size ≥ 2) "queue updates emitted"
   -- Clear steering so prompt does not inject mid-run unexpectedly; nextTurn should prepend.
-  h ← h.clearQueues
-  h ← h.nextTurn (agentUserMessage "nt" 3)
-  h ← h.prompt "go"
+  let h ← h.clearQueues
+  let h ← h.nextTurn (agentUserMessage "nt" 3)
+  let h ← h.prompt "go"
   assertTrue (h.agent.state.messages.any fun m => agentMessagePlainText m == some "nt")
     "nextTurn message enters transcript"
   assertTrue (h.agent.state.messages.any fun m => agentMessagePlainText m == some "go")

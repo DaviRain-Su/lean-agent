@@ -124,6 +124,13 @@ import LeanAgent.CodingAgent.AuthStorage
 import LeanAgent.CodingAgent.Utils.Deprecation
 import LeanAgent.CodingAgent.Utils.Frontmatter
 import LeanAgent.CodingAgent.Utils.Mime
+import LeanAgent.CodingAgent.Utils.ChildProcess
+import LeanAgent.CodingAgent.Utils.Clipboard
+import LeanAgent.CodingAgent.Utils.FsWatch
+import LeanAgent.CodingAgent.Utils.Photon
+import LeanAgent.CodingAgent.Utils.ImageConvert
+import LeanAgent.CodingAgent.Utils.ImageProcess
+import LeanAgent.CodingAgent.Utils.WindowsSelfUpdate
 import LeanAgent.CodingAgent.Skills
 import LeanAgent.CodingAgent.PromptTemplates
 import LeanAgent.CodingAgent.Migrations
@@ -137,6 +144,7 @@ import LeanAgent.CodingAgent.SlashCommands
 import LeanAgent.CodingAgent.SystemPrompt
 import LeanAgent.Agent
 import LeanAgent.Agent.Harness
+import LeanAgent.Agent.Harness.Messages
 import LeanAgent.Core
 import LeanAgent.Http
 import LeanAgent.Json
