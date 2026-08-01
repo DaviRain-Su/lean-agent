@@ -21,6 +21,13 @@ Full-project charter: [`docs/goals/FULL_PI_PORT_PROMPT.md`](goals/FULL_PI_PORT_P
 | `LeanAgent.Tui.Loader` | implemented | Spinner animation with message |
 | `LeanAgent.Tui.Input` | implemented | Single-line text input |
 | `LeanAgent.Tui.Markdown` | implemented | Markdown to terminal renderer |
+| `LeanAgent.Tui.Fuzzy` | implemented | Subsequence fuzzy match with scoring (consecutive, boundary, gap, position), alpha-numeric swap fallback, multi-token filter+sort |
+| `LeanAgent.Tui.KillRing` | implemented | Emacs-style kill ring (push/peek/rotate) with accumulate merge |
+| `LeanAgent.Tui.UndoStack` | implemented | Generic clone-on-push undo stack (push/pop/clear/length) |
+| `LeanAgent.Tui.WordNavigation` | implemented | findWordBackward/findWordForward with ASCII whitespace+punctuation boundaries |
+| `LeanAgent.Tui.Terminal` | implemented | Terminal size (COLUMNS/LINES env), ANSI escape generators (cursor, clear, alt-screen, scroll) |
+| `LeanAgent.Tui.TerminalColors` | implemented | supportsTrueColor/256Color detection, rgbToAnsi256/rgbToAnsi conversion, fg/bg escape generators |
+| `LeanAgent.Tui.Keys` | implemented | KeyAction inductive, parseKey (ANSI CSI/SS3 escape → KeyAction), keyName/isPrintable/isModified/isNavigation |
 
 ## Status legend
 
@@ -49,24 +56,23 @@ Full-project charter: [`docs/goals/FULL_PI_PORT_PROMPT.md`](goals/FULL_PI_PORT_P
 | `src/components/text.ts` | `LeanAgent.Tui.Text` | implemented | Multi-line text with word wrapping, padding, background (`testTuiText*` pending) |
 | `src/components/truncated-text.ts` | `LeanAgent.Tui.Utils` | partial | Uses truncateToWidth from Utils; dedicated component pending |
 | `src/editor-component.ts` | `LeanAgent.Tui (missing)` | missing |  |
-| `src/fuzzy.ts` | `LeanAgent.Tui (missing)` | missing |  |
+| `src/fuzzy.ts` | `LeanAgent.Tui.Fuzzy` | implemented | Subsequence fuzzy match with scoring (consecutive, boundary, gap, position, exact), alpha-numeric swap fallback, multi-token filter+sort. |
 | `src/index.ts` | `LeanAgent.Tui (missing)` | missing |  |
 | `src/keybindings.ts` | `LeanAgent.Tui (partial)` | partial | keyBinding stub added; full keybindings matrix open. |
-| `src/keys.ts` | `LeanAgent.Tui (partial)` | partial | keyName stub added; full keybindings matrix open. |
-| `src/kill-ring.ts` | `LeanAgent.Tui (partial)` | partial | killRingSize stub added; full kill-ring matrix open. |
+| `src/keys.ts` | `LeanAgent.Tui.Keys` | implemented | KeyAction inductive (up/down/left/right/enter/escape/tab/backspace/delete/home/end/pageUp/pageDown/ctrlKey/altKey/shiftKey/metaKey/charKey/unknown), parseKey (ANSI CSI/SS3 escape → KeyAction), keyName/isPrintable/isModified/isNavigation. |
+| `src/kill-ring.ts` | `LeanAgent.Tui.KillRing` | implemented | KillRing (push with prepend/accumulate merge, peek, rotate, length) over IO.Ref. |
 | `src/native-modifiers.ts` | `LeanAgent.Tui (partial)` | partial | nativeModifier stub added; full native-modifiers matrix open. |
-| `src/stdin-buffer.ts` | `LeanAgent.Tui (partial)` | partial | stdinBufferSize stub added; full stdin-buffer matrix open. |
-| `src/terminal-colors.ts` | `LeanAgent.Tui (partial)` | partial | terminalColor stub added; full terminal-colors matrix open. |
+| `src/stdin-buffer.ts` | `LeanAgent.Tui.StdinBuffer` | implemented | StdinBuffer (create/pushChar/popChar/peekChar/clear/toString/length/processByte) over IO.Ref; UTF-8 multi-byte simplified. |
+| `src/terminal-colors.ts` | `LeanAgent.Tui.TerminalColors` | implemented | supportsTrueColor/256Color env detection, rgbToAnsi256 (6×6×6 cube + grayscale), rgbToAnsi (16-color), fg256/bg256/fgTrueColor/bgTrueColor generators. |
 | `src/terminal-image.ts` | `LeanAgent.Tui (partial)` | partial | terminalImage stub added; full terminal-image matrix open. |
-| `src/terminal.ts` | `LeanAgent.Tui (partial)` | partial | terminalSize stub added; full terminal matrix open. |
+| `src/terminal.ts` | `LeanAgent.Tui.Terminal` | implemented | TerminalSize (COLUMNS/LINES env), isTerminal, ANSI escape generators (cursorUp/Down/Forward/Back, clearLine/Screen, hide/showCursor, enter/exitAltScreen, cursorTo, save/restoreCursor, scrollUp/Down). |
 | `src/tui.ts` | `LeanAgent.Tui.Component` | partial | Component/Container/Overlay types ported; TUI class (differential rendering, overlays, input) still missing |
-| `src/undo-stack.ts` | `LeanAgent.Tui (partial)` | partial | undoStackSize stub added; full undo-stack matrix open. |
+| `src/undo-stack.ts` | `LeanAgent.Tui.UndoStack` | implemented | Generic UndoStack(α) (push/pop/clear/length) over IO.Ref with clone-on-push semantics. |
 | `src/utils.ts` | `LeanAgent.Tui.Utils` | partial | visibleWidth, wrapText, padRight, applyBackground, truncateToWidth ported; full ANSI tracking, grapheme segmentation, east-asian-width still missing |
-| `src/word-navigation.ts` | `LeanAgent.Tui (partial)` | partial | wordNavigation stub added; full word-navigation matrix open. |
+| `src/word-navigation.ts` | `LeanAgent.Tui.WordNavigation` | implemented | findWordBackward/findWordForward with ASCII whitespace+punctuation boundary detection; skipBack/skipFwd/skipWsFwd helpers. |
 
 ## Rules
 
 - Do not mark `implemented` without shipped-API offline tests.
 - Do not use `deferred` except Exclusion List in FULL_PI_PORT_PROMPT §7.
 - Update this file whenever status changes.
-
